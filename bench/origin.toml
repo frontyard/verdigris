@@ -1,0 +1,31 @@
+# Shared origin for edge-cache benchmark legs. Every server under test
+# reverse-proxies to this listener; freshness comes from Cache-Control
+# (per-glob below) so no edge needs a TTL override — identical freshness
+# semantics everywhere.
+#
+#   *.m3u8  max-age=2    sliding-window playlists; ferron silently refuses
+#                        to store max-age=1 (instantly stale), so 2s is
+#                        the shortest TTL all four edges honor
+#   *.ts    max-age=300  segments are effectively immutable within a run
+[server]
+server_header = "verd-origin"
+
+[admin]
+listen = "127.0.0.1:8490"
+
+[log]
+level = "warn"
+[log.access]
+enabled = false
+
+[[server.listen]]
+addr = "127.0.0.1:8480"
+
+[[site]]
+default = true
+tls = "off"
+redirect_https = false
+
+[[site.route]]
+prefix = "/"
+static = { root = "./bench/www", cache_control = { "*.m3u8" = "public, max-age=2", "*.ts" = "public, max-age=300" } }

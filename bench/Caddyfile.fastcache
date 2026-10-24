@@ -1,0 +1,64 @@
+# fastcache module (built by caddy-fastcache.Dockerfile or a local
+# xcaddy build, see bench/README.md) — a standalone handler with its
+# own request path, not a Souin storer. Hits are marked
+# `Cache-Status: fastcache; hit`.
+#
+# Two-tier: RAM bodies + disk body files served via ServeContent on a real
+# *os.File (sendfile/splice-class on plaintext). Freshness is origin-driven
+# (ttl is only a fallback for responses without max-age/Expires), same as
+# every other edge.
+#
+#   /m3u8 -> RAM-only mode (disk_size 0) — the memory cell
+#   /ts   -> 64MB RAM + 2GB disk two-tier — the disk cell
+#   /raw  -> plain file_server
+{
+    auto_https off
+    admin off
+}
+
+:8290 {
+    route /m3u8/* {
+        fastcache {
+            path /tmp/verd-bench-fastcache-mem
+            memory_size 256MB
+            disk_size 0
+        }
+        reverse_proxy 127.0.0.1:8480
+    }
+    route /ts/* {
+        fastcache {
+            path /tmp/verd-bench-fastcache
+            memory_size 64MB
+            disk_size 2GB
+        }
+        reverse_proxy 127.0.0.1:8480
+    }
+    handle_path /raw/* {
+        root * /srv/www/raw
+        file_server
+    }
+}
+
+:10444 {
+    tls CERTDIR/bench.crt CERTDIR/bench.key
+    route /m3u8/* {
+        fastcache {
+            path /tmp/verd-bench-fastcache-mem
+            memory_size 256MB
+            disk_size 0
+        }
+        reverse_proxy 127.0.0.1:8480
+    }
+    route /ts/* {
+        fastcache {
+            path /tmp/verd-bench-fastcache-tls
+            memory_size 64MB
+            disk_size 2GB
+        }
+        reverse_proxy 127.0.0.1:8480
+    }
+    handle_path /raw/* {
+        root * /srv/www/raw
+        file_server
+    }
+}

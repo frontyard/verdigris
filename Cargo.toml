@@ -1,0 +1,145 @@
+[package]
+name = "verd"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+description = "A simple, fast web server and reverse proxy: static files, TLS/ACME, caching, and load balancing in one static binary."
+repository = "https://github.com/frontyard/verdigris"
+keywords = ["web-server", "reverse-proxy", "http", "tls", "acme"]
+categories = ["network-programming"]
+
+[lib]
+name = "verd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "verd"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime & HTTP core
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "net",
+    "time",
+    "signal",
+    "fs",
+    "io-util",
+    "macros",
+    "sync",
+    "process",
+] }
+hyper = { version = "1", features = ["server", "client", "http1", "http2"] }
+hyper-util = { version = "0.1", features = [
+    "server",
+    "server-auto",
+    "server-graceful",
+    "client",
+    "client-legacy",
+    "tokio",
+    "http1",
+    "http2",
+] }
+http = "1"
+http-body = "1"
+http-body-util = "0.1"
+bytes = "1"
+tower = { version = "0.5", features = ["util"] }
+tower-service = "0.3"
+pin-project-lite = "0.2"
+futures-util = "0.3"
+tokio-util = { version = "0.7", features = ["codec", "io", "net", "rt"] }
+memmap2 = "0.9"
+
+# TLS & ACME
+rustls = { version = "0.23", features = ["std", "logging", "tls12"] }
+tokio-rustls = "0.26"
+rustls-pemfile = "2"
+webpki-roots = "1"
+instant-acme = { version = "0.8", features = [
+    "hyper-rustls",
+    "rcgen",
+    "x509-parser",
+    "time",
+    "aws-lc-rs",
+] }
+rcgen = "0.14"
+x509-parser = "0.18"
+
+# Configuration
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+toml_edit = "0.25"
+schemars = "1"
+humantime-serde = "1.1"
+regex = "1"
+ipnet = "2"
+percent-encoding = "2"
+form_urlencoded = "1"
+base64 = "0.22"
+
+# Routing
+matchit = "0.9"
+
+# Admin API
+axum = "0.8"
+
+# Middleware & features
+argon2 = "0.6"
+bcrypt = "0.19"
+subtle = "2"
+mime_guess = "2"
+httpdate = "1"
+ahash = "0.8"
+dashmap = "6"
+arc-swap = "1"
+async-compression = { version = "0.4", features = [
+    "tokio",
+    "gzip",
+    "brotli",
+    "zstd",
+] }
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+metrics = "0.24"
+metrics-exporter-prometheus = "0.18"
+uuid = { version = "1", features = ["v4"] }
+
+# DNS re-resolution for upstreams
+hickory-resolver = { version = "0.26", features = ["tokio", "system-config"] }
+
+# Config & certificate file watch
+notify = "8"
+
+# Errors & time
+thiserror = "2"
+time = { version = "0.3", features = ["formatting"] }
+
+# CLI
+clap = { version = "4", features = ["derive", "cargo", "env"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
+reqwest = { version = "0.13", default-features = false, features = [
+    "rustls",
+    "http2",
+    "json",
+] }
+tokio-tungstenite = "0.30"
+tempfile = "3"
+proptest = "1"
+assert_cmd = "2"
+portpicker = "0.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

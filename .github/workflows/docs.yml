@@ -1,0 +1,44 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths: ["docs/**", "llms.txt", "src/config/**", ".github/workflows/docs.yml"]
+  pull_request:
+    paths: ["docs/**", "llms.txt", ".github/workflows/docs.yml"]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@mdbook
+      # config reference is generated from the live schema
+      - run: cargo run --quiet -- schema | python3 docs/gen-reference.py > docs/book/src/reference.md
+      - run: git diff --exit-code docs/book/src/reference.md || { echo "::error::reference.md is stale; regenerate: verd schema | python3 docs/gen-reference.py"; exit 1; }
+      # every TOML snippet in the docs and llms.txt must validate
+      - run: cargo build --quiet --release
+      - run: python3 docs/check-snippets.py
+      - run: python3 docs/gen-llms-full.py
+      - run: mdbook build docs/book
+      - uses: actions/upload-pages-artifact@v3
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        with:
+          path: docs/book/book
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: deployment

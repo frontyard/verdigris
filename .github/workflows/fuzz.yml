@@ -1,0 +1,42 @@
+name: Fuzz
+
+on:
+  pull_request:
+    paths: ["fuzz/**", "src/**"]
+  schedule:
+    - cron: "0 4 * * 0" # weekly, sunday 04:00 UTC
+
+jobs:
+  soak:
+    if: github.event_name == 'schedule'
+    name: rss soak (30s)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --test fault -- --ignored --nocapture
+
+  smoke:
+    name: fuzz smoke (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - config_parse
+          - path_normalize
+          - route_match
+          - cache_index
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo install cargo-fuzz --locked
+      - name: short fuzz run
+        run: cargo fuzz run ${{ matrix.target }} fuzz -- -max_total_time=${{ env.FUZZ_TIME }} -artifact_prefix=/tmp/
+        env:
+          FUZZ_TIME: ${{ github.event_name == 'schedule' && 900 || 60 }}
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: crash-${{ matrix.target }}
+          path: /tmp/crash-*

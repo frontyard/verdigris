@@ -1,0 +1,26 @@
+#Ignore vscode AI rules
+.github/instructions/codacy.instructions.md
+
+.history
+
+# Rust
+/target
+**/*.rs.bk
+*.pdb
+
+# Docs
+docs/book/book/
+
+# Local secrets / scratch
+*.local.toml
+verd.local.toml
+fuzz/artifacts
+fuzz/corpus
+fuzz/target/
+
+# Benchmark fixtures / generated configs / results
+bench/www/
+bench/.gen/
+bench/cache-*/
+bench/results.md
+bench/results.json

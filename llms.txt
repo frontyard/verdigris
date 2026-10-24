@@ -1,0 +1,180 @@
+# Verdigris
+
+> Verdigris is a single-binary web server and reverse proxy written in Rust:
+> static files, HTTP/1.1 + HTTP/2 (+h2c), TLS (manual, self-signed, or
+> ACME/Let's Encrypt), load balancing, response caching, and middleware —
+> all configured in one TOML file (`verd.toml`).
+
+## Authoritative sources — don't guess field names
+
+- `verd schema` prints the complete JSON Schema of the config. When
+  unsure about a field name, type, or default, consult it — it is
+  generated from the same structs the binary parses.
+- `verd validate -c FILE` checks a config (syntax, types, and
+  cross-field rules) without starting the server.
+- `verd fmt -c FILE` normalizes a config file's formatting.
+- `docs/book/src/reference.md` is a generated table of every field.
+- `llms-full.txt` (repo root) concatenates this file plus the full
+  reference for one-shot ingestion.
+
+## Mental model
+
+Top-level keys: `server`, `timeouts`, `limits`, `log`, `admin`, `acme`,
+`upstream`, `cache`, `include`, `site`.
+
+- `[server]` holds `listen` (array of `{ addr, tls }`), connection caps,
+  `security` headers, `graceful_timeout`. **`[limits]` and `[timeouts]`
+  are top-level siblings of `[server]`, not children.**
+- `[[site]]` = a virtual host set: `hosts` (or `default = true`),
+  `tls`, `root`/`proxy` catch-all shorthands, and `[[site.route]]` tables.
+- A route = matcher (`prefix` — `path` is a shorthand — `exact`,
+  `regex`, `match`) + **exactly one handler** (`static`, `proxy`,
+  `redirect`, `respond`) + middleware (`ip_allow`, `ip_deny`, `auth`,
+  `rate_limit`, `cors`, `headers`, `security`, `compress`, `cache`,
+  `limits`, `timeouts`). More specific prefixes win.
+- Upstreams may be named (`[upstream.NAME]` clusters with `servers`,
+  `lb`, `health`, `limits`, `tls`) or inline URL lists.
+
+## Recipes (each validates against `verd validate`)
+
+Minimal static site on :8080:
+
+```toml
+[server]
+listen = [{ addr = "0.0.0.0:8080", tls = false }]
+
+[[site]]
+hosts = ["example.com"]
+root = "/var/www/site"           # shorthand: catch-all static route
+```
+
+Everything as separate route tables (equivalent, more control):
+
+```toml
+[upstream.app]
+servers = ["http://127.0.0.1:9000"]
+
+[[site]]
+hosts = ["example.com"]
+
+[[site.route]]
+prefix = "/assets"
+static = { root = "/var/www/assets", index = ["index.html"] }
+
+[[site.route]]
+prefix = "/api"
+proxy = { upstream = "app" }
+
+[[site.route]]
+exact = "/health"
+respond = { status = 200, body = "ok" }
+```
+
+Load-balanced proxy:
+
+```toml
+[upstream.app]
+servers = ["http://10.0.0.11:9000", "http://10.0.0.12:9000"]
+lb = "least_conn"                # round_robin | least_conn | ip_hash
+
+[upstream.app.health.passive]
+failures = 3
+cooldown = "10s"
+```
+
+TLS — pick one per site:
+
+```toml
+# inside [[site]] — choose ONE:
+tls = "auto"          # ACME/Let's Encrypt; needs [acme] email + port 80 or 443
+# tls = "selfsigned"  # throwaway dev cert per host at boot
+# tls = { cert = "/etc/verd/site.pem", key = "/etc/verd/site.key" }
+# tls = "off"         # plaintext only
+```
+
+```toml
+[acme]
+email = "ops@example.com"
+storage = "/var/lib/verd/acme"
+# directory = "https://acme-staging-v02.api.letsencrypt.org/directory"  # test first
+```
+
+Route middleware:
+
+```toml
+[upstream.app]
+servers = ["http://127.0.0.1:9000"]
+
+[[site]]
+hosts = ["example.com"]
+
+[[site.route]]
+prefix = "/api"
+proxy = { upstream = "app" }
+rate_limit = { rate = "100/s", burst = 50, key = "ip" }
+auth = { bearer = { tokens = ["${API_TOKEN}"] } }
+cors = { origins = ["https://app.example.com"], credentials = true }
+```
+
+Cache in front of a route:
+
+```toml
+[cache.main]
+tier = "hybrid"                  # ram | disk | hybrid
+policy = "lru"
+ram_bytes = "256MiB"
+disk_bytes = "4GiB"
+disk_path = "/var/lib/verd/cache"
+
+[upstream.app]
+servers = ["http://127.0.0.1:9000"]
+
+[[site]]
+hosts = ["example.com"]
+
+[[site.route]]
+prefix = "/media"
+proxy = { upstream = "app" }
+cache = { store = "main", ttl = "5m", stale_if_error = "5m" }
+```
+
+## Gotchas — names that differ from nginx/Caddy conventions
+
+- `lb`, not `load_balancing`; `policy`, not `eviction`; `disk_path`,
+  not `path`/`root` inside `[cache.*]`.
+- `basic.users` is a `name = "hash"` **map** (argon2 inline, or
+  `htpasswd` file for bcrypt), not a list of objects.
+- `bearer = { tokens = [...] }` — plural array.
+- `api_key` requires `location` (`"header"` or `"query"`), `name`, `keys`.
+- `compress` has `algorithms` (`br`, `zstd`, `gzip`) and a single `level`,
+  not per-algorithm switches.
+- `include` takes a **file or directory** (expands `*.toml` inside the
+  dir) — globs like `conf.d/*.toml` are not expanded.
+- `pass_host = true` (the default) rewrites `Host` to the upstream
+  authority; `false` passes the client's original `Host` through.
+- `site.proxy = [urls]` is a catch-all site shorthand; per-route use
+  `route.proxy = { upstream = "name" | [urls] }`.
+- `rate` specs: `100/s`, `600/m`, `10000/h`, `50000/day`.
+  `key`: `ip` | `identity` | `route` | `header:<Name>`.
+- Durations: `500ms`, `10s`, `5m`, `1h`, `1d`. Sizes: `B`, `KiB`,
+  `MiB`, `GiB`. Both are strings (`"10s"`, `"256MiB"`).
+- Cache entries are keyed by scheme + authority (incl. port) + raw
+  request target: HTTP and HTTPS, `host` and `host:8443`, and
+  differently-encoded paths never share an entry.
+- `${ENV_VAR}` and `${file:/path}` interpolation works for secrets.
+  `verd validate` resolves them, so exports/files must exist then.
+
+## Doc pages
+
+- [Quickstart](docs/book/src/quickstart.md)
+- [Configuration model](docs/book/src/configuration.md)
+- [Static file serving](docs/book/src/static.md)
+- [Reverse proxy & load balancing](docs/book/src/proxy.md)
+- [TLS, ACME & redirects](docs/book/src/tls.md)
+- [Middleware](docs/book/src/middleware.md)
+- [Caching](docs/book/src/caching.md)
+- [Observability](docs/book/src/observability.md)
+- [Admin API & lifecycle](docs/book/src/admin.md)
+- [Tuning](docs/book/src/tuning.md)
+- [Migrating from nginx/Caddy](docs/book/src/migration.md)
+- [Full field reference (generated)](docs/book/src/reference.md)

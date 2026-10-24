@@ -1,0 +1,24 @@
+[server]
+server_header = "verd"
+
+[[server.listen]]
+addr = "0.0.0.0:8080"
+
+[admin]
+listen = "0.0.0.0:2019"
+
+[log.access]
+output = "stdout"
+
+[[site]]
+hosts = ["localhost", "127.0.0.1"]
+default = true
+tls = "off"
+
+[[site.route]]
+path = "/"
+static = { root = "/var/www/site" }
+
+[[site.route]]
+prefix = "/api"
+proxy = ["http://upstream:9000"]
