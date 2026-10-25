@@ -11,6 +11,19 @@ publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-10-25
+
+### Changed
+
+- **Actions bumped for the Node 24 runner migration** — checkout v7,
+  upload/download-artifact v7/v8, pages v5, docker v4/v7,
+  action-gh-release v3, scorecard v2.5, cosign-installer v4 (all
+  SHA-pinned). The unmaintained node20 `rustsec/audit-check` job was
+  removed — `cargo deny check` already gates the same advisories db.
+- **Container images carry OCI labels** — `licenses` ("MIT OR
+  Apache-2.0") and `source` on both `Dockerfile` and
+  `Dockerfile.release` for machine-readable license metadata.
+
 ## [0.2.6] - 2026-10-25
 
 ### Added

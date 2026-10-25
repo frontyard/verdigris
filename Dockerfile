@@ -21,6 +21,8 @@ RUN cargo build --release --locked \
     && strip target/x86_64-unknown-linux-musl/release/verd
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+LABEL org.opencontainers.image.licenses="MIT OR Apache-2.0" \
+      org.opencontainers.image.source="https://github.com/frontyard/verdigris"
 COPY --from=build /src/target/x86_64-unknown-linux-musl/release/verd /usr/bin/verd
 USER nonroot
 VOLUME ["/var/lib/verd", "/var/log/verd"]
