@@ -1767,20 +1767,22 @@ proxy = {{ upstream = "up" }}
     // 3. after max-age but within SWR window → STALE served instantly
     //    while a background revalidation runs
     tokio::time::sleep(Duration::from_millis(1300)).await;
-    let h = up.hits.load(Ordering::Relaxed);
     let r = get("/r/a").send().await.unwrap();
     assert_eq!(r.headers()["x-cache"], "STALE");
     assert_eq!(r.text().await.unwrap(), "body-v1");
-    // background revalidation lands (304 → freshen)
+    // background revalidation lands (fresh 200 → stored). `up.hits` counts
+    // at upstream accept, slightly before the store lands — poll for HIT
+    // like step 4 rather than asserting on the very next request.
+    let mut hit = false;
     for _ in 0..50 {
-        if up.hits.load(Ordering::Relaxed) > h {
+        let r = get("/r/a").send().await.unwrap();
+        if r.headers()["x-cache"] == "HIT" {
+            hit = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(40)).await;
     }
-    assert!(up.hits.load(Ordering::Relaxed) > h, "SWR reval ran");
-    let r = get("/r/a").send().await.unwrap();
-    assert_eq!(r.headers()["x-cache"], "HIT");
+    assert!(hit, "SWR reval landed, entry fresh again");
 
     // 4. bump upstream version → stale again → reval gets a 200
     up.version.fetch_add(1, Ordering::Relaxed);
