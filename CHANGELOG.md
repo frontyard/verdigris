@@ -11,7 +11,24 @@ publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
-## [0.2.0] - 2025-10-26
+### Changed
+
+## [0.2.2] - 2026-10-25
+
+- **Quickstart documents the admin API** — loopback/token setup, curl
+  examples, and the Docker loopback caveat.
+
+## [0.2.1] - 2026-10-25
+
+### Fixed
+
+- **Release container image no longer fails to start** — CI artifact
+  download stripped the execute bit, so the image's `/usr/bin/verd` was
+  non-executable (`permission denied` on entrypoint). `Dockerfile.release`
+  now uses `COPY --chmod=0755` and the release workflow restores the bit
+  after artifact regrouping.
+
+## [0.2.0] - 2026-10-25
 
 ### Security
 
@@ -81,12 +98,6 @@ publishes the matching section as the GitHub release notes.
 
 ### Fixed
 
-- **Release container image no longer fails to start** — CI artifact
-  download stripped the execute bit, so the image's `/usr/bin/verd` was
-  non-executable (`permission denied` on entrypoint). `Dockerfile.release`
-  now uses `COPY --chmod=0755` and the release workflow restores the bit
-  after artifact regrouping.
-
 - **Per-IP connection accounting race** — decrement+remove now happens
   under the shard `entry()` lock; a fresh admit for the same IP can no
   longer lose its count.
@@ -139,5 +150,7 @@ reverse proxy with load balancing and retries, response caching
 (RAM/disk/hybrid), compression, rate limiting, CORS, security headers,
 admin API with atomic reloads, Prometheus metrics.
 
-[Unreleased]: https://github.com/frontyard/verdigris/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/frontyard/verdigris/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/frontyard/verdigris/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/frontyard/verdigris/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/frontyard/verdigris/releases/tag/v0.1.0
