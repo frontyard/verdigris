@@ -10,7 +10,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 verd = { path = ".." }
-toml = "0.9"
+toml = "1.1"
 http = "1"
 
 # standalone workspace: the crate root has no [workspace] table
