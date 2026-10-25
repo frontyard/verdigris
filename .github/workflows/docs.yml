@@ -19,7 +19,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - uses: taiki-e/install-action@aafe37d8c52b7112a59ade7606c9d466fc6290cb # mdbook
+      - uses: taiki-e/install-action@aafe37d8c52b7112a59ade7606c9d466fc6290cb # releases/mdbook
       # config reference is generated from the live schema
       - run: cargo run --quiet -- schema | python3 docs/gen-reference.py > docs/book/src/reference.md
       - run: |
