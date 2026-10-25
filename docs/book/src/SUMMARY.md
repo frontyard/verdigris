@@ -17,5 +17,6 @@
 - [Migrating from nginx/Caddy](./migration.md)
 - [Upgrading](./upgrade.md)
 - [Operations](./operations.md)
+- [Command line](./cli.md)
 
 [Configuration reference](./reference.md)

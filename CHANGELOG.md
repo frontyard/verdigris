@@ -11,6 +11,13 @@ publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-10-25
+
+### Added
+
+- **`cli.md` doc page** — reference for the `verd` subcommands, flags,
+  env vars, and exit codes (completes the external-interface docs).
+
 ## [0.2.5] - 2026-10-25
 
 ### Added
