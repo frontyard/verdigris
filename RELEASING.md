@@ -4,23 +4,46 @@ Releases are fully automated: pushing a `v*` tag runs
 `.github/workflows/release.yml` end to end. There is no manual build
 step on a maintainer machine.
 
-## Before tagging
-
-- CI green on `main` (`ci.yml`: fmt, clippy stable + MSRV 1.88, tests).
-- `Cargo.toml` `version` bumped to the version you are about to tag —
-  nothing in CI enforces tag↔version agreement, so keep them in sync
-  yourself.
-- If `src/config/` changed: regenerate `docs/book/src/reference.md`
-  (`cargo run --quiet -- schema | python3 docs/gen-reference.py`) and
-  `llms-full.txt` (`python3 docs/gen-llms-full.py`). The docs workflow
-  fails on a stale `reference.md`.
-
 ## Cut a release
+
+```sh
+scripts/release.sh            # patch (default)
+scripts/release.sh minor
+scripts/release.sh major
+scripts/release.sh 0.3.0      # explicit version
+```
+
+The script (`scripts/release.sh`) does, in order:
+
+1. Guardrails: clean tracked tree, tag must not exist yet.
+2. `Cargo.toml` version bump + `Cargo.lock` re-sync (CI builds
+   `--locked`).
+3. Changelog: `## [Unreleased]` content is moved under
+   `## [x.y.z] - <today>`, a fresh `[Unreleased]` is left on top, and
+   the compare link refs are updated. Skipped if the section already
+   exists (e.g. written by hand).
+4. Commits `Release vX.Y.Z`, creates annotated tag `vX.Y.Z`, pushes the
+   branch and the tag.
+
+Flags: `-y` skips the confirmation prompt; `--regen-docs` regenerates
+`docs/book/src/reference.md` and `llms-full.txt` — needed when
+`src/config/` changed during the cycle (the docs workflow fails on a
+stale `reference.md`).
+
+The tag push is what kicks off the release workflow — tag name and
+`Cargo.toml` version are guaranteed to match because the script derives
+the tag from the bump.
+
+### If you tag by hand instead
 
 ```sh
 git tag -a v0.2.0 -m "verd v0.2.0"
 git push origin v0.2.0
 ```
+
+then all of the above stays your responsibility: version↔tag agreement,
+the `[Unreleased]` → dated-section rename, `Cargo.lock`, and pushing the
+release commit alongside the tag.
 
 ## What CI produces
 

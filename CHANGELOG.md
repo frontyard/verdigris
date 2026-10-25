@@ -11,9 +11,17 @@ publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
-### Changed
+## [0.2.3] - 2026-10-25
+
+### Build & CI
+
+- **`scripts/release.sh`** automates the release flow: version bump
+  (patch/minor/major/explicit), changelog section rename + link refs,
+  `Cargo.lock` sync, release commit, `vX.Y.Z` tag, and push.
 
 ## [0.2.2] - 2026-10-25
+
+### Changed
 
 - **Quickstart documents the admin API** — loopback/token setup, curl
   examples, and the Docker loopback caveat.

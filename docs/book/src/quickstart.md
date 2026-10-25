@@ -45,23 +45,23 @@ Set a token to protect it — **mandatory** if you bind beyond loopback:
 ```toml
 [admin]
 listen = "127.0.0.1:2019"      # or "0.0.0.0:2019" to reach it remotely
-token = "${VERD_ADMIN_TOKEN}"  # interpolated from the environment
+token = "${ADMIN_TOKEN}"  # interpolated from the environment
 ```
 
 ```sh
-export VERD_ADMIN_TOKEN=change-me
+export ADMIN_TOKEN=change-me
 
 # no token → 401
 curl http://127.0.0.1:2019/health
 
 # with token → ok
-curl -H "Authorization: Bearer $VERD_ADMIN_TOKEN" \
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
   http://127.0.0.1:2019/health
 
 # mutating endpoints work the same way
-curl -X POST -H "Authorization: Bearer $VERD_ADMIN_TOKEN" \
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
   http://127.0.0.1:2019/reload
-curl -X POST -H "Authorization: Bearer $VERD_ADMIN_TOKEN" \
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   http://127.0.0.1:2019/purge -d '{"all": true}'
 ```
