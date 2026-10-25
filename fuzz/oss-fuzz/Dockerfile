@@ -17,7 +17,9 @@
 # OSS-Fuzz build image for verdigris.
 # This file lives at projects/verdigris/Dockerfile in google/oss-fuzz;
 # a copy is kept in-repo so the submission PR is just a copy+paste.
-FROM gcr.io/oss-fuzz-base/base-builder-rust
+FROM gcr.io/oss-fuzz-base/base-builder-rust@sha256:3428d0a90b1e7efbe2ba947bd1d0c9a70594986b4b6553804547f1fb24cfc92f
+# NOTE: the submitted copy in google/oss-fuzz keeps :latest —
+# their infra rebuilds against the current base image on purpose.
 
 RUN git clone --depth 1 https://github.com/frontyard/verdigris $SRC/verdigris
 WORKDIR $SRC/verdigris

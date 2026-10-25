@@ -11,6 +11,22 @@ publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-10-25
+
+### Added
+
+- **`CONTRIBUTING.md`** — contribution requirements (CI gates, unsafe
+  policy, changelog convention) referenced from the README; needed for
+  the CII Best Practices criteria.
+
+### Build & CI
+
+- **Scorecard-driven fixes** — all container `FROM` images pinned
+  by digest; `attest-build-provenance` publishes SLSA provenance for
+  release tarballs (was cosign bundles scorecard can't see); a CodeQL
+  Rust workflow adds SAST; a **cargo-machete** CI job rejects unused
+  dependencies.
+
 ## [0.2.4] - 2026-10-25
 
 ### Added

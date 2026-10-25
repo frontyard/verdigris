@@ -14,6 +14,11 @@ TLS and a readable TOML configuration.
   (br/zstd/gzip), and a full HTTP response cache (RAM/disk/hybrid)
 - Prometheus metrics, structured access logs, admin API, atomic reloads
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Security issues:
+[SECURITY.md](SECURITY.md).
+
 ## Install
 
 Prebuilt static musl binaries (x86_64, aarch64) are attached to every

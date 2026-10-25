@@ -72,8 +72,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # publish the GitHub release
-      id-token: write # cosign keyless signing
+      id-token: write # cosign keyless signing + attestation OIDC
       actions: read # download-artifact
+      attestations: write # upload SLSA provenance
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -107,6 +108,10 @@ jobs:
               on' CHANGELOG.md
             printf '\n---\n%s\n' "Static musl binaries for x86_64 and aarch64 Linux, plus a multi-arch container image (ghcr.io). Artifacts are cosign keyless-signed; verd-sbom.json is the CycloneDX SBOM."
           } > notes.md
+      - name: attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: "verd-*.tar.gz"
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |

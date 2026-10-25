@@ -9,7 +9,7 @@
 # Run:    docker run --read-only -v $PWD/verd.toml:/etc/verd/verd.toml:ro \
 #           -v verd-data:/var/lib/verd -p 8080:8080 verd
 
-FROM clux/muslrust:stable AS build
+FROM clux/muslrust:stable@sha256:cdcf741f1f5f6f2c3cd6328ba925940742c180ad22c15d99f40035c34ad2cb45 AS build
 WORKDIR /src
 # bake the source SHA into the binary (/version, --version):
 #   docker build --build-arg VERD_GIT_SHA=$(git rev-parse HEAD) -t verd .
@@ -20,7 +20,7 @@ COPY src ./src
 RUN cargo build --release --locked \
     && strip target/x86_64-unknown-linux-musl/release/verd
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 COPY --from=build /src/target/x86_64-unknown-linux-musl/release/verd /usr/bin/verd
 USER nonroot
 VOLUME ["/var/lib/verd", "/var/log/verd"]
