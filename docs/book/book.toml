@@ -7,5 +7,6 @@ description = "Verdigris — a simple, fast web server and reverse proxy."
 
 [output.html]
 default-theme = "navy"
+site-url = "/verdigris/"
 git-repository-url = "https://github.com/frontyard/verdigris"
 edit-url-template = "https://github.com/frontyard/verdigris/edit/main/docs/book/{path}"

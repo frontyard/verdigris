@@ -638,9 +638,7 @@ tls = "off"
 [[site.route]]
 path = "/"
 proxy = {{ upstream = "dead", retries = {{ max_per_request = 4 }} }}
-"#,
-        dead1 = dead1,
-        dead2 = dead2,
+"#
     );
     let (base, _admin, _rt, sd) = start(&config).await;
     let resp = reqwest::Client::new()

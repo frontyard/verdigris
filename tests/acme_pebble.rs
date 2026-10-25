@@ -41,7 +41,7 @@ fn docker(args: &[&str]) -> Result<String, String> {
         .output()
         .map_err(|e| format!("docker: {e}"))?;
     if !out.status.success() {
-        return Err(format!("docker {:?} failed", args));
+        return Err(format!("docker {args:?} failed"));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
