@@ -158,4 +158,34 @@ mod tests {
         drop(body); // client aborted before completion
         assert!(rx.await.is_err());
     }
+
+    #[tokio::test]
+    async fn upstream_error_drops_commit() {
+        let (tx, rx) = tokio::sync::oneshot::channel::<Bytes>();
+        let body = new(
+            crate::body::boxed(http_body_util::StreamBody::new(futures_util::stream::iter(
+                vec![
+                    Ok::<_, BoxError>(Frame::data(Bytes::from_static(b"partial"))),
+                    Err::<_, BoxError>(BoxError::from("boom")),
+                ],
+            ))),
+            tx,
+            100,
+            None,
+        );
+        let mut body = std::pin::pin!(body);
+        assert!(
+            std::future::poll_fn(|cx| body.as_mut().poll_frame(cx))
+                .await
+                .unwrap()
+                .is_ok()
+        );
+        assert!(
+            std::future::poll_fn(|cx| body.as_mut().poll_frame(cx))
+                .await
+                .unwrap()
+                .is_err()
+        );
+        assert!(rx.await.is_err());
+    }
 }

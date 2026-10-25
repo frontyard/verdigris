@@ -54,15 +54,18 @@ impl Redirect {
             .query()
             .map(|q| format!("?{q}"))
             .unwrap_or_default();
+        // ctx.path is decoded — re-encode so raw spaces or control chars
+        // never land in a Location value
+        let path = crate::proxy::headers::encode_path(&ctx.path);
         let location = match &self.target {
             Target::To(tpl) => tpl
                 .replace("{host}", &ctx.host)
-                .replace("{path}", &ctx.path)
+                .replace("{path}", &path)
                 .replace("{query}", &query)
                 .replace("{scheme}", ctx.scheme),
-            Target::Host(host) => format!("{}://{}{}{}", ctx.scheme, host, ctx.path, query),
+            Target::Host(host) => format!("{}://{}{}{}", ctx.scheme, host, path, query),
             Target::Scheme(scheme) => {
-                format!("{scheme}://{}{}{}", ctx.host, ctx.path, query)
+                format!("{scheme}://{}{}{}", ctx.host, path, query)
             }
         };
         let mut resp = http::Response::new(body::empty());

@@ -79,11 +79,56 @@ pub fn load(path: &Path) -> Result<Loaded, LoadError> {
     let config: Config = value
         .try_into()
         .map_err(|e| LoadError::Schema(path.clone(), e.to_string()))?;
-    let diagnostics = validate(&config);
+    let mut diagnostics = validate(&config);
+    diagnostics.extend(config_file_perm_diag(&path, &config));
     Ok(Loaded {
         config,
         diagnostics,
     })
+}
+
+/// Warn when the config file itself is unsafe: group/other-writable is
+/// always flagged; group/other-*readable* is flagged only when the
+/// config embeds literal secrets (tokens/api keys — `${file:}` and
+/// `${env}` references don't count).
+#[cfg(unix)]
+fn config_file_perm_diag(path: &Path, config: &Config) -> Option<Diagnostic> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(path).ok()?.permissions().mode() & 0o777;
+    if mode & 0o022 != 0 {
+        return Some(Diagnostic {
+            severity: Severity::Warning,
+            path: path.display().to_string(),
+            message: format!(
+                "config file is group/other-writable (mode {mode:o}) — chmod 640 or 600"
+            ),
+        });
+    }
+    let has_inline_secrets = config.admin.token.is_some()
+        || config.site.iter().any(|s| {
+            s.route.iter().any(|r| {
+                r.auth.as_ref().is_some_and(|a| {
+                    a.bearer.as_ref().is_some_and(|b| !b.tokens.is_empty())
+                        || a.api_key.as_ref().is_some_and(|k| !k.keys.is_empty())
+                })
+            })
+        });
+    if has_inline_secrets && mode & 0o044 != 0 {
+        return Some(Diagnostic {
+            severity: Severity::Warning,
+            path: path.display().to_string(),
+            message: format!(
+                "config file is group/other-readable (mode {mode:o}) and contains inline credentials — chmod 640 or move secrets to ${{file:}} references"
+            ),
+        });
+    }
+    None
+}
+
+/// Config permission checks only exist on unix.
+#[cfg(not(unix))]
+fn config_file_perm_diag(_: &Path, _: &Config) -> Option<Diagnostic> {
+    None
 }
 
 /// Parse one TOML document, interpolate secrets, and recursively merge its
@@ -330,5 +375,122 @@ proxy = { upstream = "api" }
         let dir = tempfile::tempdir().unwrap();
         let path = write(dir.path(), "verd.toml", "bogus_key = 1\n");
         assert!(matches!(load(&path), Err(LoadError::Schema(_, _))));
+    }
+
+    #[test]
+    fn load_error_variants() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let missing = dir.path().join("nope.toml");
+        assert!(matches!(load(&missing), Err(LoadError::Io(_, _))));
+
+        let path = write(dir.path(), "bad.toml", "[[site]\n");
+        assert!(matches!(load(&path), Err(LoadError::Syntax(_, _))));
+
+        let path = write(
+            dir.path(),
+            "interp.toml",
+            "[admin]\ntoken = \"${DEFINITELY_MISSING_ENV}\"\n",
+        );
+        assert!(matches!(load(&path), Err(LoadError::Interpolate(_, _))));
+
+        let path = write(dir.path(), "inc.toml", "include = [\"ghost.toml\"]\n");
+        assert!(matches!(load(&path), Err(LoadError::IncludeMissing(_, _))));
+    }
+
+    #[test]
+    fn errors_iterator_filters() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(dir.path(), "verd.toml", "[[site]]\nroot = \"/tmp\"\n");
+        let loaded = load(&path).unwrap();
+        assert!(loaded.errors().count() > 0);
+        assert!(!loaded.is_valid());
+        // warnings don't affect validity
+        let path = write(
+            dir.path(),
+            "warn.toml",
+            "[admin]\nlisten = \"127.0.0.1:2019\"\n[[site]]\nhosts = [\"x\"]\nroot = \"/tmp\"\n",
+        );
+        let loaded = load(&path).unwrap();
+        assert!(loaded.is_valid());
+        assert_eq!(loaded.errors().count(), 0);
+    }
+
+    #[test]
+    fn merge_equal_scalars_and_arrays() {
+        let mut base: toml::Value = toml::from_str("a = 1\nlist = [1]").unwrap();
+        let frag: toml::Value = toml::from_str("a = 1\nlist = [2]").unwrap();
+        merge(&mut base, frag).unwrap();
+        assert_eq!(base["a"].as_integer(), Some(1));
+        assert_eq!(base["list"].as_array().unwrap().len(), 2);
+
+        let mut base: toml::Value = toml::from_str("a = 1").unwrap();
+        let frag: toml::Value = toml::from_str("a = 2").unwrap();
+        assert!(merge(&mut base, frag).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_file_permissions_warned() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(dir.path(), "verd.toml", "[admin]\ntoken = \"s3cr3t\"\n");
+
+        // group/other-writable is always flagged
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o622)).unwrap();
+        let loaded = load(&path).unwrap();
+        assert!(
+            loaded
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("group/other-writable")),
+            "{:?}",
+            loaded.diagnostics
+        );
+
+        // group/other-readable flagged only because inline secrets exist
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let loaded = load(&path).unwrap();
+        assert!(
+            loaded
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("group/other-readable")),
+            "{:?}",
+            loaded.diagnostics
+        );
+
+        // same mode, no inline secrets → no warning
+        let path2 = write(dir.path(), "plain.toml", "[log]\nlevel = \"info\"\n");
+        std::fs::set_permissions(&path2, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let loaded = load(&path2).unwrap();
+        assert!(
+            loaded
+                .diagnostics
+                .iter()
+                .all(|d| !d.message.contains("readable")),
+            "{:?}",
+            loaded.diagnostics
+        );
+
+        // private mode → silent
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let loaded = load(&path).unwrap();
+        assert!(
+            loaded
+                .diagnostics
+                .iter()
+                .all(|d| !d.message.contains("config file is")),
+            "{:?}",
+            loaded.diagnostics
+        );
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn config_file_permissions_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(dir.path(), "verd.toml", "");
+        assert!(config_file_perm_diag(&path, &Config::default()).is_none());
     }
 }

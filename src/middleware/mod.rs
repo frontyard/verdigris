@@ -327,3 +327,117 @@ pub fn forbidden() -> http::Response<BoxBody> {
     *resp.status_mut() = StatusCode::FORBIDDEN;
     resp
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::IpAddr;
+
+    #[test]
+    fn header_ops_set_add_remove_and_errors() {
+        let c = cfg::HeaderOps {
+            set: vec![("x-a".into(), "1".into())].into_iter().collect(),
+            add: vec![("x-b".into(), "2".into())].into_iter().collect(),
+            remove: vec!["x-c".into()],
+        };
+        let ops = HeaderOps::build(&c).unwrap();
+        let mut h = http::HeaderMap::new();
+        h.insert("x-c", HeaderValue::from_static("old"));
+        ops.apply(&mut h);
+        assert_eq!(h["x-a"], "1");
+        assert_eq!(h["x-b"], "2");
+        assert!(h.get("x-c").is_none());
+        // add appends a second value
+        ops.apply(&mut h);
+        assert_eq!(h.get_all("x-b").iter().count(), 2);
+
+        // invalid name / value rejected at build
+        let mut c2 = cfg::HeaderOps::default();
+        c2.set.insert("bad name".into(), "v".into());
+        assert!(HeaderOps::build(&c2).is_err());
+        let mut c3 = cfg::HeaderOps::default();
+        c3.add.insert("x".into(), "bad\r\nv".into());
+        assert!(HeaderOps::build(&c3).is_err());
+        let c4 = cfg::HeaderOps {
+            remove: vec!["bad name".into()],
+            ..Default::default()
+        };
+        assert!(HeaderOps::build(&c4).is_err());
+    }
+
+    #[test]
+    fn security_headers_merge_and_apply() {
+        let global = cfg::SecurityConfig {
+            enabled: true,
+            hsts: true,
+            hsts_max_age: 100,
+            hsts_subdomains: true,
+            content_type_options: true,
+            frame_options: "DENY".into(),
+            referrer_policy: "no-referrer".into(),
+            csp: Some("default-src 'self'".into()),
+            cross_domain_policy: "none".into(),
+        };
+        // disabled global → None
+        let off = cfg::SecurityConfig {
+            enabled: false,
+            ..global.clone()
+        };
+        assert!(Security::build(&off, None).is_none());
+        // route disables → None
+        let r = cfg::RouteSecurity {
+            enabled: Some(false),
+            ..Default::default()
+        };
+        assert!(Security::build(&global, Some(&r)).is_none());
+        // route override wins; csp="" clears
+        let r = cfg::RouteSecurity {
+            frame_options: Some("SAMEORIGIN".into()),
+            csp: Some(String::new()),
+            ..Default::default()
+        };
+        let s = Security::build(&global, Some(&r)).unwrap();
+        assert_eq!(s.frame_options, "SAMEORIGIN");
+        assert!(s.csp.is_empty());
+
+        let s = Security::build(&global, None).unwrap();
+        let mut h = http::HeaderMap::new();
+        s.apply(&mut h, true);
+        assert_eq!(
+            h["strict-transport-security"],
+            "max-age=100; includeSubDomains"
+        );
+        assert_eq!(h["x-frame-options"], "DENY");
+        // hsts skipped on plain http
+        let mut h = http::HeaderMap::new();
+        s.apply(&mut h, false);
+        assert!(h.get("strict-transport-security").is_none());
+        // handler's own headers are not clobbered
+        let mut h = http::HeaderMap::new();
+        h.insert("x-frame-options", HeaderValue::from_static("CUSTOM"));
+        s.apply(&mut h, false);
+        assert_eq!(h["x-frame-options"], "CUSTOM");
+    }
+
+    #[test]
+    fn check_ip_deny_then_allow() {
+        let mw = Middleware {
+            ip_allow: vec!["10.0.0.0/8".parse().unwrap()],
+            ip_deny: vec!["10.0.0.9/32".parse().unwrap()],
+            auth: None,
+            cors: None,
+            rate_limit: None,
+            headers: None,
+            security: None,
+            compress: None,
+            cache: None,
+            cfg: cfg::RouteConfig::default(),
+        };
+        let denied: IpAddr = "10.0.0.9".parse().unwrap();
+        let allowed: IpAddr = "10.0.0.1".parse().unwrap();
+        let outsider: IpAddr = "192.0.2.1".parse().unwrap();
+        assert!(mw.check_ip(denied).is_err(), "deny beats allow");
+        assert!(mw.check_ip(allowed).is_ok());
+        assert!(mw.check_ip(outsider).is_err(), "allowlist empty-match");
+    }
+}

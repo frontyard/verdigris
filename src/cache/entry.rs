@@ -170,4 +170,16 @@ mod tests {
         m.fresh_for = 0;
         assert_eq!(m.freshness_at(t0), Freshness::Swr);
     }
+
+    #[test]
+    fn freshen_updates_windows_and_validators() {
+        let mut m = meta(10, 20, 60);
+        let old_lm = m.last_modified.clone();
+        m.etag = Some("\"old\"".into());
+        m.freshen(Some(7), Some(8), Some(9));
+        assert_eq!((m.fresh_for, m.swr_for, m.sie_for), (7, 8, 9));
+        m.freshen(None, None, None);
+        assert_eq!((m.fresh_for, m.swr_for, m.sie_for), (7, 8, 9));
+        assert_eq!(m.last_modified, old_lm);
+    }
 }

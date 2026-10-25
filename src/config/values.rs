@@ -231,4 +231,87 @@ mod tests {
         assert!(RateSpec::parse("100").is_err());
         assert!(RateSpec::parse("x/s").is_err());
     }
+
+    #[test]
+    fn byte_size_remaining_units_and_errors() {
+        assert_eq!(ByteSize::parse("2T").unwrap().0, 2_000_000_000_000);
+        assert_eq!(ByteSize::parse("2TiB").unwrap().0, 2 * 1024_u64.pow(4));
+        assert_eq!(ByteSize::parse("1K").unwrap().0, 1000);
+        assert_eq!(ByteSize::parse("2 G").unwrap().0, 2_000_000_000);
+        assert!(ByteSize::parse("1PB").is_err());
+        assert!(ByteSize::parse("xB").is_err());
+        // serde paths: integer and string forms, plus a deserialize error
+        assert_eq!(
+            toml::from_str::<ByteSizeHolder>("v = 4096").unwrap().v.0,
+            4096
+        );
+        assert!(toml::from_str::<ByteSizeHolder>("v = \"bogus\"").is_err());
+        // Serialize round-trips through Display
+        let mut out = String::new();
+        serde::Serialize::serialize(&ByteSize::mib(1), toml::ser::ValueSerializer::new(&mut out))
+            .unwrap();
+        assert_eq!(out, "\"1MiB\"");
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ByteSizeHolder {
+        v: ByteSize,
+    }
+
+    #[test]
+    fn byte_size_display_all_brackets() {
+        assert_eq!(ByteSize::gib(4).to_string(), "4GiB");
+        assert_eq!(ByteSize::mib(10).to_string(), "10MiB");
+        assert_eq!(ByteSize::kib(16).to_string(), "16KiB");
+        assert_eq!(ByteSize::bytes(513).to_string(), "513B");
+        // not an exact multiple falls through to bytes
+        assert_eq!(ByteSize::bytes(1025).to_string(), "1025B");
+    }
+
+    #[test]
+    fn rate_spec_all_units_and_display() {
+        assert_eq!(RateSpec::parse("1/sec").unwrap().period.as_secs(), 1);
+        assert_eq!(RateSpec::parse("1/hour").unwrap().period.as_secs(), 3600);
+        assert_eq!(RateSpec::parse("5/day").unwrap().period.as_secs(), 86400);
+        assert!(RateSpec::parse("1/fortnight").is_err());
+        // Display: each canonical unit plus the seconds fallback
+        assert_eq!(RateSpec::parse("100/s").unwrap().to_string(), "100/s");
+        assert_eq!(RateSpec::parse("5/m").unwrap().to_string(), "5/m");
+        assert_eq!(RateSpec::parse("5/h").unwrap().to_string(), "5/h");
+        assert_eq!(RateSpec::parse("5/d").unwrap().to_string(), "5/d");
+        let odd = RateSpec {
+            permits: 7,
+            period: Duration::from_secs(90),
+        };
+        assert_eq!(odd.to_string(), "7/90s");
+        let mut out = String::new();
+        serde::Serialize::serialize(
+            &RateSpec::parse("1/s").unwrap(),
+            toml::ser::ValueSerializer::new(&mut out),
+        )
+        .unwrap();
+        assert_eq!(out, "\"1/s\"");
+        assert!(toml::from_str::<RateHolder>("r = \"nope\"").is_err());
+    }
+
+    #[derive(serde::Deserialize)]
+    struct RateHolder {
+        #[allow(dead_code)]
+        r: RateSpec,
+    }
+
+    #[test]
+    fn status_map_keys_are_statuses() {
+        use std::collections::BTreeMap;
+        use std::path::PathBuf;
+
+        #[derive(serde::Deserialize)]
+        struct Wrap {
+            #[serde(with = "status_map")]
+            m: BTreeMap<u16, PathBuf>,
+        }
+        let w: Wrap = toml::from_str("m = { \"404\" = \"/404.html\" }").unwrap();
+        assert_eq!(w.m[&404], PathBuf::from("/404.html"));
+        assert!(toml::from_str::<Wrap>("m = { \"oops\" = \"/x\" }").is_err());
+    }
 }

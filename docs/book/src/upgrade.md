@@ -10,3 +10,6 @@
   V1; entries that fail to parse are dropped at rebuild, never fatal.
 - Zero-downtime config changes never need a binary restart — see
   [reload semantics](./admin.md#reload-semantics).
+- **What changed**: each release is documented in the repository's
+  `CHANGELOG.md` (Keep a Changelog format); the GitHub release notes are
+  generated from it automatically.

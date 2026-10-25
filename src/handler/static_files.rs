@@ -159,7 +159,9 @@ impl Static {
         fs_path: &Path,
     ) -> Result<http::Response<BoxBody>, StatusCode> {
         if !ctx.path.ends_with('/') {
-            let mut location = format!("{}/", ctx.path);
+            // ctx.path is *decoded* — re-encode so spaces/controls can't
+            // corrupt the Location header or its consumers
+            let mut location = format!("{}/", crate::proxy::headers::encode_path(&ctx.path));
             if let Some(q) = parts.uri.query() {
                 location.push('?');
                 location.push_str(q);
@@ -804,5 +806,268 @@ mod tests {
         assert!(glob_match("*", "/anything"));
         assert!(glob_match("*.js", "app.js"));
         assert!(!glob_match("*.js", "app.css"));
+    }
+}
+
+#[cfg(test)]
+mod handler_tests {
+    use super::*;
+    use crate::handler::RequestCtx;
+    use http_body_util::BodyExt;
+
+    fn tmp() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
+    }
+
+    fn cfg_with(
+        root: &std::path::Path,
+        f: impl FnOnce(&mut cfg::StaticHandler),
+    ) -> cfg::StaticHandler {
+        let mut c = cfg::StaticHandler {
+            root: root.to_path_buf(),
+            ..Default::default()
+        };
+        f(&mut c);
+        c
+    }
+
+    fn ctx(path: &str) -> RequestCtx {
+        RequestCtx {
+            path: path.into(),
+            host: "x".into(),
+            client_ip: "10.0.0.1".parse().unwrap(),
+            peer_ip: "10.0.0.1".parse().unwrap(),
+            peer_trusted: false,
+            tls: false,
+            scheme: "http",
+        }
+    }
+
+    fn req(method: Method, path: &str) -> http::Request<BoxBody> {
+        http::Request::builder()
+            .method(method)
+            .uri(path)
+            .body(crate::body::empty())
+            .unwrap()
+    }
+
+    async fn body_text(r: http::Response<BoxBody>) -> String {
+        String::from_utf8(r.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn method_not_allowed_allows_get_head() {
+        let d = tmp();
+        let s = Static::build(&cfg_with(d.path(), |_| {}), "/", "s").unwrap();
+        let r = s.handle(req(Method::POST, "/f.txt"), &ctx("/f.txt")).await;
+        assert_eq!(r.status(), 405);
+        assert_eq!(r.headers()["allow"], "GET, HEAD");
+    }
+
+    #[tokio::test]
+    async fn serve_file_with_mime_and_conditionals() {
+        let d = tmp();
+        std::fs::write(d.path().join("f.txt"), "hello").unwrap();
+        let mut c = cfg_with(d.path(), |_| {});
+        c.mime_types.insert("txt".into(), "text/x-test".into());
+        let s = Static::build(&c, "/", "s").unwrap();
+
+        let r = s.handle(req(Method::GET, "/f.txt"), &ctx("/f.txt")).await;
+        assert_eq!(r.status(), 200);
+        assert_eq!(r.headers()["content-type"], "text/x-test");
+        let etag = r.headers()["etag"].to_str().unwrap().to_string();
+        assert_eq!(body_text(r).await, "hello");
+
+        // If-None-Match hit → 304
+        let r2 = http::Request::builder()
+            .uri("/f.txt")
+            .header("if-none-match", etag.clone())
+            .body(crate::body::empty())
+            .unwrap();
+        let r2 = s.handle(r2, &ctx("/f.txt")).await;
+        assert_eq!(r2.status(), 304);
+
+        // If-Modified-Since in the future → 304
+        let r3 = http::Request::builder()
+            .uri("/f.txt")
+            .header("if-modified-since", "Wed, 21 Oct 2099 07:28:00 GMT")
+            .body(crate::body::empty())
+            .unwrap();
+        assert_eq!(s.handle(r3, &ctx("/f.txt")).await.status(), 304);
+
+        // HEAD: headers but empty body
+        let r4 = s.handle(req(Method::HEAD, "/f.txt"), &ctx("/f.txt")).await;
+        assert_eq!(r4.status(), 200);
+        assert!(body_text(r4).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn range_requests() {
+        let d = tmp();
+        std::fs::write(d.path().join("f.bin"), "0123456789").unwrap();
+        let s = Static::build(&cfg_with(d.path(), |_| {}), "/", "s").unwrap();
+
+        let with = |hdr: &str| {
+            http::Request::builder()
+                .uri("/f.bin")
+                .header("range", hdr)
+                .body(crate::body::empty())
+                .unwrap()
+        };
+        let r = s.handle(with("bytes=0-3"), &ctx("/f.bin")).await;
+        assert_eq!(r.status(), 206);
+        assert_eq!(r.headers()["content-range"], "bytes 0-3/10");
+        assert_eq!(body_text(r).await, "0123");
+
+        // unsatisfiable → 416
+        let r = s.handle(with("bytes=50-60"), &ctx("/f.bin")).await;
+        assert_eq!(r.status(), 416);
+
+        // If-Range mismatch → full 200
+        let r = http::Request::builder()
+            .uri("/f.bin")
+            .header("range", "bytes=0-3")
+            .header("if-range", "\"other\"")
+            .body(crate::body::empty())
+            .unwrap();
+        let r = s.handle(r, &ctx("/f.bin")).await;
+        assert_eq!(r.status(), 200);
+        assert_eq!(body_text(r).await, "0123456789");
+    }
+
+    #[tokio::test]
+    async fn directory_index_listing_and_redirect() {
+        let d = tmp();
+        let sub = d.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("index.html"), "<h1>idx</h1>").unwrap();
+        let s = Static::build(&cfg_with(d.path(), |_| {}), "/", "s").unwrap();
+
+        // dir without trailing slash → redirect preserving query
+        let r = s.handle(req(Method::GET, "/sub?a=1"), &ctx("/sub")).await;
+        assert!(matches!(r.status().as_u16(), 301 | 308));
+        assert_eq!(r.headers()["location"], "/sub/?a=1");
+
+        // with trailing slash → serves index.html
+        let r = s.handle(req(Method::GET, "/sub/"), &ctx("/sub/")).await;
+        assert_eq!(r.status(), 200);
+        assert_eq!(body_text(r).await, "<h1>idx</h1>");
+
+        // listing: no index file → html listing
+        std::fs::create_dir(d.path().join("ls")).unwrap();
+        std::fs::write(d.path().join("ls/a.txt"), "x").unwrap();
+        let mut c = cfg_with(d.path(), |_| {});
+        c.listing = true;
+        let s = Static::build(&c, "/", "s").unwrap();
+        let r = s.handle(req(Method::GET, "/ls/"), &ctx("/ls/")).await;
+        assert_eq!(r.status(), 200);
+        assert!(body_text(r).await.contains("a.txt"));
+
+        // no listing, no index → 403 (dir exists but not listable)
+        let s = Static::build(&cfg_with(d.path(), |_| {}), "/", "s").unwrap();
+        let r = s.handle(req(Method::GET, "/ls/"), &ctx("/ls/")).await;
+        assert_eq!(r.status(), 403);
+    }
+
+    #[tokio::test]
+    async fn try_files_then_spa_then_404() {
+        let d = tmp();
+        std::fs::write(d.path().join("app.html"), "app").unwrap();
+        std::fs::write(d.path().join("fallback.txt"), "fb").unwrap();
+
+        // try_files hit
+        let mut c = cfg_with(d.path(), |c| c.try_files = vec!["/fallback.txt".into()]);
+        let s = Static::build(&c, "/", "s").unwrap();
+        let r = s
+            .handle(req(Method::GET, "/missing"), &ctx("/missing"))
+            .await;
+        assert_eq!(r.status(), 200);
+        assert_eq!(body_text(r).await, "fb");
+
+        // try_files miss + spa → serves index (app.html as the spa fallback)
+        c.spa = true;
+        c.index = vec!["app.html".into()];
+        c.try_files = vec!["/nope".into()];
+        let s = Static::build(&c, "/", "s").unwrap();
+        let r = s
+            .handle(req(Method::GET, "/route/x"), &ctx("/route/x"))
+            .await;
+        assert_eq!(r.status(), 200);
+        assert_eq!(body_text(r).await, "app");
+
+        // plain 404
+        let s = Static::build(&cfg_with(d.path(), |_| {}), "/", "s").unwrap();
+        let r = s
+            .handle(req(Method::GET, "/missing"), &ctx("/missing"))
+            .await;
+        assert_eq!(r.status(), 404);
+    }
+
+    #[tokio::test]
+    async fn precompressed_variants() {
+        let d = tmp();
+        std::fs::write(d.path().join("f.js"), "plain").unwrap();
+        std::fs::write(d.path().join("f.js.br"), "brotli").unwrap();
+        std::fs::write(d.path().join("f.js.gz"), "gzip").unwrap();
+        let s = Static::build(&cfg_with(d.path(), |_| {}), "/", "s").unwrap();
+
+        let accept = |v: &str| {
+            http::Request::builder()
+                .uri("/f.js")
+                .header("accept-encoding", v)
+                .body(crate::body::empty())
+                .unwrap()
+        };
+        let r = s.handle(accept("br, gzip"), &ctx("/f.js")).await;
+        assert_eq!(r.headers()["content-encoding"], "br");
+        assert_eq!(body_text(r).await, "brotli");
+
+        let r = s.handle(accept("gzip"), &ctx("/f.js")).await;
+        assert_eq!(r.headers()["content-encoding"], "gzip");
+        assert_eq!(body_text(r).await, "gzip");
+
+        let r = s.handle(accept("identity"), &ctx("/f.js")).await;
+        assert!(r.headers().get("content-encoding").is_none());
+        assert_eq!(body_text(r).await, "plain");
+    }
+
+    #[tokio::test]
+    async fn error_pages_and_cache_control() {
+        let d = tmp();
+        std::fs::write(d.path().join("404.html"), "<h1>nope</h1>").unwrap();
+        std::fs::write(d.path().join("x.css"), "a{}").unwrap();
+        let mut c = cfg_with(d.path(), |c| {
+            c.error_pages.insert(404, PathBuf::from("404.html"));
+            c.cache_control
+                .insert("*.css".into(), "public, max-age=99".into());
+        });
+        let s = Static::build(&c, "/", "s").unwrap();
+
+        let r = s
+            .handle(req(Method::GET, "/missing"), &ctx("/missing"))
+            .await;
+        assert_eq!(r.status(), 404);
+        assert_eq!(body_text(r).await, "<h1>nope</h1>");
+
+        let r = s.handle(req(Method::GET, "/x.css"), &ctx("/x.css")).await;
+        assert_eq!(r.headers()["cache-control"], "public, max-age=99");
+        let _ = &mut c;
+    }
+
+    #[test]
+    fn build_rejects_bad_config() {
+        let d = tmp();
+        let c = cfg_with(d.path(), |c| c.root = PathBuf::new());
+        assert!(Static::build(&c, "/", "s").is_err());
+        let c = cfg_with(d.path(), |c| c.index = vec!["../evil".into()]);
+        assert!(Static::build(&c, "/", "s").is_err());
+        let c = cfg_with(d.path(), |c| {
+            c.mime_types.insert("x".into(), "bad\r\nvalue".into());
+        });
+        assert!(Static::build(&c, "/", "s").is_err());
+        let c = cfg_with(d.path(), |c| {
+            c.cache_control.insert("*".into(), "bad\r\nvalue".into());
+        });
+        assert!(Static::build(&c, "/", "s").is_err());
     }
 }

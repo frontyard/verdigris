@@ -48,8 +48,10 @@ pub fn router(state: Arc<AdminState>) -> axum::Router {
         .with_state(state)
 }
 
-/// Bearer-token gate. Skipped entirely when `admin.token` is unset —
-/// config validation only permits that on loopback listeners.
+/// Bearer-token gate. When `admin.token` is unset the listener is
+/// loopback-only — but "loopback" doesn't stop a browser or any local
+/// process from reaching it, so the unauthenticated surface is still
+/// gated by [`local_only`].
 async fn bearer_auth(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
@@ -57,7 +59,7 @@ async fn bearer_auth(
     next: axum::middleware::Next,
 ) -> Result<axum::response::Response, StatusCode> {
     let Some(expected) = &state.rt().config.admin.token else {
-        return Ok(next.run(req).await);
+        return local_only(&headers, req, next).await;
     };
     let ok = headers
         .get(axum::http::header::AUTHORIZATION)
@@ -72,6 +74,70 @@ async fn bearer_auth(
     } else {
         Err(StatusCode::UNAUTHORIZED)
     }
+}
+
+/// Gate for the token-less (loopback) admin surface: require a loopback
+/// `Host` (rejects DNS rebinding), and for mutating methods reject
+/// cross-origin browser markers (`Origin`/`Sec-Fetch-Site`) — a web page
+/// can POST to `127.0.0.1` but must send those headers. Local tools
+/// (curl, scripts) send neither.
+async fn local_only(
+    headers: &HeaderMap,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, StatusCode> {
+    use axum::http::header::{HOST, ORIGIN};
+    let host_ok = headers
+        .get(HOST)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(host_is_loopback);
+    if !host_ok {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let mutating = !matches!(
+        *req.method(),
+        axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
+    );
+    if mutating {
+        if let Some(site) = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok())
+            && !matches!(site, "same-origin" | "none")
+        {
+            return Err(StatusCode::FORBIDDEN);
+        }
+        if let Some(origin) = headers.get(ORIGIN).and_then(|v| v.to_str().ok()) {
+            let host = origin
+                .split_once("://")
+                .map(|(_, r)| r)
+                .unwrap_or(origin)
+                .split('/')
+                .next()
+                .unwrap_or("");
+            if !host_is_loopback(host) {
+                return Err(StatusCode::FORBIDDEN);
+            }
+        }
+    }
+    Ok(next.run(req).await)
+}
+
+/// Whether an authority (`Host` header or `Origin` host part) names a
+/// loopback interface: `localhost`, `*.localhost`, `127.0.0.0/8`, `[::1]`
+/// — an optional `:port` is ignored.
+fn host_is_loopback(authority: &str) -> bool {
+    let h = authority.trim().trim_end_matches('.');
+    let bare = if let Some(rest) = h.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("")
+    } else {
+        match h.rsplit_once(':') {
+            Some((name, port)) if port.parse::<u16>().is_ok() => name,
+            _ => h,
+        }
+    };
+    let b = bare.to_ascii_lowercase();
+    b == "localhost"
+        || b.ends_with(".localhost")
+        || b == "::1"
+        || (b.starts_with("127.") && b.parse::<std::net::Ipv4Addr>().is_ok())
 }
 
 async fn health() -> &'static str {
@@ -330,6 +396,13 @@ pub async fn serve(
 
     let state = Arc::new(AdminState { shared, reload_tx });
     tracing::info!(%addr, tls = acceptor.is_some(), "admin listener bound");
+    if rt.config.admin.token.is_none() {
+        tracing::warn!(
+            %addr,
+            "admin listener has no token — restricted to loopback-originated requests; \
+             set admin.token to enable remote management"
+        );
+    }
     match acceptor {
         None => {
             axum::serve(listener, router(state))
@@ -405,4 +478,275 @@ async fn serve_tls(
     }
     while conns.join_next().await.is_some() {}
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loopback_host_detection() {
+        for ok in [
+            "localhost",
+            "localhost:2019",
+            "sub.localhost",
+            "127.0.0.1",
+            "127.0.0.1:2019",
+            "127.99.0.1:9999",
+            "[::1]",
+            "[::1]:2019",
+            "LOCALHOST",
+        ] {
+            assert!(host_is_loopback(ok), "{ok} should be loopback");
+        }
+        for bad in [
+            "",
+            "example.com",
+            "localhost.evil.com",
+            "127.0.0.1.attacker.com",
+            "0x7f000001",
+            "::1",
+            "attacker.com:127",
+        ] {
+            assert!(!host_is_loopback(bad), "{bad} must not be loopback");
+        }
+    }
+}
+
+#[cfg(test)]
+mod api_tests {
+    use super::*;
+    use axum::body::Body;
+    use tower::ServiceExt;
+
+    fn state(cfg_toml: &str) -> (axum::Router, tokio::sync::mpsc::Receiver<Reload>) {
+        let cfg = crate::config::validate::parse_test_config(cfg_toml);
+        let rt = crate::server::Runtime::build(Arc::new(cfg)).unwrap();
+        let (reload_tx, reload_rx) = tokio::sync::mpsc::channel(1);
+        let shared = crate::server::Shared::new(rt);
+        (
+            router(Arc::new(AdminState { shared, reload_tx })),
+            reload_rx,
+        )
+    }
+
+    fn req(method: &str, uri: &str) -> axum::http::Request<Body> {
+        axum::http::Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("host", "127.0.0.1:9777")
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn read_endpoints_and_auth_gate() {
+        // token configured → everything needs the bearer
+        let (app, _rx) = state("[admin]\ntoken = \"sekrit\"\n");
+        for uri in [
+            "/health",
+            "/ready",
+            "/metrics",
+            "/version",
+            "/config",
+            "/upstreams",
+        ] {
+            let r = app.clone().oneshot(req("GET", uri)).await.unwrap();
+            assert_eq!(r.status(), StatusCode::UNAUTHORIZED, "{uri}");
+        }
+        let auth_req = axum::http::Request::builder()
+            .method("GET")
+            .uri("/health")
+            .header("host", "127.0.0.1:9777")
+            .header("authorization", "Bearer sekrit")
+            .body(Body::empty())
+            .unwrap();
+        let r = app.clone().oneshot(auth_req).await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn local_only_reads_and_write_guards() {
+        let (app, _rx) = state("");
+        // loopback host → reads allowed (not yet ready → 503 on /ready)
+        for uri in ["/health", "/metrics", "/version", "/config", "/upstreams"] {
+            let r = app.clone().oneshot(req("GET", uri)).await.unwrap();
+            assert_eq!(r.status(), StatusCode::OK, "{uri}");
+        }
+        let r = app.clone().oneshot(req("GET", "/ready")).await.unwrap();
+        assert_eq!(r.status(), StatusCode::SERVICE_UNAVAILABLE);
+        // non-loopback Host → 403 (DNS rebinding guard)
+        let r = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/health")
+                    .header("host", "evil.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::FORBIDDEN);
+        // mutating + cross-site marker → 403
+        let r = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/purge")
+                    .header("host", "127.0.0.1")
+                    .header("content-type", "application/json")
+                    .header("sec-fetch-site", "cross-site")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::FORBIDDEN);
+        // mutating + foreign origin → 403
+        let r = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/purge")
+                    .header("host", "127.0.0.1")
+                    .header("content-type", "application/json")
+                    .header("origin", "https://evil.example")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::FORBIDDEN);
+        // mutating, clean headers → allowed
+        let r = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/purge")
+                    .header("host", "127.0.0.1")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn purge_variants() {
+        let cfg = "[cache.c]\ntier = \"ram\"\n";
+        let (app, _rx) = state(cfg);
+        let post = |body: &str| {
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/purge")
+                .header("host", "127.0.0.1")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        // unknown store → 404
+        let r = app
+            .clone()
+            .oneshot(post(r#"{"store":"nope","all":true}"#))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::NOT_FOUND);
+        // key purge
+        let r = app
+            .clone()
+            .oneshot(post(r#"{"store":"c","key":"k"}"#))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        // prefix purge
+        let r = app
+            .clone()
+            .oneshot(post(r#"{"prefix":"/x"}"#))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        // no body at all → purge all stores
+        let r = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/purge")
+                    .header("host", "127.0.0.1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn drain_undrain_and_reload() {
+        let cfg = "[upstream.u]\nservers = [\"http://127.0.0.1:9\"]\n";
+        let (app, mut rx) = state(cfg);
+        let post = |uri: String| {
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("host", "127.0.0.1")
+                .body(Body::empty())
+                .unwrap()
+        };
+        // drain by index then by authority
+        for uri in [
+            "/upstreams/u/0/drain",
+            "/upstreams/u/127.0.0.1:9/undrain",
+            "/upstreams/u/127.0.0.1:9/drain",
+        ] {
+            let r = app.clone().oneshot(post(uri.into())).await.unwrap();
+            assert_eq!(r.status(), StatusCode::OK, "{uri}");
+        }
+        // unknown cluster / member index / member authority → 404
+        for uri in [
+            "/upstreams/nope/0/drain",
+            "/upstreams/u/9/drain",
+            "/upstreams/u/9.9.9.9:9/drain",
+        ] {
+            let r = app.clone().oneshot(post(uri.into())).await.unwrap();
+            assert_eq!(r.status(), StatusCode::NOT_FOUND, "{uri}");
+        }
+        // reload: answer the channel with success
+        let app2 = app.clone();
+        let h = tokio::spawn(async move { app2.oneshot(post("/reload".into())).await.unwrap() });
+        let reload = rx.recv().await.unwrap();
+        reload.done.unwrap().send(Ok(())).unwrap();
+        let r = h.await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        // closed channel → 503
+        drop(rx);
+        let r = app.clone().oneshot(post("/reload".into())).await.unwrap();
+        assert_eq!(r.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn redact_scrubs_secrets_and_urls() {
+        let mut v = json!({
+            "password": "x",
+            "api_key": ["a", "b"],
+            "nested": { "secret": "y", "safe": "keep" },
+            "url": "https://user:pass@host/path",
+            "urls": ["http://u:p@h/x"],
+            "plain": "value",
+        });
+        redact(&mut v);
+        assert_eq!(v["password"], "***");
+        assert_eq!(v["api_key"], "***");
+        assert_eq!(v["nested"]["secret"], "***");
+        assert_eq!(v["nested"]["safe"], "keep");
+        assert_eq!(v["url"], "https://***@host");
+        assert_eq!(v["urls"][0], "http://***@h");
+        assert_eq!(v["plain"], "value");
+    }
 }

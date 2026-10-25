@@ -79,8 +79,13 @@ impl Disk {
         let Some(dir) = cfg.disk_path.clone() else {
             return Err("disk tier requires disk_path".into());
         };
-        std::fs::create_dir_all(dir.join("objects"))
+        let objects = dir.join("objects");
+        std::fs::create_dir_all(&objects)
             .map_err(|e| format!("cache dir {}: {e}", dir.display()))?;
+        // cached bodies may carry response data not meant for other
+        // local users — keep the store owner-only
+        crate::fsperm::private_dir(&dir);
+        crate::fsperm::private_dir(&objects);
         let store = Self {
             dir,
             index: DashMap::new(),
@@ -654,5 +659,192 @@ mod tests {
         assert_eq!(n_files, 2, "evicted object file removed");
         // LRU: k1 was the victim
         assert!(d.variants(crate::cache::key::fnv1a("k1")).is_empty());
+    }
+
+    #[tokio::test]
+    async fn open_requires_disk_path() {
+        let mut c = cfg(Path::new("/tmp"), 1 << 20, 100);
+        c.disk_path = None;
+        assert!(Disk::open_sync(&c).is_err());
+    }
+
+    #[tokio::test]
+    async fn rebuild_missing_objects_dir_warns_and_returns() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = Disk::open_sync(&cfg(dir.path(), 1 << 20, 100)).unwrap();
+        std::fs::remove_dir_all(dir.path().join("objects")).unwrap();
+        d.rebuild(); // must not panic — warns and keeps an empty index
+        assert_eq!(d.stats().1, 0);
+    }
+
+    #[tokio::test]
+    async fn load_file_maps_and_serves_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = Disk::open_sync(&cfg(dir.path(), 1 << 20, 100)).unwrap();
+        d.insert(stored("k1", "body-data")).await.unwrap();
+        let hash = crate::cache::key::fnv1a("k1");
+        let s = d.load_file(hash, &|m| m.key == "k1").await.unwrap();
+        assert!(matches!(s.body, StoredBody::Mapped { .. }));
+        // mapped body serves through cache::respond → Bytes view of the map
+        let resp = crate::cache::respond(&s, false);
+        let got = http_body_util::BodyExt::collect(resp.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        assert_eq!(&got[..], b"body-data");
+        // second hit reuses the cached map
+        let s2 = d.load_file(hash, &|m| m.key == "k1").await.unwrap();
+        let resp = crate::cache::respond(&s2, false);
+        let got = http_body_util::BodyExt::collect(resp.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        assert_eq!(&got[..], b"body-data");
+        // unknown hash / non-matching pred → miss
+        assert!(d.load_file(hash, &|m| m.key == "other").await.is_none());
+        assert!(d.load_file(0xdead, &|_| true).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn load_file_torn_or_corrupt_falls_back_and_misses() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = Disk::open_sync(&cfg(dir.path(), 1 << 20, 100)).unwrap();
+        d.insert(stored("k1", "body-data")).await.unwrap();
+        let hash = crate::cache::key::fnv1a("k1");
+        let metas = d.variants(hash);
+        let file = d.object_path(&metas[0]);
+
+        // corrupt the magic: mmap init fails, fd fallback rejects too
+        let mut b = std::fs::read(&file).unwrap();
+        b[0] ^= 0xff;
+        std::fs::write(&file, &b).unwrap();
+        assert!(d.load_file(hash, &|m| m.key == "k1").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn freshen_missing_or_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = Disk::open_sync(&cfg(dir.path(), 1 << 20, 100)).unwrap();
+        // nothing under this hash → Ok(()) no-op
+        d.freshen(42, &|_| true, &|_| {}).await.unwrap();
+
+        d.insert(stored("k1", "aaaa")).await.unwrap();
+        let hash = crate::cache::key::fnv1a("k1");
+        let metas = d.variants(hash);
+        let file = d.object_path(&metas[0]);
+        // corrupt the object → freshen surfaces InvalidData
+        std::fs::write(&file, b"junk").unwrap();
+        assert!(d.freshen(hash, &|m| m.key == "k1", &|_| {}).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn variant_replace_reindexes() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = Disk::open_sync(&cfg(dir.path(), 1 << 20, 100)).unwrap();
+        d.insert(stored("k1", "aaaa")).await.unwrap();
+        d.insert(stored("k1", "bbbb")).await.unwrap(); // same key+vary → replace
+        let hash = crate::cache::key::fnv1a("k1");
+        assert_eq!(d.variants(hash).len(), 1);
+        let s = d.load_for(&d.variants(hash)[0]).await.unwrap();
+        assert_eq!(s.body.as_mem().unwrap(), b"bbbb");
+    }
+
+    #[tokio::test]
+    async fn remove_prefix_and_clear() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = Disk::open_sync(&cfg(dir.path(), 1 << 20, 100)).unwrap();
+        let mut a = meta("k-a");
+        a.path = "/keep/x".into();
+        let mut b = meta("k-b");
+        b.path = "/drop/y".into();
+        let mut c = meta("k-c");
+        c.path = "/drop/z".into();
+        for (m, body) in [(a, "1"), (b, "2"), (c, "3")] {
+            let mut m = m;
+            m.body_len = body.len() as u64;
+            d.insert(Arc::new(Stored {
+                meta: m,
+                body: StoredBody::Mem(Bytes::from(body)),
+            }))
+            .await
+            .unwrap();
+        }
+        assert_eq!(d.remove_prefix("/drop/").await, 2);
+        assert_eq!(d.stats().1, 1);
+
+        d.clear().await;
+        assert_eq!(d.stats(), (0, 0));
+        assert!(
+            std::fs::read_dir(dir.path().join("objects"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn variants_of_one_key_keep_bucket_on_partial_purge() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = Disk::open_sync(&cfg(dir.path(), 1 << 20, 100)).unwrap();
+        let mut m2 = meta("k1");
+        m2.vary = vec![("accept".into(), Some("a".into()))];
+        m2.body_len = 4;
+        d.insert(stored("k1", "aaaa")).await.unwrap();
+        d.insert(Arc::new(Stored {
+            meta: m2,
+            body: StoredBody::Mem(Bytes::from_static(b"bbbb")),
+        }))
+        .await
+        .unwrap();
+        let hash = crate::cache::key::fnv1a("k1");
+        assert_eq!(d.variants(hash).len(), 2);
+        // exact-key purge removes both variants (they share the key)
+        assert!(d.remove_key("k1").await);
+        assert_eq!(d.stats().1, 0);
+    }
+
+    #[tokio::test]
+    async fn write_object_rejects_non_memory_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = tempfile::tempfile().unwrap();
+        let s = Stored {
+            meta: meta("k1"),
+            body: StoredBody::File {
+                file: Arc::new(f),
+                off: 0,
+                len: 4,
+            },
+        };
+        assert!(write_object(&dir.path().join("o"), &s).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn parse_and_head_errors() {
+        // bad magic / truncated meta
+        assert!(parse_object(b"short").is_err());
+        assert!(parse_object(b"notmagic!!1234junkjunk").is_err());
+        let mut good = Vec::new();
+        good.extend_from_slice(MAGIC);
+        good.extend_from_slice(&10u32.to_be_bytes());
+        good.extend_from_slice(b"{}");
+        assert!(parse_object(&good).is_err()); // truncated meta
+        // valid magic + absurd meta length
+        let mut absurd = Vec::new();
+        absurd.extend_from_slice(MAGIC);
+        absurd.extend_from_slice(&(u32::MAX).to_be_bytes());
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("o");
+        std::fs::write(&p, &absurd).unwrap();
+        assert!(read_object_head(&p).is_err());
+        // valid meta length but garbage json
+        let mut bad = Vec::new();
+        bad.extend_from_slice(MAGIC);
+        bad.extend_from_slice(&4u32.to_be_bytes());
+        bad.extend_from_slice(b"junk");
+        std::fs::write(&p, &bad).unwrap();
+        assert!(read_object_head(&p).is_err());
+        // nonexistent path
+        assert!(read_object_head(&dir.path().join("ghost")).is_err());
+        assert!(read_object(&p).await.is_err());
     }
 }

@@ -150,3 +150,115 @@ impl Drop for AccessLogBody {
         self.finalize(status);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http_body_util::BodyExt;
+
+    fn ctx() -> crate::server::service::ConnCtx {
+        crate::server::service::ConnCtx {
+            remote: "127.0.0.1:4444".parse().unwrap(),
+            tls: false,
+            request_counter: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            tls_version: None,
+            first_request_done: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            read_gate: crate::server::timeout::DeadlineGate {
+                active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(1)),
+                off: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                armed: std::sync::Arc::new(std::sync::Mutex::new(None)),
+                read_waker: std::sync::Arc::new(std::sync::Mutex::new(None)),
+                send_armed: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            },
+            conn_guard: crate::server::ConnGuard::for_test("127.0.0.1".parse().unwrap()),
+        }
+    }
+
+    fn gate() -> crate::server::timeout::DeadlineGate {
+        crate::server::timeout::DeadlineGate {
+            active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(1)),
+            off: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            armed: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            read_waker: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            send_armed: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    fn rec(c: &crate::server::service::ConnCtx) -> LogRecord {
+        let parts = http::Request::builder()
+            .uri("/x")
+            .body(crate::body::empty())
+            .unwrap()
+            .into_parts()
+            .0;
+        LogRecord::new(
+            c,
+            &parts,
+            &crate::observe::RequestId::extract(&parts.headers),
+        )
+    }
+
+    fn rt() -> Arc<crate::server::Runtime> {
+        let cfg = crate::config::validate::parse_test_config("");
+        crate::server::Runtime::build(Arc::new(cfg)).unwrap()
+    }
+
+    #[tokio::test]
+    async fn completed_body_finalizes_and_rearms() {
+        let g = gate();
+        let mut resp = http::Response::new(crate::body::full("hello"));
+        wrap(
+            &mut resp,
+            rec(&ctx()),
+            rt(),
+            Instant::now(),
+            false,
+            g.clone(),
+        );
+        let got = resp.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(&got[..], b"hello");
+        assert_eq!(g.active.load(Ordering::Relaxed), 0, "gate released at end");
+    }
+
+    #[tokio::test]
+    async fn graceful_head_and_upgrade_drops() {
+        for (head, status) in [
+            (true, http::StatusCode::OK),
+            (false, http::StatusCode::SWITCHING_PROTOCOLS),
+        ] {
+            let g = gate();
+            let mut resp = http::Response::new(crate::body::full("x"));
+            *resp.status_mut() = status;
+            wrap(
+                &mut resp,
+                rec(&ctx()),
+                rt(),
+                Instant::now(),
+                head,
+                g.clone(),
+            );
+            // drop without polling — graceful for HEAD/101
+            drop(resp);
+            assert_eq!(g.active.load(Ordering::Relaxed), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn mid_body_drop_is_499() {
+        let g = gate();
+        let inner = crate::body::boxed(http_body_util::StreamBody::new(
+            futures_util::stream::pending::<Result<http_body::Frame<Bytes>, BoxError>>(),
+        ));
+        let mut resp = http::Response::new(inner);
+        wrap(
+            &mut resp,
+            rec(&ctx()),
+            rt(),
+            Instant::now(),
+            false,
+            g.clone(),
+        );
+        drop(resp); // aborted mid-stream → finalize(499)
+        assert_eq!(g.active.load(Ordering::Relaxed), 0);
+    }
+}

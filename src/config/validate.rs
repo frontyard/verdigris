@@ -392,13 +392,27 @@ fn check_route(
         }
     }
 
-    if let Some(resp) = &route.respond
-        && !(100..=599).contains(&resp.status)
-    {
-        ctx.error(
-            path.clone(),
-            format!("respond status {} is not a valid HTTP status", resp.status),
-        );
+    if let Some(resp) = &route.respond {
+        if !(100..=599).contains(&resp.status) {
+            ctx.error(
+                path.clone(),
+                format!("respond status {} is not a valid HTTP status", resp.status),
+            );
+        }
+        // reflected-request placeholders + text/html = XSS by config
+        let htmlish = resp.headers.iter().any(|(k, v)| {
+            k.eq_ignore_ascii_case("content-type") && v.to_ascii_lowercase().contains("text/html")
+        });
+        if htmlish
+            && ["{path}", "{host}", "{method}"]
+                .iter()
+                .any(|p| resp.body.contains(p))
+        {
+            ctx.warn(
+                format!("{path}.respond"),
+                "respond body substitutes request data under a text/html content-type — reflected content without escaping; use text/plain",
+            );
+        }
     }
 
     if let Some(auth) = &route.auth {
@@ -419,6 +433,17 @@ fn check_route(
                 "unknown cache store {:?}; define [cache.{}]",
                 cache.store, cache.store
             ),
+        );
+    }
+    if route.cache.is_some()
+        && let Some(key) = route.auth.as_ref().and_then(|a| a.api_key.as_ref())
+        && key.location == ApiKeyLocation::Query
+    {
+        // the cache layer strips the param from keys (see
+        // key::strip_query_param) — this warns it ever existed
+        ctx.warn(
+            format!("{path}.auth.api_key"),
+            "query-parameter api keys on a cached route put credentials in URLs; the param is stripped from cache keys, but header-based keys are safer",
         );
     }
     if let Some(comp) = &route.compress {
@@ -654,6 +679,12 @@ fn check_upstreams(ctx: &mut Ctx, cfg: &Config) {
         for url in &up.servers {
             check_upstream_url(ctx, &path, url);
         }
+        if !up.tls.verify && up.servers.iter().any(|u| u.starts_with("https://")) {
+            ctx.warn(
+                format!("{path}.tls.verify"),
+                "tls.verify = false disables upstream certificate verification — traffic to this upstream is MITM-able; prefer a custom ca or sni override",
+            );
+        }
         if let Some(active) = &up.health.active
             && !(100..=599).contains(&active.expect)
         {
@@ -771,6 +802,12 @@ fn check_admin(ctx: &mut Ctx, cfg: &Config) {
             }
         }
     }
+    if a.listen.ip().is_loopback() && a.token.is_none() {
+        ctx.warn(
+            "admin.token",
+            "admin listener has no token — requests are restricted to loopback Host headers, but any local process can still manage the server; set admin.token",
+        );
+    }
 }
 
 fn check_acme(ctx: &mut Ctx, cfg: &Config) {
@@ -812,8 +849,20 @@ fn check_timeouts_limits(ctx: &mut Ctx, cfg: &Config) {
     if cfg.limits.header_bytes.0 == 0 {
         ctx.error("limits.header_bytes", "must be > 0");
     }
+    if cfg.limits.header_bytes.0 > 1024 * 1024 {
+        ctx.warn(
+            "limits.header_bytes",
+            "header_bytes above 1 MiB scales the per-connection h1 read buffer — combined with a high connection count this is a memory multiplier",
+        );
+    }
     if cfg.limits.body_bytes.0 == 0 {
         ctx.error("limits.body_bytes", "must be > 0");
+    }
+    if t.send.is_zero() {
+        ctx.warn(
+            "timeouts.send",
+            "0s disables the send inactivity timeout — clients that stop reading can pin connections indefinitely",
+        );
     }
     if !(0.0..=1.0).contains(&cfg.log.access.sample) {
         ctx.error("log.access.sample", "must be within 0.0–1.0");
@@ -1019,5 +1068,750 @@ redirect = { scheme = "https", status = 303 }
                 .iter()
                 .any(|d| d.message.contains("301, 302, 307, or 308"))
         );
+    }
+
+    fn warnings(cfg: &Config) -> Vec<Diagnostic> {
+        validate(cfg)
+            .into_iter()
+            .filter(|d| d.severity == Severity::Warning)
+            .collect()
+    }
+
+    fn has_err(cfg: &Config, path: &str, needle: &str) -> bool {
+        errors(cfg)
+            .iter()
+            .any(|d| d.path == path && d.message.contains(needle))
+    }
+
+    fn has_warn(cfg: &Config, path: &str, needle: &str) -> bool {
+        warnings(cfg)
+            .iter()
+            .any(|d| d.path == path && d.message.contains(needle))
+    }
+
+    #[test]
+    fn diagnostic_display_renders() {
+        let d = Diagnostic {
+            severity: Severity::Error,
+            path: "site[0]".into(),
+            message: "boom".into(),
+        };
+        assert_eq!(d.to_string(), "error: site[0]: boom");
+        let w = Diagnostic {
+            severity: Severity::Warning,
+            path: "x".into(),
+            message: "y".into(),
+        };
+        assert!(w.to_string().starts_with("warning:"));
+    }
+
+    #[test]
+    fn listener_checks() {
+        let cfg = parse_test_config("[server]\nlisten = []");
+        assert!(has_err(&cfg, "server", "at least one listener"));
+
+        let cfg = parse_test_config(
+            r#"
+[server]
+listen = [{ addr = "127.0.0.1:8080" }, { addr = "127.0.0.1:8080" }]
+max_connections = 10
+max_connections_per_ip = 100
+"#,
+        );
+        assert!(has_err(
+            &cfg,
+            "server.listen[1]",
+            "duplicate listen address"
+        ));
+        assert!(has_warn(
+            &cfg,
+            "server.max_connections_per_ip",
+            "per-IP limit exceeds"
+        ));
+    }
+
+    #[test]
+    fn tls_listener_site_mismatch_warnings() {
+        // TLS site but no TLS listener
+        let cfg = parse_test_config(
+            r#"
+[server]
+listen = [{ addr = "127.0.0.1:8080" }]
+[acme]
+email = "a@b.c"
+[[site]]
+hosts = ["x"]
+tls = "auto"
+root = "/tmp"
+"#,
+        );
+        assert!(has_warn(
+            &cfg,
+            "server.listen",
+            "no listener has tls = true"
+        ));
+
+        // TLS listener but every site is plaintext
+        let cfg = parse_test_config(
+            r#"
+[server]
+listen = [{ addr = "127.0.0.1:8080", tls = true }]
+[[site]]
+hosts = ["x"]
+tls = "off"
+root = "/tmp"
+"#,
+        );
+        assert!(has_warn(&cfg, "server.listen", "all handshakes will fail"));
+    }
+
+    #[test]
+    fn host_rules() {
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+root = "/tmp"
+"#,
+        );
+        assert!(has_err(&cfg, "site[0].hosts", "no hosts"));
+
+        for bad in ["*.", "*.*.x.com"] {
+            let cfg = parse_test_config(&format!("[[site]]\nhosts = [{bad:?}]\nroot = \"/tmp\""));
+            assert!(has_err(&cfg, "site[0].hosts", "invalid wildcard"), "{bad}");
+        }
+
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["*.x.com"]
+root = "/tmp"
+[[site]]
+hosts = ["*.X.com"]
+root = "/tmp"
+"#,
+        );
+        assert!(has_err(&cfg, "site[1].hosts", "duplicate wildcard"));
+
+        let cfg = parse_test_config("[[site]]\nhosts = [\"*\"]\nroot = \"/tmp\"");
+        assert!(has_err(&cfg, "site[0].hosts", "needs `default = true`"));
+
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["*"]
+default = true
+root = "/tmp"
+[[site]]
+hosts = ["x"]
+default = true
+root = "/tmp"
+"#,
+        );
+        assert!(has_err(
+            &cfg,
+            "site",
+            "more than one site is marked default"
+        ));
+    }
+
+    #[test]
+    fn manual_tls_missing_files_warn() {
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+tls = { cert = "/definitely/missing.crt", key = "/definitely/missing.key" }
+root = "/tmp"
+"#,
+        );
+        assert!(has_warn(&cfg, "site[0].tls.cert", "does not exist"));
+        assert!(has_warn(&cfg, "site[0].tls.key", "does not exist"));
+    }
+
+    #[test]
+    fn site_shorthands_and_redirect_https() {
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+root = "/tmp"
+proxy = ["http://127.0.0.1:1"]
+"#,
+        );
+        assert!(has_err(&cfg, "site[0]", "mutually exclusive"));
+
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+tls = "off"
+redirect_https = true
+root = "/tmp"
+"#,
+        );
+        assert!(has_warn(&cfg, "site[0]", "redirect_https"));
+    }
+
+    #[test]
+    fn acme_http01_needs_plaintext_listener() {
+        let cfg = parse_test_config(
+            r#"
+[server]
+listen = [{ addr = "127.0.0.1:8443", tls = true }]
+[acme]
+email = "a@b.c"
+challenge = "http-01"
+[[site]]
+hosts = ["x"]
+tls = "auto"
+root = "/tmp"
+"#,
+        );
+        assert!(has_warn(&cfg, "acme.challenge", "cannot reach port 80"));
+    }
+
+    #[test]
+    fn empty_trusted_proxies_warns() {
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+trusted_proxies = []
+root = "/tmp"
+"#,
+        );
+        assert!(has_warn(&cfg, "site[0].trusted_proxies", "disables"));
+    }
+
+    #[test]
+    fn matcher_sanity() {
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+exact = "noslash"
+respond = { status = 200 }
+[[site.route]]
+regex = "(["
+respond = { status = 200 }
+[[site.route]]
+path = "/m"
+match = { methods = ["B A D"], headers = { "X-A" = "re:([" }, query = { q = "re:)(" } }
+respond = { status = 200 }
+"#,
+        );
+        assert!(has_err(&cfg, "site[0].route[0]", "must start with '/'"));
+        assert!(has_err(&cfg, "site[0].route[1]", "invalid route regex"));
+        assert!(has_err(&cfg, "site[0].route[2]", "invalid HTTP method"));
+        assert!(has_err(
+            &cfg,
+            "site[0].route[2].headers.X-A",
+            "invalid regex"
+        ));
+        assert!(has_err(&cfg, "site[0].route[2].query.q", "invalid regex"));
+    }
+
+    #[test]
+    fn handler_count_and_static_warnings() {
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+path = "/none"
+[[site.route]]
+path = "/two"
+respond = { status = 200 }
+redirect = { scheme = "https" }
+"#,
+        );
+        assert!(has_err(
+            &cfg,
+            "site[0].route[0]",
+            "exactly one handler, found 0"
+        ));
+        assert!(has_err(
+            &cfg,
+            "site[0].route[1]",
+            "exactly one handler, found 2"
+        ));
+
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+path = "/s"
+static = { root = "/definitely/missing-dir", index = [] }
+"#,
+        );
+        assert!(has_warn(
+            &cfg,
+            "site[0].route[0].static.root",
+            "does not exist"
+        ));
+        assert!(has_warn(
+            &cfg,
+            "site[0].route[0].static",
+            "directory requests"
+        ));
+    }
+
+    #[test]
+    fn redirect_and_respond_rules() {
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+path = "/a"
+redirect = { to = "https://x/{path}", scheme = "https" }
+[[site.route]]
+path = "/b"
+redirect = { scheme = "gopher" }
+[[site.route]]
+path = "/c"
+respond = { status = 99 }
+[[site.route]]
+path = "/d"
+respond = { status = 200, body = "you asked for {path}", headers = { "content-type" = "text/html" } }
+[[site.route]]
+path = "/e"
+redirect = { to = "https://x" }
+headers = { set = { "x-a" = "1" } }
+"#,
+        );
+        assert!(has_err(
+            &cfg,
+            "site[0].route[0]",
+            "exactly one of to/host/scheme"
+        ));
+        assert!(has_err(&cfg, "site[0].route[1]", "must be http or https"));
+        assert!(has_err(&cfg, "site[0].route[2]", "not a valid HTTP status"));
+        assert!(has_warn(&cfg, "site[0].route[3].respond", "text/plain"));
+        assert!(errors(&cfg).iter().all(|d| !d.path.contains("route[4]")));
+    }
+
+    #[test]
+    fn auth_rules() {
+        // zero and two methods
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+path = "/a"
+respond = { status = 200 }
+auth = {}
+[[site.route]]
+path = "/b"
+respond = { status = 200 }
+auth = { basic = { users = { u = "$argon2id$x" } }, bearer = { tokens = ["t"] } }
+[[site.route]]
+path = "/c"
+respond = { status = 200 }
+auth = { basic = { users = { u = "$argon2id$x" }, htpasswd = "/tmp/x.htpasswd" } }
+[[site.route]]
+path = "/d"
+respond = { status = 200 }
+auth = { basic = {} }
+"#,
+        );
+        assert!(has_err(&cfg, "site[0].route[0].auth", "found 0"));
+        assert!(has_err(&cfg, "site[0].route[1].auth", "found 2"));
+        assert!(has_err(&cfg, "site[0].route[2].auth.basic", "not both"));
+        assert!(has_err(
+            &cfg,
+            "site[0].route[3].auth.basic",
+            "set users or htpasswd"
+        ));
+    }
+
+    #[test]
+    fn htpasswd_file_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("good.htpasswd");
+        let bad = dir.path().join("bad.htpasswd");
+        std::fs::write(&good, "u:$2y$10$abcdefghijklmnopqrstuv\n\nv:$2b$10$w\n").unwrap();
+        std::fs::write(&bad, "u:notahash\n").unwrap();
+
+        let cfg = parse_test_config(&format!(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+path = "/g"
+respond = {{ status = 200 }}
+auth = {{ basic = {{ htpasswd = {:?} }} }}
+[[site.route]]
+path = "/b"
+respond = {{ status = 200 }}
+auth = {{ basic = {{ htpasswd = {:?} }} }}
+[[site.route]]
+path = "/m"
+respond = {{ status = 200 }}
+auth = {{ basic = {{ htpasswd = "{}" }} }}
+"#,
+            good.display(),
+            bad.display(),
+            dir.path().join("missing.htpasswd").display()
+        ));
+        let errs = errors(&cfg);
+        assert!(
+            errs.iter()
+                .any(|d| d.path.contains("htpasswd") && d.message.contains("expected user:$2y$")),
+            "{errs:?}"
+        );
+        assert!(
+            warnings(&cfg)
+                .iter()
+                .any(|d| d.message.contains("cannot read")),
+            "{:?}",
+            validate(&cfg)
+        );
+        // good file produces no htpasswd diagnostics at route[0]
+        assert!(validate(&cfg).iter().all(|d| !d.path.contains("route[0]")));
+    }
+
+    #[test]
+    fn bearer_and_api_key_rules() {
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+path = "/a"
+respond = { status = 200 }
+auth = { bearer = {} }
+[[site.route]]
+path = "/b"
+respond = { status = 200 }
+auth = { api_key = { location = "header", name = "", keys = [] } }
+"#,
+        );
+        assert!(has_err(
+            &cfg,
+            "site[0].route[0].auth.bearer",
+            "tokens list is empty"
+        ));
+        assert!(has_err(
+            &cfg,
+            "site[0].route[1].auth.api_key",
+            "name must not be empty"
+        ));
+        assert!(has_err(
+            &cfg,
+            "site[0].route[1].auth.api_key",
+            "keys list is empty"
+        ));
+    }
+
+    #[test]
+    fn rate_limit_rules() {
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+path = "/a"
+respond = { status = 200 }
+rate_limit = { key = "bogus", rate = "100/s" }
+[[site.route]]
+path = "/b"
+respond = { status = 200 }
+rate_limit = { key = "ip", rate = "0/s" }
+"#,
+        );
+        assert!(has_err(
+            &cfg,
+            "site[0].route[0].rate_limit.key",
+            "invalid key"
+        ));
+        assert!(has_err(
+            &cfg,
+            "site[0].route[1].rate_limit.rate",
+            "greater than zero"
+        ));
+    }
+
+    #[test]
+    fn cors_rules() {
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+path = "/a"
+respond = { status = 200 }
+cors = {}
+[[site.route]]
+path = "/b"
+respond = { status = 200 }
+cors = { origins = ["re:(broken"] }
+[[site.route]]
+path = "/c"
+respond = { status = 200 }
+cors = { origins = ["*"], credentials = true }
+"#,
+        );
+        assert!(has_warn(&cfg, "site[0].route[0].cors", "origins is empty"));
+        assert!(has_err(
+            &cfg,
+            "site[0].route[1].cors.origins",
+            "invalid regex"
+        ));
+        assert!(has_warn(
+            &cfg,
+            "site[0].route[2].cors",
+            "credentials with wildcard"
+        ));
+    }
+
+    #[test]
+    fn upstream_rules() {
+        let cfg = parse_test_config(
+            r#"
+[upstream.empty]
+servers = []
+[upstream.badurl]
+servers = ["ftp://x", "http://"]
+[upstream.noVerify]
+servers = ["https://secure.internal"]
+tls.verify = false
+[upstream.health]
+servers = ["http://x"]
+health = { active = { path = "/h", interval = "10s", timeout = "3s", expect = 99 }, passive = { failures = 0, cooldown = "5s" } }
+unavailable = { status = 42 }
+"#,
+        );
+        assert!(has_err(&cfg, "upstream.empty", "no servers"));
+        assert!(has_err(&cfg, "upstream.badurl", "must have scheme http"));
+        assert!(has_err(&cfg, "upstream.badurl", "has no host"));
+        assert!(has_warn(&cfg, "upstream.noVerify.tls.verify", "MITM"));
+        assert!(has_err(
+            &cfg,
+            "upstream.health.health.active.expect",
+            "100–599"
+        ));
+        assert!(has_err(
+            &cfg,
+            "upstream.health.unavailable.status",
+            "100–599"
+        ));
+        assert!(has_warn(
+            &cfg,
+            "upstream.health.health.passive.failures",
+            "single failure"
+        ));
+    }
+
+    #[test]
+    fn proxy_rewrite_and_retry_rules() {
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+path = "/a"
+proxy = { upstream = ["http://u"] }
+[[site.route]]
+path = "/b"
+proxy = { upstream = [], rewrite = { strip_prefix = "/a", regex = { pattern = "x", replace = "y" } } }
+[[site.route]]
+path = "/c"
+proxy = { upstream = ["http://u"], rewrite = { regex = { pattern = "(", replace = "y" } } }
+[[site.route]]
+path = "/d"
+proxy = { upstream = ["http://u"], rewrite = { strip_prefix = "noslash" } }
+[[site.route]]
+path = "/e"
+proxy = { upstream = ["http://u"], retries = { budget_fraction = 1.5 } }
+"#,
+        );
+        assert!(has_err(
+            &cfg,
+            "site[0].route[1].proxy.upstream",
+            "URL list is empty"
+        ));
+        assert!(has_err(
+            &cfg,
+            "site[0].route[1].proxy.rewrite",
+            "exactly one of"
+        ));
+        assert!(has_err(
+            &cfg,
+            "site[0].route[2].proxy.rewrite.regex",
+            "invalid regex"
+        ));
+        assert!(has_err(
+            &cfg,
+            "site[0].route[3].proxy.rewrite.strip_prefix",
+            "must start with '/'"
+        ));
+        assert!(has_err(
+            &cfg,
+            "site[0].route[4].retries.budget_fraction",
+            "between 0 and 1"
+        ));
+        assert!(has_err(&cfg, "site[0].route[4].proxy.retries", "in [0, 1]"));
+        // inline URL list is checked per-url
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+path = "/f"
+proxy = { upstream = ["bogus"] }
+"#,
+        );
+        assert!(has_err(&cfg, "site[0].route[0].proxy.upstream", "scheme"));
+    }
+
+    #[test]
+    fn cache_store_rules() {
+        let cfg = parse_test_config(
+            r#"
+[cache.unusedpath]
+tier = "ram"
+disk_path = "/tmp/x"
+[cache.zeroram]
+tier = "ram"
+ram_bytes = "0B"
+[cache.zerodisk]
+tier = "disk"
+disk_path = "/tmp/x"
+disk_bytes = "0B"
+[cache.noram]
+tier = "hybrid"
+disk_path = "/tmp/x"
+ram_bytes = "0B"
+[cache.noobj]
+tier = "ram"
+max_object_bytes = "0B"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+path = "/a"
+respond = { status = 200 }
+cache = { store = "missing" }
+[[site.route]]
+path = "/b"
+respond = { status = 200 }
+cache = { store = "unusedpath" }
+auth = { api_key = { location = "query", name = "k", keys = ["x"] } }
+"#,
+        );
+        assert!(has_warn(&cfg, "cache.unusedpath", "unused"));
+        assert!(has_err(&cfg, "cache.zeroram", "ram_bytes must be > 0"));
+        assert!(has_err(&cfg, "cache.zerodisk", "disk_bytes must be > 0"));
+        assert!(has_err(&cfg, "cache.noram", "ram_bytes must be > 0"));
+        assert!(has_err(&cfg, "cache.noobj", "max_object_bytes"));
+        assert!(has_err(
+            &cfg,
+            "site[0].route[0].cache.store",
+            "unknown cache store"
+        ));
+        assert!(has_warn(
+            &cfg,
+            "site[0].route[1].auth.api_key",
+            "credentials in URLs"
+        ));
+    }
+
+    #[test]
+    fn compress_algorithm_checked() {
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+path = "/a"
+respond = { status = 200 }
+compress = { algorithms = ["br", "deflate"] }
+"#,
+        );
+        assert!(has_err(
+            &cfg,
+            "site[0].route[0].compress.algorithms",
+            "unknown algorithm"
+        ));
+    }
+
+    #[test]
+    fn admin_warnings() {
+        // loopback without token → warning (CSRF mitigations apply, but a
+        // local process can still manage the server)
+        let cfg = parse_test_config("[admin]\nlisten = \"127.0.0.1:2019\"");
+        assert!(has_warn(&cfg, "admin.token", "no token"));
+
+        // loopback with token → no admin diagnostics
+        let cfg = parse_test_config("[admin]\nlisten = \"127.0.0.1:2019\"\ntoken = \"t\"");
+        assert!(validate(&cfg).iter().all(|d| !d.path.starts_with("admin")));
+
+        // non-loopback with token but no TLS → cleartext warning
+        let cfg = parse_test_config(
+            "[admin]\nlisten = \"0.0.0.0:2019\"\ntoken = \"t\"\ntls = { cert = \"/x.crt\", key = \"/x.key\" }",
+        );
+        assert!(has_warn(&cfg, "admin.tls.cert", "does not exist"));
+        assert!(has_warn(&cfg, "admin.tls.key", "does not exist"));
+        assert!(!has_warn(&cfg, "admin.tls", "cleartext"));
+
+        let cfg = parse_test_config("[admin]\nlisten = \"0.0.0.0:2019\"\ntoken = \"t\"");
+        assert!(has_warn(&cfg, "admin.tls", "cleartext"));
+    }
+
+    #[test]
+    fn acme_rules() {
+        let cfg = parse_test_config("[acme]\neab = { key_id = \"k\", key = \"\" }");
+        assert!(has_err(&cfg, "acme.eab", "both key_id and key"));
+
+        let cfg = parse_test_config(
+            r#"
+[acme.eab]
+key_id = "k"
+key = "v"
+[acme.on_demand]
+enabled = true
+allowed_hosts = ["*.ok.com"]
+"#,
+        );
+        assert!(has_warn(&cfg, "acme.on_demand.rate", "no rate limit"));
+    }
+
+    #[test]
+    fn timeout_and_limit_rules() {
+        let cfg = parse_test_config(
+            r#"
+[timeouts]
+header_read = "0s"
+tls_handshake = "0s"
+send = "0s"
+[limits]
+header_bytes = "0B"
+body_bytes = "0B"
+[log.access]
+sample = 1.5
+"#,
+        );
+        assert!(has_warn(&cfg, "timeouts.header_read", "slowloris"));
+        assert!(has_warn(&cfg, "timeouts.tls_handshake", "handshake"));
+        assert!(has_warn(&cfg, "timeouts.send", "send inactivity"));
+        assert!(has_err(&cfg, "limits.header_bytes", "> 0"));
+        assert!(has_err(&cfg, "limits.body_bytes", "> 0"));
+        assert!(has_err(&cfg, "log.access.sample", "0.0–1.0"));
+
+        let cfg = parse_test_config("[limits]\nheader_bytes = \"2MiB\"");
+        assert!(has_warn(&cfg, "limits.header_bytes", "memory multiplier"));
+    }
+
+    #[test]
+    fn unusual_log_level_warns() {
+        let cfg = parse_test_config("[log]\nlevel = \"banana\"");
+        assert!(has_warn(&cfg, "log.level", "unusual log level"));
+        let cfg = parse_test_config("[log]\nlevel = \"verd=debug,hyper=info\"");
+        assert!(!has_warn(&cfg, "log.level", "unusual"));
+        let cfg = parse_test_config("[log]\nlevel = \"debug\"");
+        assert!(!has_warn(&cfg, "log.level", "unusual"));
     }
 }

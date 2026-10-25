@@ -62,7 +62,8 @@ pub fn take_retry(cluster: &Arc<Cluster>, budget_fraction: f64) -> Option<RetryG
 }
 
 /// Whether the method is idempotent (RFC 9110 §9.2.2) — only those may be
-/// retried on connection failure.
+/// retried on connection failure. TRACE is technically safe but excluded:
+/// retrying an echo diagnostic just re-discloses the request headers.
 pub fn idempotent(method: &http::Method) -> bool {
     matches!(
         *method,
@@ -71,7 +72,6 @@ pub fn idempotent(method: &http::Method) -> bool {
             | http::Method::PUT
             | http::Method::DELETE
             | http::Method::OPTIONS
-            | http::Method::TRACE
     )
 }
 

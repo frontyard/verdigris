@@ -39,3 +39,21 @@ name = "cache_index"
 path = "fuzz_targets/cache_index.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "http_semantics"
+path = "fuzz_targets/http_semantics.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "headers_policy"
+path = "fuzz_targets/headers_policy.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "static_resolve"
+path = "fuzz_targets/static_resolve.rs"
+test = false
+doc = false

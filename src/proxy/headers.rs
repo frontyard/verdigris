@@ -75,6 +75,65 @@ pub fn preserve_te_trailers(outbound: &mut HeaderMap, inbound: &HeaderMap, h2: b
     }
 }
 
+/// Concatenate all values of a comma-list header (`X-Forwarded-For`,
+/// `Forwarded`) — a proxy chain may send several headers, and only
+/// reading the first silently drops hops.
+fn joined(headers: &HeaderMap, name: &HeaderName) -> Option<String> {
+    let mut it = headers.get_all(name).iter().filter_map(|v| v.to_str().ok());
+    let first = it.next()?;
+    Some(it.fold(first.to_string(), |a, v| format!("{a}, {v}")))
+}
+
+/// Whether `host` is safe to forward verbatim in a list-ish header:
+/// printable ASCII, no field separators or quoting chars.
+fn host_clean(host: &str) -> bool {
+    !host.is_empty()
+        && host
+            .chars()
+            .all(|c| c.is_ascii_graphic() && !matches!(c, ',' | ';' | '"'))
+}
+
+/// RFC 7239 `host=` value: bare when the host is a clean token (the `:`
+/// keeps `host:port` readable), otherwise a quoted-string with `"` and
+/// `\` escaped — a client-controlled Host can otherwise smuggle extra
+/// forwarded-pairs (`host=evil";for="spoof`).
+fn rfc7239_value(host: &str) -> String {
+    fn token_char(c: char) -> bool {
+        c.is_ascii_alphanumeric()
+            || matches!(
+                c,
+                '!' | '#'
+                    | '$'
+                    | '%'
+                    | '&'
+                    | '\''
+                    | '*'
+                    | '+'
+                    | '-'
+                    | '.'
+                    | '^'
+                    | '_'
+                    | '`'
+                    | '|'
+                    | '~'
+                    | ':'
+            )
+    }
+    if host_clean(host) && host.chars().all(token_char) {
+        host.to_string()
+    } else {
+        let escaped: String = host
+            .chars()
+            .flat_map(|c| match c {
+                '"' | '\\' => vec!['\\', c],
+                c if c.is_ascii_graphic() || c == ' ' => vec![c],
+                _ => vec![],
+            })
+            .collect();
+        format!("\"{escaped}\"")
+    }
+}
+
 /// Set the `Forwarded` and `X-Forwarded-*` fields. Incoming values are only
 /// honoured when the direct peer is a trusted proxy — otherwise the client
 /// could spoof its apparent address.
@@ -89,9 +148,7 @@ pub fn set_forwarded(
     // X-Forwarded-For: append the direct peer when the chain is trusted,
     // replace entirely when it is not.
     let xff = if peer_trusted {
-        headers
-            .get(&XFF)
-            .and_then(|v| v.to_str().ok())
+        joined(headers, &XFF)
             .map(|v| format!("{v}, {peer_ip}"))
             .unwrap_or_else(|| peer_ip.to_string())
     } else {
@@ -100,26 +157,39 @@ pub fn set_forwarded(
     if let Ok(v) = HeaderValue::from_str(&xff) {
         headers.insert(XFF, v);
     }
-    if let Ok(v) = HeaderValue::from_str(scheme) {
+    // trusted peers' X-Forwarded-Proto/-Host describe the client-facing
+    // side (e.g. a TLS terminator's `https`) — keep them; untrusted or
+    // absent values get our own observation
+    if !(peer_trusted && headers.contains_key(&XFP))
+        && let Ok(v) = HeaderValue::from_str(scheme)
+    {
         headers.insert(XFP, v);
     }
-    if let Ok(v) = HeaderValue::from_str(host) {
+    // XFH: trusted peers' value is preserved; otherwise we emit our own
+    // — and when our host isn't clean we must still REMOVE the client's
+    // spoofed inbound value rather than let it pass through verbatim
+    if peer_trusted && headers.contains_key(&XFH) {
+        // preserved
+    } else if host_clean(host)
+        && let Ok(v) = HeaderValue::from_str(host)
+    {
         headers.insert(XFH, v);
+    } else {
+        headers.remove(&XFH);
     }
     if let Ok(v) = HeaderValue::from_str(&client_ip.to_string()) {
         headers.insert(XRI, v);
     }
 
-    // RFC 7239 Forwarded: for=peer;proto=scheme;host=host (IPv6 quoted).
+    // RFC 7239 Forwarded: for=peer;proto=scheme;host=host (IPv6 quoted,
+    // host quoted when it isn't a bare token).
     let for_part = match peer_ip {
         IpAddr::V4(ip) => ip.to_string(),
         IpAddr::V6(ip) => format!("\"[{ip}]\""),
     };
-    let entry = format!("for={for_part};proto={scheme};host={host}");
+    let entry = format!("for={for_part};proto={scheme};host={}", rfc7239_value(host));
     let fwd = if peer_trusted {
-        headers
-            .get(FORWARDED)
-            .and_then(|v| v.to_str().ok())
+        joined(headers, &FORWARDED)
             .map(|v| format!("{v}, {entry}"))
             .unwrap_or(entry)
     } else {
@@ -255,6 +325,89 @@ mod tests {
             h.get(FORWARDED).unwrap(),
             "for=198.51.100.9, for=10.0.0.1;proto=http;host=x.test"
         );
+    }
+
+    #[test]
+    fn host_injection_quoted_and_xfh_dropped() {
+        let mut h = map(&[]);
+        set_forwarded(
+            &mut h,
+            "203.0.113.5".parse().unwrap(),
+            false,
+            "203.0.113.5".parse().unwrap(),
+            "http",
+            "evil.com\";for=\"spoof",
+        );
+        // the host must be a quoted-string — injected pairs stay literal
+        assert_eq!(
+            h.get(FORWARDED).unwrap(),
+            "for=203.0.113.5;proto=http;host=\"evil.com\\\";for=\\\"spoof\""
+        );
+        assert!(h.get(&XFH).is_none(), "dirty host not forwarded as XFH");
+    }
+
+    #[test]
+    fn untrusted_dirty_host_drops_inbound_xfh() {
+        // the spoofed client XFH must not survive when our own host is
+        // unfit to forward
+        let mut h = map(&[("x-forwarded-host", "attacker.example")]);
+        set_forwarded(
+            &mut h,
+            "203.0.113.5".parse().unwrap(),
+            false,
+            "203.0.113.5".parse().unwrap(),
+            "http",
+            "dirty\";for=\"x",
+        );
+        assert!(h.get(&XFH).is_none());
+    }
+
+    #[test]
+    fn trusted_peer_proto_and_host_preserved() {
+        let mut h = map(&[
+            ("x-forwarded-proto", "https"),
+            ("x-forwarded-host", "original.example"),
+        ]);
+        set_forwarded(
+            &mut h,
+            "10.0.0.1".parse().unwrap(),
+            true,
+            "198.51.100.9".parse().unwrap(),
+            "http",
+            "inner.test",
+        );
+        assert_eq!(h.get(&XFP).unwrap(), "https");
+        assert_eq!(h.get(&XFH).unwrap(), "original.example");
+    }
+
+    #[test]
+    fn untrusted_peer_xfp_overwritten() {
+        let mut h = map(&[("x-forwarded-proto", "https")]);
+        set_forwarded(
+            &mut h,
+            "203.0.113.5".parse().unwrap(),
+            false,
+            "203.0.113.5".parse().unwrap(),
+            "http",
+            "x.test",
+        );
+        assert_eq!(h.get(&XFP).unwrap(), "http");
+    }
+
+    #[test]
+    fn multi_value_xff_headers_merge() {
+        let mut h = HeaderMap::new();
+        h.append(&XFF, HeaderValue::from_static("198.51.100.1"));
+        h.append(&XFF, HeaderValue::from_static("198.51.100.2"));
+        set_forwarded(
+            &mut h,
+            "10.0.0.1".parse().unwrap(),
+            true,
+            "198.51.100.1".parse().unwrap(),
+            "http",
+            "x.test",
+        );
+        assert_eq!(h.get(&XFF).unwrap(), "198.51.100.1, 198.51.100.2, 10.0.0.1");
     }
 
     #[test]

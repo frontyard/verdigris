@@ -341,3 +341,214 @@ pub fn respond(stored: &Stored, head_only: bool) -> http::Response<crate::body::
     *resp.headers_mut() = stored.meta.header_map();
     resp
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache::entry::{Meta, now_secs};
+    use crate::config::validate::parse_test_config;
+
+    fn store_named(toml_text: &str, name: &str) -> Arc<Cache> {
+        let cfg = parse_test_config(toml_text);
+        Cache::build_all(&cfg, None).unwrap().remove(name).unwrap()
+    }
+
+    fn key_for(target: &str) -> Key {
+        key::primary(&http::Method::GET, "http", "x", target, &[])
+    }
+
+    fn meta(key: &Key) -> Meta {
+        Meta {
+            key: key.raw.clone(),
+            path: "/p".into(),
+            status: 200,
+            headers: vec![("cache-control".into(), "max-age=60".into())],
+            stored_at: now_secs(),
+            fresh_for: 60,
+            swr_for: 0,
+            sie_for: 0,
+            etag: None,
+            last_modified: None,
+            vary: vec![],
+            negative: false,
+            body_len: 3,
+        }
+    }
+
+    async fn exercise_store(c: &Cache) {
+        let k = key_for("/p");
+        // miss, record, hit
+        assert!(matches!(
+            c.lookup(&k, &http::HeaderMap::new()).await,
+            Lookup::Miss
+        ));
+        c.record(meta(&k), Bytes::from_static(b"abc")).await;
+        assert!(matches!(
+            c.lookup(&k, &http::HeaderMap::new()).await,
+            Lookup::Found(_)
+        ));
+        // freshen in place
+        c.freshen(&k, &http::HeaderMap::new(), &|m| m.fresh_for = 5)
+            .await;
+        let Lookup::Found(s) = c.lookup(&k, &http::HeaderMap::new()).await else {
+            panic!()
+        };
+        assert_eq!(s.meta.fresh_for, 5);
+        // oversized record is dropped (max_object_bytes = "8B" in cfgs)
+        let big = key_for("/big");
+        let mut m = meta(&big);
+        m.body_len = 32;
+        c.record(m, Bytes::from_static(b"this body is far too large"))
+            .await;
+        assert!(matches!(
+            c.lookup(&big, &http::HeaderMap::new()).await,
+            Lookup::Miss
+        ));
+        // purges
+        assert!(!c.purge_key("nope").await);
+        assert!(c.purge_prefix("/nope").await == 0);
+        assert_eq!(c.stats().1, 1);
+        assert!(c.purge_key(&k.raw).await);
+        assert_eq!(c.stats().1, 0);
+        // refill then wipe
+        c.record(meta(&k), Bytes::from_static(b"abc")).await;
+        c.purge_all().await;
+        assert_eq!(c.stats().1, 0);
+    }
+
+    #[tokio::test]
+    async fn facade_ram_tier() {
+        let c = store_named(
+            "[cache.c]\ntier = \"ram\"\nmax_object_bytes = \"8B\"\n",
+            "c",
+        );
+        exercise_store(&c).await;
+    }
+
+    #[tokio::test]
+    async fn facade_disk_tier() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = store_named(
+            &format!(
+                "[cache.c]\ntier = \"disk\"\nmax_object_bytes = \"8B\"\ndisk_path = {:?}\n",
+                dir.path().display()
+            ),
+            "c",
+        );
+        exercise_store(&c).await;
+    }
+
+    #[tokio::test]
+    async fn facade_hybrid_promotes_disk_hits() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = store_named(
+            &format!(
+                "[cache.c]\ntier = \"hybrid\"\ndisk_path = {:?}\nram_bytes = \"1MiB\"\nmax_object_bytes = \"8B\"\n",
+                dir.path().display()
+            ),
+            "c",
+        );
+        exercise_store(&c).await;
+
+        // disk-only state: clear the RAM tier, then a hit must promote
+        let k = key_for("/p");
+        c.record(meta(&k), Bytes::from_static(b"abc")).await;
+        if let Store::Hybrid { ram, .. } = &c.store {
+            ram.clear();
+        } else {
+            panic!()
+        }
+        let Lookup::Found(_) = c.lookup(&k, &http::HeaderMap::new()).await else {
+            panic!("disk hit expected")
+        };
+        // second hit comes from RAM
+        let Lookup::Found(_) = c.lookup(&k, &http::HeaderMap::new()).await else {
+            panic!("promoted RAM hit expected")
+        };
+
+        // hybrid miss → disk has no variant → Miss
+        let k2 = key_for("/absent");
+        assert!(matches!(
+            c.lookup(&k2, &http::HeaderMap::new()).await,
+            Lookup::Miss
+        ));
+    }
+
+    #[tokio::test]
+    async fn vary_mismatch_is_a_miss() {
+        let c = store_named(
+            "[cache.c]\ntier = \"ram\"\nmax_object_bytes = \"8B\"\n",
+            "c",
+        );
+        let k = key_for("/p");
+        let mut m = meta(&k);
+        m.vary = vec![("accept-language".into(), Some("en".into()))];
+        c.record(m, Bytes::from_static(b"abc")).await;
+        let mut h = http::HeaderMap::new();
+        h.insert("accept-language", "de".parse().unwrap());
+        assert!(matches!(c.lookup(&k, &h).await, Lookup::Miss));
+        h.insert("accept-language", "en".parse().unwrap());
+        assert!(matches!(c.lookup(&k, &h).await, Lookup::Found(_)));
+    }
+
+    #[tokio::test]
+    async fn begin_fetch_leader_then_follower() {
+        let c = store_named(
+            "[cache.c]\ntier = \"ram\"\nmax_object_bytes = \"8B\"\n",
+            "c",
+        );
+        let k = key_for("/p");
+        let g = match c.begin_fetch(&k) {
+            Leadership::Leader(g) => g,
+            _ => panic!(),
+        };
+        assert!(matches!(c.begin_fetch(&k), Leadership::Follower(_)));
+        drop(g);
+        // after the leader finishes, the next caller leads again
+        assert!(matches!(c.begin_fetch(&k), Leadership::Leader(_)));
+    }
+
+    #[tokio::test]
+    async fn build_all_reuses_unchanged_stores() {
+        let cfg = parse_test_config("[cache.c]\ntier = \"ram\"\nmax_object_bytes = \"8B\"\n");
+        let first = Cache::build_all(&cfg, None).unwrap();
+        let second = Cache::build_all(&cfg, Some(&first)).unwrap();
+        assert!(Arc::ptr_eq(&first["c"], &second["c"]));
+
+        // changed config → rebuilt store
+        let cfg2 = parse_test_config("[cache.c]\ntier = \"ram\"\nram_bytes = \"1MiB\"\n");
+        let third = Cache::build_all(&cfg2, Some(&first)).unwrap();
+        assert!(!Arc::ptr_eq(&first["c"], &third["c"]));
+    }
+
+    #[test]
+    fn respond_builds_from_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = std::fs::File::create(dir.path().join("o")).unwrap();
+        std::io::Write::write_all(
+            &mut std::fs::File::options()
+                .write(true)
+                .open(dir.path().join("o"))
+                .unwrap(),
+            b"abcdef",
+        )
+        .unwrap();
+        for body in [
+            ram::StoredBody::Mem(Bytes::from_static(b"ab")),
+            ram::StoredBody::File {
+                file: std::sync::Arc::new(f),
+                off: 0,
+                len: 2,
+            },
+        ] {
+            let s = Stored {
+                meta: meta(&key_for("/p")),
+                body,
+            };
+            let r = respond(&s, false);
+            assert_eq!(r.status(), 200);
+            let r = respond(&s, true);
+            assert_eq!(r.status(), 200);
+        }
+    }
+}

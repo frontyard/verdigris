@@ -58,6 +58,7 @@ impl Storage {
     /// Persist serialized account credentials (0600).
     pub fn save_account(&self, creds: &[u8]) -> Result<(), String> {
         fs::create_dir_all(&self.root).map_err(err)?;
+        crate::fsperm::private_dir(&self.root);
         write_atomic(&self.account_path(), creds, true).map_err(err)
     }
 
@@ -65,6 +66,8 @@ impl Storage {
     pub fn save_cert(&self, host: &str, cert_pem: &str, key_pem: &str) -> Result<(), String> {
         let dir = self.cert_dir(host);
         fs::create_dir_all(&dir).map_err(err)?;
+        crate::fsperm::private_dir(&self.root);
+        crate::fsperm::private_dir(&dir);
         write_atomic(&dir.join("cert.pem"), cert_pem.as_bytes(), false).map_err(err)?;
         write_atomic(&dir.join("key.pem"), key_pem.as_bytes(), true).map_err(err)
     }

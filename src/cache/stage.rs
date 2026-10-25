@@ -57,7 +57,10 @@ pub enum Plan {
 /// the same path on different authorities or transports cannot share an
 /// entry. `path` is the decoded/normalized path used only for
 /// `bypass.paths` glob matching; the key itself is built from the raw
-/// request target (see [`key::primary`]).
+/// request target (see [`key::primary`]). `strip_query`, when set, is a
+/// query parameter name carrying a credential (ApiKey auth with
+/// `location = "query"`) that must be dropped from the key so the
+/// secret never lands in the RAM index or on disk.
 pub fn plan(
     cm: &RouteCacheMw,
     parts: &http::request::Parts,
@@ -65,6 +68,7 @@ pub fn plan(
     scheme: &str,
     path: &str,
     authed: bool,
+    strip_query: Option<&str>,
 ) -> Plan {
     let b = &cm.cfg.bypass;
     let m = &parts.method;
@@ -89,7 +93,11 @@ pub fn plan(
         .path_and_query()
         .map(|pq| pq.as_str())
         .unwrap_or("/");
-    let key = key::primary(m, scheme, host, target, &vary);
+    let target = strip_query.map_or_else(
+        || std::borrow::Cow::Borrowed(target),
+        |name| key::strip_query_param(target, name),
+    );
+    let key = key::primary(m, scheme, host, &target, &vary);
     Plan::Use {
         key,
         dir: semantics::request_directives(headers),
@@ -741,4 +749,562 @@ fn tag(
     }
     cm.store.meters.result(value);
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr};
+    use std::sync::Arc;
+
+    /// Base config: one cached route serving `respond` — no external deps.
+    const BASE: &str = r#"
+[cache.c]
+tier = "ram"
+[[site]]
+hosts = ["x"]
+tls = "off"
+[[site.route]]
+path = "/p"
+respond = { status = 200, body = "hi", headers = { "cache-control" = "max-age=60", "etag" = "\"v1\"" } }
+cache = { store = "c" }
+"#;
+
+    struct Rig {
+        rt: Arc<crate::server::Runtime>,
+    }
+
+    impl Rig {
+        fn new(extra: &str) -> Self {
+            let cfg = crate::config::validate::parse_test_config(extra);
+            let rt = crate::server::Runtime::build(Arc::new(cfg)).unwrap();
+            Self { rt }
+        }
+        fn cm(&self) -> &RouteCacheMw {
+            self.rt.hosts.sites[0].routes[0]
+                .middleware
+                .cache
+                .as_ref()
+                .unwrap()
+        }
+        fn route(&self) -> &Route {
+            &self.rt.hosts.sites[0].routes[0]
+        }
+        /// Full plan+serve round trip for a request to /p on host x.
+        async fn call(
+            &self,
+            req: http::Request<BoxBody>,
+            handle: (usize, usize),
+            authed: bool,
+        ) -> http::Response<BoxBody> {
+            let (parts, b) = req.into_parts();
+            let req_ctx = RequestCtx {
+                path: "/p".into(),
+                host: "x".into(),
+                client_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                peer_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                peer_trusted: false,
+                tls: false,
+                scheme: "http",
+            };
+            let p = plan(self.cm(), &parts, "x", "http", "/p", authed, None);
+            serve(
+                self.cm(),
+                p,
+                &self.rt,
+                handle,
+                self.route(),
+                http::Request::from_parts(parts, b),
+                &req_ctx,
+            )
+            .await
+        }
+        /// The cache key a GET /p request would use (for manual record()).
+        async fn key_for(&self) -> Key {
+            let req = req_for("/p", &[]);
+            let (parts, _) = req.into_parts();
+            match plan(self.cm(), &parts, "x", "http", "/p", false, None) {
+                Plan::Use { key, .. } => key,
+                Plan::Bypass => panic!("expected Use plan"),
+            }
+        }
+        /// Insert an entry directly into the store.
+        async fn seed(&self, age: u64, fresh_for: u64, swr: u64, sie: u64) {
+            let key = self.key_for().await;
+            self.cm()
+                .store
+                .record(
+                    Meta {
+                        key: key.raw.clone(),
+                        path: "/p".into(),
+                        status: 200,
+                        headers: vec![
+                            ("cache-control".into(), "max-age=60".into()),
+                            ("etag".into(), "\"v1\"".into()),
+                            (
+                                "last-modified".into(),
+                                "Thu, 01 Jan 1970 00:00:00 GMT".into(),
+                            ),
+                        ],
+                        stored_at: now_secs() - age,
+                        fresh_for,
+                        swr_for: swr,
+                        sie_for: sie,
+                        etag: Some("\"v1\"".into()),
+                        last_modified: Some("Thu, 01 Jan 1970 00:00:00 GMT".into()),
+                        vary: vec![],
+                        negative: false,
+                        body_len: 2,
+                    },
+                    bytes::Bytes::from_static(b"hi"),
+                )
+                .await;
+        }
+    }
+
+    fn req_for(uri: &str, headers: &[(&str, &str)]) -> http::Request<BoxBody> {
+        let mut b = http::Request::builder().uri(uri);
+        for (k, v) in headers {
+            b = b.header(*k, *v);
+        }
+        b.body(body::empty()).unwrap()
+    }
+
+    fn x_cache(resp: &http::Response<BoxBody>) -> &str {
+        resp.headers()
+            .get("x-cache")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+    }
+
+    #[tokio::test]
+    async fn miss_then_hit() {
+        let rig = Rig::new(BASE);
+        let r1 = rig.call(req_for("/p", &[]), (0, 0), false).await;
+        assert_eq!(x_cache(&r1), "MISS");
+        // drain the tee so the entry lands
+        let _ = http_body_util::BodyExt::collect(r1.into_body()).await;
+        tokio::task::yield_now().await;
+        let r2 = rig.call(req_for("/p", &[]), (0, 0), false).await;
+        assert_eq!(x_cache(&r2), "HIT");
+    }
+
+    #[tokio::test]
+    async fn bypasses() {
+        // POST bypasses (ineligible method)
+        let rig = Rig::new(BASE);
+        let req = http::Request::builder()
+            .method("POST")
+            .uri("/p")
+            .body(body::empty())
+            .unwrap();
+        let r = rig.call(req, (0, 0), false).await;
+        assert_eq!(x_cache(&r), "BYPASS");
+
+        // authenticated requests bypass when bypass.authenticated
+        let r = rig.call(req_for("/p", &[]), (0, 0), true).await;
+        assert_eq!(x_cache(&r), "BYPASS");
+        // raw Authorization header also bypasses
+        let r = rig
+            .call(
+                req_for("/p", &[("authorization", "Bearer t")]),
+                (0, 0),
+                false,
+            )
+            .await;
+        assert_eq!(x_cache(&r), "BYPASS");
+        // request no-store bypasses
+        let r = rig
+            .call(
+                req_for("/p", &[("cache-control", "no-store")]),
+                (0, 0),
+                false,
+            )
+            .await;
+        assert_eq!(x_cache(&r), "BYPASS");
+    }
+
+    #[tokio::test]
+    async fn bypass_cookies_headers_paths() {
+        let toml = r#"
+[cache.c]
+tier = "ram"
+[[site]]
+hosts = ["x"]
+tls = "off"
+[[site.route]]
+path = "/p"
+respond = { status = 200, body = "hi" }
+cache = { store = "c", bypass = { cookies = ["session"], headers = ["x-skip"], paths = ["/p"] } }
+"#;
+        let rig = Rig::new(toml);
+        // matching path glob
+        assert_eq!(
+            x_cache(&rig.call(req_for("/p", &[]), (0, 0), false).await),
+            "BYPASS"
+        );
+        // bypass header
+        assert_eq!(
+            x_cache(
+                &rig.call(req_for("/x", &[("x-skip", "1")]), (0, 0), false)
+                    .await
+            ),
+            "BYPASS"
+        );
+        // named cookie / wildcard list / non-matching cookie
+        let rig2 = Rig::new(
+            r#"
+[cache.c]
+tier = "ram"
+[[site]]
+hosts = ["x"]
+tls = "off"
+[[site.route]]
+path = "/p"
+respond = { status = 200, body = "hi" }
+cache = { store = "c", bypass = { cookies = ["session"] } }
+"#,
+        );
+        assert_eq!(
+            x_cache(
+                &rig2
+                    .call(
+                        req_for("/p", &[("cookie", "session=1; other=2")]),
+                        (0, 0),
+                        false
+                    )
+                    .await
+            ),
+            "BYPASS"
+        );
+        assert_ne!(
+            x_cache(
+                &rig2
+                    .call(req_for("/p", &[("cookie", "other=2")]), (0, 0), false)
+                    .await
+            ),
+            "BYPASS"
+        );
+        let rig3 = Rig::new(
+            r#"
+[cache.c]
+tier = "ram"
+[[site]]
+hosts = ["x"]
+tls = "off"
+[[site.route]]
+path = "/p"
+respond = { status = 200, body = "hi" }
+cache = { store = "c", bypass = { cookies = ["*"] } }
+"#,
+        );
+        assert_eq!(
+            x_cache(
+                &rig3
+                    .call(req_for("/p", &[("cookie", "a=b")]), (0, 0), false)
+                    .await
+            ),
+            "BYPASS"
+        );
+        // bypass.methods: GET listed → even GET bypasses
+        let rig4 = Rig::new(
+            r#"
+[cache.c]
+tier = "ram"
+[[site]]
+hosts = ["x"]
+tls = "off"
+[[site.route]]
+path = "/p"
+respond = { status = 200, body = "hi" }
+cache = { store = "c", bypass = { methods = ["get"] } }
+"#,
+        );
+        assert_eq!(
+            x_cache(&rig4.call(req_for("/p", &[]), (0, 0), false).await),
+            "BYPASS"
+        );
+    }
+
+    #[tokio::test]
+    async fn strip_query_keeps_secret_out_of_key() {
+        let rig = Rig::new(BASE);
+        let req = req_for("/p?api_key=sekret&b=2", &[]);
+        let (parts, _) = req.into_parts();
+        let p = plan(rig.cm(), &parts, "x", "http", "/p", false, Some("api_key"));
+        let Plan::Use { key, .. } = p else { panic!() };
+        assert!(!key.raw.contains("sekret"));
+        assert!(key.raw.contains("b=2"));
+    }
+
+    #[tokio::test]
+    async fn stale_entry_with_max_stale() {
+        let rig = Rig::new(BASE);
+        rig.seed(100, 60, 0, 0).await; // 40s stale
+        let r = rig
+            .call(
+                req_for("/p", &[("cache-control", "max-stale=50")]),
+                (0, 0),
+                false,
+            )
+            .await;
+        assert_eq!(x_cache(&r), "STALE");
+        // bound too tight → refetch
+        let r = rig
+            .call(
+                req_for("/p", &[("cache-control", "max-stale=10")]),
+                (0, 0),
+                false,
+            )
+            .await;
+        assert_eq!(x_cache(&r), "MISS");
+        // bare max-stale accepts any staleness
+        let r = rig
+            .call(
+                req_for("/p", &[("cache-control", "max-stale")]),
+                (0, 0),
+                false,
+            )
+            .await;
+        assert_eq!(x_cache(&r), "STALE");
+    }
+
+    #[tokio::test]
+    async fn stale_if_error_serves_stale() {
+        let toml = r#"
+[cache.c]
+tier = "ram"
+[[site]]
+hosts = ["x"]
+tls = "off"
+[[site.route]]
+path = "/p"
+respond = { status = 500, body = "boom" }
+cache = { store = "c" }
+"#;
+        let rig = Rig::new(toml);
+        rig.seed(100, 60, 0, 300).await; // dead-ish but inside SIE window
+        let r = rig.call(req_for("/p", &[]), (0, 0), false).await;
+        assert_eq!(x_cache(&r), "STALE");
+        assert_eq!(r.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn swr_revalidates_in_background() {
+        let rig = Rig::new(BASE);
+        rig.seed(100, 60, 300, 0).await; // stale, inside SWR window
+        let r = rig.call(req_for("/p", &[]), (0, 0), false).await;
+        assert_eq!(x_cache(&r), "STALE");
+        // background revalidation replaces the entry — give it a beat
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let r = rig.call(req_for("/p", &[]), (0, 0), false).await;
+        assert_eq!(x_cache(&r), "HIT");
+
+        // dead handle → the revalidation task exits early
+        rig.seed(100, 60, 300, 0).await;
+        let r = rig.call(req_for("/p", &[]), (0, 99), false).await;
+        assert_eq!(x_cache(&r), "STALE");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    #[tokio::test]
+    async fn revalidate_304_refreshes() {
+        // handler answers 304 to the conditional request
+        let toml = r#"
+[cache.c]
+tier = "ram"
+[[site]]
+hosts = ["x"]
+tls = "off"
+[[site.route]]
+path = "/p"
+respond = { status = 304, headers = { "etag" = "\"v2\"", "cache-control" = "max-age=600" } }
+cache = { store = "c" }
+"#;
+        let rig = Rig::new(toml);
+        rig.seed(100, 60, 0, 0).await; // dead, has validators
+        let r = rig.call(req_for("/p", &[]), (0, 0), false).await;
+        // 304 freshened the entry → served as a HIT
+        assert_eq!(x_cache(&r), "HIT");
+        assert_eq!(r.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn only_if_cached_without_entry_is_504() {
+        let rig = Rig::new(BASE);
+        let r = rig
+            .call(
+                req_for("/p", &[("cache-control", "only-if-cached")]),
+                (0, 0),
+                false,
+            )
+            .await;
+        assert_eq!(r.status(), http::StatusCode::GATEWAY_TIMEOUT);
+        assert_eq!(x_cache(&r), "MISS");
+    }
+
+    #[tokio::test]
+    async fn no_store_response_is_not_stored() {
+        let toml = r#"
+[cache.c]
+tier = "ram"
+[[site]]
+hosts = ["x"]
+tls = "off"
+[[site.route]]
+path = "/p"
+respond = { status = 200, body = "hi", headers = { "cache-control" = "no-store" } }
+cache = { store = "c" }
+"#;
+        let rig = Rig::new(toml);
+        let r1 = rig.call(req_for("/p", &[]), (0, 0), false).await;
+        let _ = http_body_util::BodyExt::collect(r1.into_body()).await;
+        tokio::task::yield_now().await;
+        let r2 = rig.call(req_for("/p", &[]), (0, 0), false).await;
+        assert_eq!(x_cache(&r2), "MISS");
+    }
+
+    #[tokio::test]
+    async fn min_fresh_and_max_age_demote() {
+        let rig = Rig::new(BASE);
+        rig.seed(10, 60, 0, 0).await; // fresh: age 10 < 60
+        let r = rig
+            .call(
+                req_for("/p", &[("cache-control", "max-age=5")]),
+                (0, 0),
+                false,
+            )
+            .await;
+        assert_eq!(x_cache(&r), "MISS");
+        let r = rig
+            .call(
+                req_for("/p", &[("cache-control", "min-fresh=3600")]),
+                (0, 0),
+                false,
+            )
+            .await;
+        assert_eq!(x_cache(&r), "MISS");
+    }
+
+    #[tokio::test]
+    async fn client_conditionals_short_circuit_304() {
+        let rig = Rig::new(BASE);
+        rig.seed(0, 60, 0, 0).await; // fresh
+        for inm in ["\"v1\"", "*", "W/\"v1\"", "\"other\", \"v1\""] {
+            let r = rig
+                .call(req_for("/p", &[("if-none-match", inm)]), (0, 0), false)
+                .await;
+            assert_eq!(r.status(), http::StatusCode::NOT_MODIFIED, "{inm}");
+        }
+        let r = rig
+            .call(
+                req_for("/p", &[("if-none-match", "\"nope\"")]),
+                (0, 0),
+                false,
+            )
+            .await;
+        assert_eq!(r.status(), 200);
+        // If-Modified-Since with stored last-modified in the past → 304
+        let r = rig
+            .call(
+                req_for(
+                    "/p",
+                    &[("if-modified-since", "Wed, 21 Oct 2015 07:28:00 GMT")],
+                ),
+                (0, 0),
+                false,
+            )
+            .await;
+        assert_eq!(r.status(), http::StatusCode::NOT_MODIFIED);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn follower_times_out_and_fetches_itself() {
+        let rig = Rig::new(BASE);
+        let key = rig.key_for().await;
+        let _guard = match rig.cm().store.begin_fetch(&key) {
+            Leadership::Leader(g) => g,
+            Leadership::Follower(_) => panic!("first fetch must lead"),
+        };
+        // no stored entry → MISS path → Follower → wait 5s (paused → instant)
+        let r = rig.call(req_for("/p", &[]), (0, 0), false).await;
+        assert_eq!(x_cache(&r), "MISS");
+        assert_eq!(r.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn follower_serves_committed_entry() {
+        let rig = Rig::new(BASE);
+        let key = rig.key_for().await;
+        let guard = match rig.cm().store.begin_fetch(&key) {
+            Leadership::Leader(g) => g,
+            Leadership::Follower(_) => panic!(),
+        };
+        // serve sees the in-flight slot as Follower; meanwhile the "leader"
+        // commits an entry and drops its guard, waking us
+        let serve = rig.call(req_for("/p", &[]), (0, 0), false);
+        tokio::pin!(serve);
+        let work = async {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            rig.seed(0, 60, 0, 0).await;
+            drop(guard);
+        };
+        let resp = tokio::select! {
+            r = &mut serve => r,
+            _ = work => serve.await,
+        };
+        assert_eq!(x_cache(&resp), "HIT");
+    }
+
+    #[tokio::test]
+    async fn vary_headers_partition_entries() {
+        let toml = r#"
+[cache.c]
+tier = "ram"
+[[site]]
+hosts = ["x"]
+tls = "off"
+[[site.route]]
+path = "/p"
+respond = { status = 200, body = "hi", headers = { "cache-control" = "max-age=60" } }
+cache = { store = "c", vary_headers = ["x-tenant"] }
+"#;
+        let rig = Rig::new(toml);
+        let r = rig
+            .call(req_for("/p", &[("x-tenant", "a")]), (0, 0), false)
+            .await;
+        let _ = http_body_util::BodyExt::collect(r.into_body()).await;
+        tokio::task::yield_now().await;
+        let r = rig
+            .call(req_for("/p", &[("x-tenant", "b")]), (0, 0), false)
+            .await;
+        assert_eq!(x_cache(&r), "MISS"); // different tenant → different key
+        let _ = http_body_util::BodyExt::collect(r.into_body()).await;
+        tokio::task::yield_now().await;
+        let r = rig
+            .call(req_for("/p", &[("x-tenant", "a")]), (0, 0), false)
+            .await;
+        assert_eq!(x_cache(&r), "HIT");
+    }
+
+    #[tokio::test]
+    async fn head_requests_use_same_entry() {
+        let rig = Rig::new(BASE);
+        let req = http::Request::builder()
+            .method("HEAD")
+            .uri("/p")
+            .body(body::empty())
+            .unwrap();
+        let r = rig.call(req, (0, 0), false).await;
+        assert_eq!(x_cache(&r), "MISS");
+        let _ = http_body_util::BodyExt::collect(r.into_body()).await;
+        tokio::task::yield_now().await;
+        let req = http::Request::builder()
+            .method("HEAD")
+            .uri("/p")
+            .body(body::empty())
+            .unwrap();
+        let r = rig.call(req, (0, 0), false).await;
+        assert_eq!(x_cache(&r), "HIT");
+    }
 }

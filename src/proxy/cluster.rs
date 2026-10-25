@@ -369,7 +369,9 @@ impl Member {
                 let permit = self.stream_permit(cluster).await?;
                 let sr = match self.dial(cluster, WantProto::H2).await? {
                     Dialed::H2(sr) => sr,
-                    Dialed::H1(_) => unreachable!("h2c cannot negotiate h1"),
+                    Dialed::H1(_) => {
+                        return Err(UpError::Connect);
+                    }
                 };
                 Ok(Checkout::H2 { sr, permit })
             }
@@ -1213,5 +1215,182 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(20)).await;
         // both requests multiplexed over a single h2 conn
         assert_eq!(conns.load(Ordering::Relaxed), 1);
+    }
+    #[test]
+    fn cluster_build_errors() {
+        assert!(
+            Cluster::build(
+                "t",
+                &cfg::UpstreamConfig {
+                    servers: vec![],
+                    ..Default::default()
+                },
+            )
+            .is_err()
+        );
+        let bad = Cluster::build(
+            "t",
+            &cfg::UpstreamConfig {
+                servers: vec!["gopher://x".into()],
+                ..Default::default()
+            },
+        );
+        match bad {
+            Err(e) => assert!(e.contains("servers[0]"), "{e}"),
+            Ok(_) => panic!("expected build error"),
+        }
+    }
+
+    #[test]
+    fn tls_client_variants() {
+        assert!(
+            build_tls_client(&cfg::UpstreamTls {
+                verify: false,
+                ca: None,
+                sni: None,
+            })
+            .is_ok()
+        );
+        match build_tls_client(&cfg::UpstreamTls {
+            verify: true,
+            ca: Some("/nonexistent/ca.pem".into()),
+            sni: None,
+        }) {
+            Err(e) => assert!(e.contains("cannot read"), "{e}"),
+            Ok(_) => panic!("expected tls build error"),
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let bad = dir.path().join("ca.pem");
+        std::fs::write(
+            &bad,
+            "-----BEGIN CERTIFICATE-----\n!!!bad\n-----END CERTIFICATE-----\n",
+        )
+        .unwrap();
+        assert!(
+            build_tls_client(&cfg::UpstreamTls {
+                verify: true,
+                ca: Some(bad),
+                sni: None,
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn no_verify_accepts_anything() {
+        let v = NoVerify::new();
+        assert!(!v.supported_verify_schemes().is_empty());
+    }
+
+    #[tokio::test]
+    async fn probe_reports_status_match() {
+        let (addr, _) = fake_upstream(200).await;
+        let cluster = test_cluster(vec![format!("http://{addr}")], 4, Duration::from_secs(60));
+        let active = cfg::ActiveHealth {
+            path: "/healthz".into(),
+            timeout: Duration::from_secs(2),
+            ..Default::default()
+        };
+        assert!(cluster.members[0].probe(&cluster, &active).await);
+        let active = cfg::ActiveHealth {
+            expect: 500,
+            ..active
+        };
+        assert!(!cluster.members[0].probe(&cluster, &active).await);
+        let dead = test_cluster(
+            vec!["http://127.0.0.1:1".into()],
+            4,
+            Duration::from_secs(60),
+        );
+        assert!(!dead.members[0].probe(&dead, &active).await);
+    }
+
+    #[tokio::test]
+    async fn dns_state_transitions() {
+        let cluster = test_cluster(
+            vec!["http://127.0.0.1:9".into()],
+            4,
+            Duration::from_secs(60),
+        );
+        let m = &cluster.members[0];
+        let addrs = m.addrs(&cluster).await.unwrap();
+        assert_eq!(addrs[0].port(), 9);
+
+        let host_cluster = test_cluster(
+            vec!["http://x.invalid:9".into()],
+            4,
+            Duration::from_secs(60),
+        );
+        let hm = &host_cluster.members[0];
+        let mut st = DnsState::default();
+        assert!(hm.last_known_good(&st, &host_cluster).is_err());
+        st.addrs = vec!["10.1.2.3:9".parse().unwrap()];
+        assert_eq!(hm.last_known_good(&st, &host_cluster).unwrap().len(), 1);
+        hm.dns_failed(&mut st, &host_cluster);
+        assert!(!st.addrs.is_empty());
+        let mut st2 = DnsState {
+            addrs: vec!["10.1.2.3:9".parse().unwrap()],
+            expires_at: None,
+            failing_since: Some(Instant::now() - Duration::from_secs(3600)),
+        };
+        hm.dns_failed(&mut st2, &host_cluster);
+        assert!(st2.addrs.is_empty());
+        hm.invalidate_dns(&mut st2);
+        assert!(st2.expires_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn spawn_probes_marks_sick_and_stops() {
+        let (addr, _) = fake_upstream(200).await;
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let hc = cfg::HealthCheck {
+            active: Some(cfg::ActiveHealth {
+                interval: Duration::from_millis(10),
+                timeout: Duration::from_millis(100),
+                ..Default::default()
+            }),
+            passive: Some(cfg::PassiveHealth {
+                cooldown: Duration::from_secs(60),
+                ..Default::default()
+            }),
+        };
+        let rebuild = |servers: Vec<String>| {
+            let mut c = cfg::UpstreamConfig {
+                servers,
+                health: hc.clone(),
+                ..Default::default()
+            };
+            c.limits.connect = Duration::from_millis(200);
+            Arc::new(Cluster::build("t", &c).unwrap())
+        };
+        let dead = rebuild(vec!["http://127.0.0.1:1".into()]);
+        let ok = rebuild(vec![format!("http://{addr}")]);
+        dead.clone().spawn_probes(shutdown.clone());
+        ok.clone().spawn_probes(shutdown.clone());
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert!(!dead.members[0].healthy(), "failing probe marks sick");
+        assert!(ok.members[0].healthy(), "passing probe stays healthy");
+        shutdown.cancel();
+        let none = Arc::new(test_cluster(
+            vec!["http://127.0.0.1:1".into()],
+            4,
+            Duration::from_secs(60),
+        ));
+        none.spawn_probes(shutdown.clone());
+    }
+
+    #[tokio::test]
+    async fn inflight_guard_accounting() {
+        let cluster = test_cluster(
+            vec!["http://127.0.0.1:9".into()],
+            4,
+            Duration::from_secs(60),
+        );
+        let m = &cluster.members[0];
+        {
+            let _g = track_inflight(m);
+            assert_eq!(m.inflight.load(Ordering::Relaxed), 1);
+        }
+        assert_eq!(m.inflight.load(Ordering::Relaxed), 0);
     }
 }

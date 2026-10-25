@@ -184,3 +184,175 @@ fn response(
     }
     resp
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http::Method;
+
+    fn ctx() -> RequestCtx {
+        RequestCtx {
+            path: "/a b".into(),
+            host: "h".into(),
+            client_ip: "10.0.0.1".parse().unwrap(),
+            peer_ip: "10.0.0.1".parse().unwrap(),
+            peer_trusted: false,
+            tls: false,
+            scheme: "http",
+        }
+    }
+
+    fn req(method: Method, uri: &str) -> http::Request<BoxBody> {
+        http::Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(crate::body::empty())
+            .unwrap()
+    }
+
+    #[test]
+    fn redirect_targets() {
+        // To template
+        let c = cfg::RedirectHandler {
+            to: Some("https://x{path}{query}?h={host}&s={scheme}".into()),
+            ..Default::default()
+        };
+        let r = redirect::Redirect::build(&c, "s").unwrap();
+        let resp = r.handle(&req(Method::GET, "/p?q=1"), &ctx());
+        assert_eq!(resp.status(), 308);
+        let loc = resp.headers()["location"].to_str().unwrap();
+        assert!(loc.contains("h=h") && loc.contains("s=http") && loc.contains("q=1"));
+
+        // Host target
+        let c = cfg::RedirectHandler {
+            host: Some("other.example".into()),
+            status: 301,
+            ..Default::default()
+        };
+        let r = redirect::Redirect::build(&c, "s").unwrap();
+        let resp = r.handle(&req(Method::GET, "/p?q=1"), &ctx());
+        assert_eq!(resp.status(), 301);
+        assert!(
+            resp.headers()["location"]
+                .to_str()
+                .unwrap()
+                .starts_with("http://other.example/")
+        );
+
+        // Scheme target
+        let c = cfg::RedirectHandler {
+            scheme: Some("https".into()),
+            ..Default::default()
+        };
+        let r = redirect::Redirect::build(&c, "s").unwrap();
+        let resp = r.handle(&req(Method::GET, "/p"), &ctx());
+        assert!(
+            resp.headers()["location"]
+                .to_str()
+                .unwrap()
+                .starts_with("https://h/")
+        );
+
+        // nothing configured → Missing
+        let c = cfg::RedirectHandler::default();
+        assert!(matches!(
+            redirect::Redirect::build(&c, "s"),
+            Err(BuildError::Missing)
+        ));
+        // invalid status
+        let c = cfg::RedirectHandler {
+            to: Some("/x".into()),
+            status: 99,
+            ..Default::default()
+        };
+        assert!(redirect::Redirect::build(&c, "s").is_err());
+    }
+
+    #[test]
+    fn respond_placeholders_and_head() {
+        let mut headers = BTreeMap::new();
+        headers.insert("x-fixed".to_string(), "v".to_string());
+        let c = cfg::RespondHandler {
+            status: 200,
+            body: "{method} {host} {scheme}".into(),
+            headers,
+        };
+        let r = respond::Respond::build(&c, "s").unwrap();
+        let resp = r.handle(&req(Method::GET, "/"), &ctx());
+        assert_eq!(resp.headers()["x-fixed"], "v");
+        assert_eq!(resp.headers()["content-type"], "text/plain; charset=utf-8");
+
+        // bodyless status: no content-length/type
+        let c = cfg::RespondHandler {
+            status: 204,
+            body: "ignored".into(),
+            ..Default::default()
+        };
+        let r = respond::Respond::build(&c, "s").unwrap();
+        let resp = r.handle(&req(Method::GET, "/"), &ctx());
+        assert!(resp.headers().get("content-length").is_none());
+        assert!(resp.headers().get("content-type").is_none());
+
+        // bad header name/value and status rejected at build time
+        let mut headers = BTreeMap::new();
+        headers.insert("bad name".into(), "v".into());
+        let c = cfg::RespondHandler {
+            headers,
+            ..Default::default()
+        };
+        assert!(respond::Respond::build(&c, "s").is_err());
+        let mut headers = BTreeMap::new();
+        headers.insert("x".into(), "bad\r\nvalue".into());
+        let c = cfg::RespondHandler {
+            headers,
+            ..Default::default()
+        };
+        assert!(respond::Respond::build(&c, "s").is_err());
+        let c = cfg::RespondHandler {
+            status: 42,
+            ..Default::default()
+        };
+        assert!(respond::Respond::build(&c, "s").is_err());
+    }
+
+    #[test]
+    fn build_dispatches_and_rejects_missing() {
+        // no handler configured
+        let route = cfg::RouteConfig {
+            path: Some("/x".into()),
+            ..Default::default()
+        };
+        let empty = crate::config::model::Config::default();
+        let mut clusters = crate::proxy::Clusters::build(&empty).unwrap();
+        assert!(matches!(
+            build(&route, "s", &mut clusters, "r"),
+            Err(BuildError::Missing)
+        ));
+
+        // respond arm
+        let route = cfg::RouteConfig {
+            path: Some("/x".into()),
+            respond: Some(cfg::RespondHandler {
+                status: 200,
+                body: "ok".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(matches!(
+            build(&route, "s", &mut clusters, "r"),
+            Ok(Handler::Respond(_))
+        ));
+    }
+
+    #[test]
+    fn build_error_display() {
+        assert!(BuildError::Missing.to_string().contains("no handler"));
+        assert!(
+            BuildError::Unsupported("x")
+                .to_string()
+                .contains("not implemented")
+        );
+        assert!(BuildError::Invalid("m".into()).to_string().contains("m"));
+    }
+}

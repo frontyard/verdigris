@@ -18,6 +18,7 @@ pub mod cache;
 pub mod cli;
 pub mod config;
 pub mod errors;
+mod fsperm;
 pub mod handler;
 pub mod middleware;
 pub mod observe;

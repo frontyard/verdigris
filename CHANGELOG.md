@@ -1,0 +1,137 @@
+# Changelog
+
+All notable changes to verd are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
+adheres to [Semantic Versioning](https://semver.org/).
+
+How releases work: changes accumulate under `## [Unreleased]`. At tag
+time the maintainer renames it to `## [x.y.z] - YYYY-MM-DD`, bumps
+`Cargo.toml`, commits, and pushes `vX.Y.Z` — the release workflow
+publishes the matching section as the GitHub release notes.
+
+## [Unreleased]
+
+## [0.2.0] - 2025-10-26
+
+### Security
+
+- **Token-less admin listener hardened against CSRF/DNS rebinding.**
+  Requests must carry a loopback `Host` (`localhost`, `*.localhost`,
+  `127.0.0.0/8`, `[::1]`); mutating endpoints additionally reject
+  `Sec-Fetch-Site: cross-site` and non-loopback `Origin` headers. A
+  validation warning now flags `admin.token` unset even on loopback.
+- **Rate-limit `key = "header:<Name>"` no longer allows memory
+  exhaustion.** Bucket keys store a hash of the header value instead of
+  the raw value — unique oversized values can't inflate the bucket map.
+- **New `timeouts.send` (default `60s`)** — a write-side inactivity
+  deadline: a `poll_write`/`poll_flush` stalled longer than this closes
+  the connection (slow-client/slow-read DoS protection). Progress resets
+  it, so large slow downloads are unaffected. Also bounds upgrade-tunnel
+  inactivity in both directions; set `0s` on long-idle WebSocket routes.
+- **Upgrade tunnels count against connection limits.** The connection's
+  admission slot stays held for the tunnel's lifetime — `Upgrade:`
+  requests can no longer escape `max_connections`/`max_connections_per_ip`.
+- **`Forwarded`/`X-Forwarded-*` hardening:** the client `Host` is
+  RFC-7239-quoted in `Forwarded` (`host=evil";for="spoof` can't inject
+  pairs); trusted peers' inbound `X-Forwarded-Proto`/`-Host` are preserved
+  instead of overwritten; multiple `Forwarded`/`X-Forwarded-For` headers
+  merge instead of reading only the first; a spoofed inbound
+  `X-Forwarded-Host` is dropped when the routed host is unfit to forward.
+- **Exactly one outbound `Host` per proxied request** — `pass_host`
+  emits the upstream authority; otherwise the `Host` verd routed on.
+  Duplicate client `Host` headers collapse, and h2-inbound requests get
+  a synthesized `Host` on h1 upstreams.
+- **Query-parameter API keys are stripped from cache keys**
+  (`key::strip_query_param`, decoded-name compare so `api_%6bey=` can't
+  smuggle a credential into persisted entries). Validation warns when a
+  cached route accepts query api keys.
+- **`TRACE` removed from the retry/idempotent set** — echo probes are
+  never replayed to another member.
+- **`unreachable!` removed from the h2c upstream checkout path** — a
+  misbehaving h2c upstream answering h1 is now an ordinary error, not a
+  connection-task panic.
+- **Credential fingerprints are keyed hashes** — `fingerprint` uses a
+  per-process random `ahash` seed so access-log identities can't be
+  precomputed offline; bearer/api-key comparison scans the full list
+  (no positional early-exit).
+- **Filesystem permissions:** cache `objects/` and ACME storage dirs are
+  tightened to `0700` (with a warning); the config file warns when
+  group/other-writable, or group/other-readable while holding inline
+  credentials.
+- **Validation warnings added** for `upstream.tls.verify = false` on
+  `https://` servers (MITM-able), `limits.header_bytes > 1MiB` (buffer
+  memory multiplier), `timeouts.send = "0s"`, and `respond` bodies that
+  substitute request data under a `text/html` content-type (reflected
+  XSS footgun).
+- **`SECURITY.md`** — private vulnerability reporting policy.
+
+### Changed
+
+- **HTTP/2 inbound is explicitly bounded:** `max_concurrent_streams(200)`,
+  `max_header_list_size = limits.header_bytes`, keep-alive pings 20s/10s.
+- **Path normalizer rejects decoded control characters** (C0/C1/DEL) —
+  requests now 400 instead of propagating `%09`-style bytes downstream.
+- **`Location` headers are re-encoded** — `redirect` templates and
+  static `dir/` redirects percent-encode the decoded path, so a raw
+  space/control char can never corrupt the header.
+- **`basic` auth-scheme match is case-insensitive** (RFC 9110).
+- **systemd unit tightened:** `/etc/verd` is `ReadOnlyPaths`,
+  `ProtectKernelLogs`, `RestrictSUIDSGID`, `LockPersonality`,
+  `RestrictRealtime`, `RestrictNamespaces`.
+
+### Fixed
+
+- **Per-IP connection accounting race** — decrement+remove now happens
+  under the shard `entry()` lock; a fresh admit for the same IP can no
+  longer lose its count.
+- **Demo config starts**: `[admin]` gets a token default
+  (`${VERD_ADMIN_TOKEN:-verd-demo-admin}`) and `proxy` uses the
+  `{ upstream = [...] }` table form.
+- HTTP/2 keep-alive config now supplies `TokioTimer` — without it every
+  h2 connection panicked with `You must supply a timer`.
+
+### Build & CI
+
+- All GitHub Actions are pinned to commit SHAs (with the tag in a
+  trailing comment); `cargo deny check` runs advisories/bans/licenses/
+  sources in CI; dependabot watches Cargo (`/` and `/fuzz`) and
+  github-actions weekly.
+- New fuzz targets: `headers_policy` (hop-by-hop stripping and
+  forwarded-header invariants) and `static_resolve` (no `..`, control
+  chars or NUL survive path normalization; document-root join can't
+  escape), alongside `http_semantics`.
+- GitHub release notes are now generated from `CHANGELOG.md` — the
+  tagged version's section becomes the release body, with the
+  auto-generated commit list appended.
+
+### Coverage
+
+Unit-test coverage (`cargo llvm-cov --lib`; e2e subprocess coverage not
+merged, so real exercised coverage is higher):
+
+| Metric    | Before | After  |
+|-----------|--------|--------|
+| Regions   | 79.15% | 81.49% |
+| Functions | 76.06% | 76.66% |
+| Lines     | 79.76% | 82.48% |
+
+298 unit tests (+130 vs the pre-review baseline). Largest gains:
+`config/validate.rs` 59%→99.9% lines, `config/values.rs` →99%,
+`cli.rs` 8%→57%, `cache/stage.rs` 68%→92%, `cache/disk.rs` →95%,
+`handler/static_files.rs` 66%→94.5%, `handler/redirect.rs` →100%,
+`handler/respond.rs` →100%, `router/condition.rs` 59%→100%,
+`admin/mod.rs` →82%, `body.rs` 61%→84%, `observe/accesslog.rs` →90%.
+Residual low-coverage files (`server/conn.rs`, `server/service.rs`,
+`cli::run`, `acme` orchestration, `tls/manual` error paths) are
+socket-accept/process-boundary code exercised by the e2e suites rather
+than unit tests — intentionally left to e2e/fault-injection coverage.
+
+## [0.1.0] - 2026-10-25
+
+Initial release: static files, TLS + ACME (http-01/tls-alpn-01/on-demand),
+reverse proxy with load balancing and retries, response caching
+(RAM/disk/hybrid), compression, rate limiting, CORS, security headers,
+admin API with atomic reloads, Prometheus metrics.
+
+[Unreleased]: https://github.com/frontyard/verdigris/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/frontyard/verdigris/releases/tag/v0.1.0

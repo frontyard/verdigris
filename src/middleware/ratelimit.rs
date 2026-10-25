@@ -138,12 +138,15 @@ impl RateLimiter {
             // A missing/invalid header must not skip the limiter —
             // otherwise omitting it bypasses the rule entirely. Fall
             // back to the client IP so the request is still bounded.
+            // The value is hashed, not stored: unique oversized header
+            // values would otherwise inflate bucket memory (header cap
+            // × bucket cap is GiB-scale).
             KeyKind::Header(name) => Some(
                 parts
                     .headers
                     .get(name)
                     .and_then(|v| v.to_str().ok())
-                    .map(|s| format!("hdr:{s}"))
+                    .map(|s| format!("hdr:{:016x}", crate::cache::key::fnv1a(s)))
                     .unwrap_or_else(|| format!("ip:{ip}")),
             ),
         }
@@ -318,6 +321,30 @@ mod tests {
         p2.headers
             .insert("x-tenant", HeaderValue::from_static("t2"));
         assert!(rl.check(ip, None, &p2, "r1").unwrap().allowed);
+    }
+
+    #[test]
+    fn header_key_material_is_bounded() {
+        // bucket keys hold a hash of the header value, not the value —
+        // unique oversized values must not inflate the bucket map
+        let rl = RateLimiter::build(&cfg_key("header:X-Trace", "1000/s")).unwrap();
+        let ip = IpAddr::from_str("10.0.0.1").unwrap();
+        for i in 0..64 {
+            let mut p = parts();
+            let big = format!("{}{i}", "x".repeat(16 * 1024));
+            p.headers
+                .insert("x-trace", HeaderValue::from_str(&big).unwrap());
+            rl.check(ip, None, &p, "r1");
+        }
+        assert_eq!(rl.buckets.len(), 64);
+        for e in rl.buckets.iter() {
+            assert!(
+                e.key().len() <= 24,
+                "unbounded key material: {}",
+                e.key().len()
+            );
+            assert!(e.key().starts_with("hdr:"));
+        }
     }
 
     #[test]

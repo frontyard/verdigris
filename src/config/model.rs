@@ -190,6 +190,12 @@ pub struct Timeouts {
     #[serde(with = "humantime_serde")]
     #[schemars(with = "String")]
     pub idle: Duration,
+    /// Write-side inactivity deadline: a send that stalls longer than
+    /// this closes the connection (slow-client/slow-read protection).
+    /// Progress resets it — large slow downloads are fine. `0s` disables.
+    #[serde(with = "humantime_serde")]
+    #[schemars(with = "String")]
+    pub send: Duration,
     /// Overall per-request deadline. Set to `0s` for long-lived routes
     /// (SSE, WebSocket, long-polling).
     #[serde(with = "humantime_serde")]
@@ -204,6 +210,7 @@ impl Default for Timeouts {
             header_read: Duration::from_secs(20),
             body_read: Duration::from_secs(60),
             idle: Duration::from_secs(75),
+            send: Duration::from_secs(60),
             request_deadline: Duration::from_secs(300),
         }
     }
@@ -220,6 +227,9 @@ impl Timeouts {
         }
         if let Some(v) = over.idle {
             self.idle = v;
+        }
+        if let Some(v) = over.send {
+            self.send = v;
         }
         if let Some(v) = over.request_deadline {
             self.request_deadline = v;
@@ -837,6 +847,12 @@ pub struct TimeoutOverrides {
     #[serde(with = "humantime_serde::option")]
     #[schemars(with = "Option<String>")]
     pub idle: Option<Duration>,
+    /// See [`Timeouts::send`]; also the inactivity bound applied to
+    /// upgrade tunnels (e.g. WebSocket) — raise it or set `0s` for
+    /// long-idle tunnels.
+    #[serde(with = "humantime_serde::option")]
+    #[schemars(with = "Option<String>")]
+    pub send: Option<Duration>,
     /// See [`Timeouts::request_deadline`]; set `0s` for long-lived streams.
     #[serde(with = "humantime_serde::option")]
     #[schemars(with = "Option<String>")]
@@ -1279,5 +1295,52 @@ impl Default for CompressConfig {
             ],
             level: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timeouts_apply_overrides() {
+        let mut t = Timeouts::default();
+        let base = t.clone();
+        let over = TimeoutOverrides {
+            header_read: Some(Duration::from_secs(1)),
+            body_read: Some(Duration::from_secs(2)),
+            idle: Some(Duration::from_secs(3)),
+            send: Some(Duration::from_secs(4)),
+            request_deadline: Some(Duration::from_secs(5)),
+        };
+        t.apply_overrides(&over);
+        assert_eq!(t.header_read.as_secs(), 1);
+        assert_eq!(t.body_read.as_secs(), 2);
+        assert_eq!(t.idle.as_secs(), 3);
+        assert_eq!(t.send.as_secs(), 4);
+        assert_eq!(t.request_deadline.as_secs(), 5);
+
+        let mut t2 = base.clone();
+        t2.apply_overrides(&TimeoutOverrides::default());
+        assert_eq!(t2.send, base.send);
+        assert_eq!(t2.idle, base.idle);
+    }
+
+    #[test]
+    fn limits_apply_overrides() {
+        let mut l = Limits::default();
+        let base = l.clone();
+        let over = LimitOverrides {
+            header_bytes: Some(ByteSize::kib(8)),
+            body_bytes: Some(ByteSize::kib(64)),
+        };
+        l.apply_overrides(&over);
+        assert_eq!(l.header_bytes.0, 8 * 1024);
+        assert_eq!(l.body_bytes.0, 64 * 1024);
+
+        let mut l2 = base.clone();
+        l2.apply_overrides(&LimitOverrides::default());
+        assert_eq!(l2.header_bytes, base.header_bytes);
+        assert_eq!(l2.body_bytes, base.body_bytes);
     }
 }

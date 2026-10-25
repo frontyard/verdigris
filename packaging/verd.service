@@ -23,11 +23,17 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/var/lib/verd /var/log/verd /etc/verd
+ReadWritePaths=/var/lib/verd /var/log/verd
+ReadOnlyPaths=/etc/verd
 ProtectKernelTunables=true
 ProtectKernelModules=true
+ProtectKernelLogs=true
 ProtectControlGroups=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
 LimitNOFILE=1048576
 
 [Install]

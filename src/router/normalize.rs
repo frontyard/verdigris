@@ -12,6 +12,11 @@
 pub enum NormalizeError {
     /// Path contains a NUL byte (possibly percent-encoded).
     Nul,
+    /// Path contains an ASCII/control character (possibly
+    /// percent-encoded) — `%09`-style bytes are legal in a request
+    /// target but meaningless in a filesystem path and dangerous in
+    /// generated markup.
+    Control,
     /// The path bytes were not valid UTF-8 after percent-decoding.
     Utf8,
 }
@@ -20,6 +25,7 @@ impl std::fmt::Display for NormalizeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Nul => write!(f, "path contains NUL"),
+            Self::Control => write!(f, "path contains a control character"),
             Self::Utf8 => write!(f, "path is not valid UTF-8"),
         }
     }
@@ -34,6 +40,9 @@ pub fn normalize_path(raw: &str) -> Result<String, NormalizeError> {
         .map_err(|_| NormalizeError::Utf8)?;
     if decoded.contains('\0') {
         return Err(NormalizeError::Nul);
+    }
+    if decoded.chars().any(|c| c.is_control()) {
+        return Err(NormalizeError::Control);
     }
     let had_trailing_slash = decoded.ends_with('/') && decoded.len() > 1;
     let mut out: Vec<&str> = Vec::new();
@@ -110,6 +119,15 @@ mod tests {
     fn rejects_nul_and_bad_utf8() {
         assert_eq!(normalize_path("/a%00b"), Err(NormalizeError::Nul));
         assert_eq!(normalize_path("/%ff"), Err(NormalizeError::Utf8));
+    }
+
+    #[test]
+    fn rejects_decoded_control_chars() {
+        assert_eq!(normalize_path("/a%09b"), Err(NormalizeError::Control));
+        assert_eq!(normalize_path("/a%1fb"), Err(NormalizeError::Control));
+        assert_eq!(normalize_path("/a%7fb"), Err(NormalizeError::Control));
+        // raw space is fine — it is not a control character
+        assert_eq!(normalize_path("/a b").unwrap(), "/a b");
     }
 
     #[test]

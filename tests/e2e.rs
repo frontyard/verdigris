@@ -1997,3 +1997,57 @@ proxy = {{ upstream = "up" }}
 
     sd.send(true).unwrap();
 }
+
+#[tokio::test]
+async fn admin_local_only_guards() {
+    // token-less admin on loopback: DNS rebinding and cross-origin
+    // browser mutations must be refused while local tools still work
+    let (_base, admin, _rt, sd) = start(CONFIG).await;
+    let client = reqwest::Client::new();
+
+    // a public Host name is refused outright — even for GETs
+    let r = client
+        .get(format!("{admin}/config"))
+        .header("host", "attacker.example")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 403);
+
+    // cross-origin browser markers on a mutation are refused
+    for (k, v) in [
+        ("sec-fetch-site", "cross-site"),
+        ("origin", "https://evil.example"),
+    ] {
+        let r = client
+            .post(format!("{admin}/upstreams/nope/0/drain"))
+            .header(k, v)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 403, "{k}: {v} must be rejected");
+    }
+
+    // loopback Host + no browser markers: the guard passes and the
+    // request reaches routing (404 — no such cluster)
+    let r = client
+        .post(format!("{admin}/upstreams/nope/0/drain"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404);
+
+    // same-origin fetch markers are fine
+    let r = client
+        .post(format!("{admin}/upstreams/nope/0/drain"))
+        .header("sec-fetch-site", "same-origin")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404);
+
+    let r = client.get(format!("{admin}/config")).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+
+    sd.send(true).unwrap();
+}

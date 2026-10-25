@@ -21,7 +21,7 @@ Root configuration for a verdigris instance.
 | `log` | LogConfig | `{"access": {"enabled": true, "filter": null, "format": "json", "output": "stdout", "sample": 1.0}, "format": "json", "level": "info", "output": "stderr"}` | Server and access logging. |
 | `server` | ServerConfig | `{"graceful_timeout": {"nanos": 0, "secs": 30}, "listen": [{"addr": "0.0.0.0:80", "tls": false}], "max_connections": 65536, "max_connections_per_ip": 256, "security": {"content_type_options": true, "cross_domain_policy": "", "csp": null, "enabled": true, "frame_options": "DENY", "hsts": true, "hsts_max_age": 15552000, "hsts_subdomains": false, "referrer_policy": "strict-origin-when-cross-origin"}, "server_header": "verd", "trusted_proxies": []}` | Server-wide settings: listeners, connection limits, shutdown. |
 | `site` | [SiteConfig] | `[]` | Virtual sites. Requests are routed by the Host header. |
-| `timeouts` | Timeouts | `{"body_read": "1m", "header_read": "20s", "idle": "1m 15s", "request_deadline": "5m", "tls_handshake": "10s"}` | Default timeouts; individual routes may override. |
+| `timeouts` | Timeouts | `{"body_read": "1m", "header_read": "20s", "idle": "1m 15s", "request_deadline": "5m", "send": "1m", "tls_handshake": "10s"}` | Default timeouts; individual routes may override. |
 | `upstream` | object | `{}` | Named upstream clusters for reverse proxy routes. |
 
 ## `ServerConfig`
@@ -66,6 +66,7 @@ Timeout settings. `0s` disables a timeout.
 | `header_read` | string | `"20s"` | Time allowed to read request headers (slowloris protection). |
 | `idle` | string | `"1m 15s"` | Keep-alive idle time between requests on one connection. |
 | `request_deadline` | string | `"5m"` | Overall per-request deadline. Set to `0s` for long-lived routes (SSE, WebSocket, long-polling). |
+| `send` | string | `"1m"` | Write-side inactivity deadline: a send that stalls longer than this closes the connection (slow-client/slow-read protection). Progress resets it — large slow downloads are fine. `0s` disables. |
 | `tls_handshake` | string | `"10s"` | TLS handshake deadline. |
 
 ## `LogConfig`
@@ -579,6 +580,7 @@ Per-route timeout overrides; each absent field inherits the global value.
 | `header_read` | string \| null | `null` | See [`Timeouts::header_read`]. |
 | `idle` | string \| null | `null` | See [`Timeouts::idle`]. |
 | `request_deadline` | string \| null | `null` | See [`Timeouts::request_deadline`]; set `0s` for long-lived streams. |
+| `send` | string \| null | `null` | See [`Timeouts::send`]; also the inactivity bound applied to upgrade tunnels (e.g. WebSocket) — raise it or set `0s` for long-idle tunnels. |
 
 ## `UnavailableResponse`
 

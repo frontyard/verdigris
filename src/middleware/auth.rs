@@ -124,6 +124,16 @@ impl Auth {
         Err("auth block has no method".into())
     }
 
+    /// Name of the query parameter carrying the credential — `Some`
+    /// only for ApiKey auth in the `query` location. The cache layer
+    /// strips it from cache keys so secrets never persist to disk.
+    pub fn credential_query_param(&self) -> Option<&str> {
+        match self {
+            Auth::ApiKey(k) if k.location == cfg::ApiKeyLocation::Query => Some(&k.name),
+            _ => None,
+        }
+    }
+
     /// Verify the request's credentials.
     pub fn check(&self, parts: &http::request::Parts) -> Outcome {
         match self {
@@ -219,7 +229,11 @@ fn creds(parts: &http::request::Parts) -> Option<(String, String)> {
         .headers
         .get(AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Basic "))
+        .and_then(|v| {
+            // RFC 9110 §11: auth-scheme is case-insensitive
+            let (scheme, b64) = v.split_once(' ')?;
+            scheme.eq_ignore_ascii_case("basic").then_some(b64)
+        })
         .and_then(|b64| {
             use base64::Engine;
             base64::engine::general_purpose::STANDARD.decode(b64).ok()
@@ -264,7 +278,13 @@ impl Bearer {
         let Some(token) = token else {
             return Outcome::Rejected(unauthorized("Bearer"));
         };
-        if self.tokens.iter().any(|t| ct_eq(t, token.as_bytes())) {
+        // fold, not .any(): scanning every token avoids leaking the
+        // matching token's position in the list via early-exit timing
+        let ok = self
+            .tokens
+            .iter()
+            .fold(false, |acc, t| acc | ct_eq(t, token.as_bytes()));
+        if ok {
             Outcome::Authenticated(Identity(format!("token:{}", fingerprint(token))))
         } else {
             Outcome::Rejected(unauthorized("Bearer"))
@@ -287,9 +307,12 @@ impl ApiKey {
                     .map(|(_, v)| v.into_owned())
             }),
         };
+        let ok = self.keys.iter().fold(false, |acc, v| {
+            acc | ct_eq(v, presented.as_deref().unwrap_or("").as_bytes())
+        });
         match presented {
-            Some(k) if self.keys.iter().any(|v| ct_eq(v, k.as_bytes())) => {
-                Outcome::Authenticated(Identity(format!("key:{}", fingerprint(&k))))
+            Some(ref k) if ok => {
+                Outcome::Authenticated(Identity(format!("key:{}", fingerprint(k))))
             }
             Some(_) => {
                 Outcome::Rejected(unauthorized_msg(StatusCode::FORBIDDEN, "invalid api key"))
@@ -308,12 +331,13 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 /// A short non-reversible tag for a secret — used as the log/rate-limit
-/// identity instead of the secret itself.
+/// identity instead of the secret itself. Keyed with a per-process
+/// random seed so tags can't be precomputed offline to correlate a
+/// leaked log back to a token.
 fn fingerprint(secret: &str) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    secret.hash(&mut h);
-    format!("{:016x}", h.finish())
+    static SEED: std::sync::LazyLock<ahash::RandomState> =
+        std::sync::LazyLock::new(ahash::RandomState::new);
+    format!("{:016x}", SEED.hash_one(secret))
 }
 
 fn unauthorized(challenge: &str) -> http::Response<BoxBody> {

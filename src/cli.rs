@@ -64,21 +64,23 @@ pub fn run() -> ExitCode {
     match cli.command {
         Command::Run { config, watch } => cmd_run(config, watch),
         Command::Validate { config } => cmd_validate(config),
-        Command::Version => {
-            println!("verd {}", env!("CARGO_PKG_VERSION"));
-            if let Some(sha) = option_env!("VERD_GIT_SHA") {
-                println!("commit: {sha}");
-            }
-            println!(
-                "target: {}-{}",
-                std::env::consts::ARCH,
-                std::env::consts::OS
-            );
-            ExitCode::SUCCESS
-        }
+        Command::Version => cmd_version(),
         Command::Fmt { config, check } => cmd_fmt(config, check),
         Command::Schema { output } => cmd_schema(output),
     }
+}
+
+fn cmd_version() -> ExitCode {
+    println!("verd {}", env!("CARGO_PKG_VERSION"));
+    if let Some(sha) = option_env!("VERD_GIT_SHA") {
+        println!("commit: {sha}");
+    }
+    println!(
+        "target: {}-{}",
+        std::env::consts::ARCH,
+        std::env::consts::OS
+    );
+    ExitCode::SUCCESS
 }
 
 fn init_tracing(level: Option<&str>) {
@@ -395,5 +397,131 @@ mod tests {
         let tried = resolve_config_path(None).unwrap_err();
         assert_eq!(tried[0], PathBuf::from("verd.toml"));
         assert_eq!(tried[1], PathBuf::from("/etc/verd/verd.toml"));
+    }
+
+    fn write_cfg(dir: &tempfile::TempDir, text: &str) -> PathBuf {
+        let p = dir.path().join("verd.toml");
+        std::fs::write(&p, text).unwrap();
+        p
+    }
+
+    #[test]
+    fn parses_all_subcommands() {
+        let cli = Cli::try_parse_from(["verd", "run", "-c", "x.toml", "--watch"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Run {
+                config: Some(_),
+                watch: true
+            }
+        ));
+        let cli = Cli::try_parse_from(["verd", "validate", "-c", "x.toml"]).unwrap();
+        assert!(matches!(cli.command, Command::Validate { config: Some(_) }));
+        let cli = Cli::try_parse_from(["verd", "version"]).unwrap();
+        assert!(matches!(cli.command, Command::Version));
+        let cli = Cli::try_parse_from(["verd", "fmt", "--check"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Fmt {
+                config: None,
+                check: true
+            }
+        ));
+        let cli = Cli::try_parse_from(["verd", "schema", "-o", "s.json"]).unwrap();
+        assert!(matches!(cli.command, Command::Schema { output: Some(_) }));
+        let cli = Cli::try_parse_from(["verd", "--log-level", "debug", "version"]).unwrap();
+        assert_eq!(cli.log_level.as_deref(), Some("debug"));
+        assert!(Cli::try_parse_from(["verd", "bogus"]).is_err());
+        assert!(Cli::try_parse_from(["verd"]).is_err());
+    }
+
+    #[test]
+    fn cmd_version_ok() {
+        assert_eq!(cmd_version(), ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn cmd_validate_paths() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let valid = write_cfg(&dir, "[[site]]\nhosts = [\"x\"]\nroot = \"/tmp\"\n");
+        assert_eq!(cmd_validate(Some(valid)), ExitCode::SUCCESS);
+
+        // valid but with warnings (unusual log level)
+        let warned = write_cfg(
+            &dir,
+            "[[site]]\nhosts = [\"x\"]\nroot = \"/tmp\"\n[log]\nlevel = \"banana\"\n",
+        );
+        assert_eq!(cmd_validate(Some(warned)), ExitCode::SUCCESS);
+
+        // an invalid config: non-loopback admin without token
+        let invalid = write_cfg(
+            &dir,
+            "[admin]\nlisten = \"0.0.0.0:2019\"\n[[site]]\nhosts = [\"x\"]\nroot = \"/tmp\"\n",
+        );
+        assert_eq!(cmd_validate(Some(invalid)), ExitCode::FAILURE);
+
+        // unreadable / malformed
+        let missing = dir.path().join("ghost.toml");
+        assert_eq!(cmd_validate(Some(missing)), ExitCode::FAILURE);
+        let bad = write_cfg(&dir, "[[[\n");
+        assert_eq!(cmd_validate(Some(bad)), ExitCode::FAILURE);
+    }
+
+    #[test]
+    fn cmd_fmt_modes() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // toml_edit round-trips losslessly, so a parseable file always
+        // satisfies --check and format_file is a no-op
+        let cfg = write_cfg(&dir, "[[site]]\nhosts=[\"x\"]   \n");
+        assert_eq!(cmd_fmt(Some(cfg.clone()), true), ExitCode::SUCCESS);
+        assert_eq!(cmd_fmt(Some(cfg.clone()), false), ExitCode::SUCCESS);
+
+        // missing file → error; malformed → check-mode error
+        let ghost = dir.path().join("ghost.toml");
+        assert_eq!(cmd_fmt(Some(ghost), false), ExitCode::FAILURE);
+        let bad = write_cfg(&dir, "[[[\n");
+        assert_eq!(cmd_fmt(Some(bad), true), ExitCode::FAILURE);
+    }
+
+    #[test]
+    fn cmd_schema_outputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("schema.json");
+        assert_eq!(cmd_schema(Some(out.clone())), ExitCode::SUCCESS);
+        assert!(
+            std::fs::read_to_string(&out)
+                .unwrap()
+                .contains("\"Config\"")
+        );
+
+        // stdout variant
+        assert_eq!(cmd_schema(None), ExitCode::SUCCESS);
+
+        // unwritable target → failure
+        assert_eq!(
+            cmd_schema(Some(dir.path().join("no/such/dir/s.json"))),
+            ExitCode::FAILURE
+        );
+    }
+
+    #[test]
+    fn missing_config_error_is_exit_2() {
+        assert_eq!(
+            missing_config_error(&[PathBuf::from("a"), PathBuf::from("b")]),
+            ExitCode::from(2)
+        );
+    }
+
+    #[test]
+    fn cmd_run_rejects_bad_config() {
+        let dir = tempfile::tempdir().unwrap();
+        // load failure → exit 2
+        let bad = write_cfg(&dir, "[[[\n");
+        assert_eq!(cmd_run(Some(bad), false), ExitCode::from(2));
+        // semantic errors → exit 2 (before runtime build)
+        let invalid = write_cfg(&dir, "[[site]]\nroot = \"/tmp\"\n");
+        assert_eq!(cmd_run(Some(invalid), false), ExitCode::from(2));
     }
 }

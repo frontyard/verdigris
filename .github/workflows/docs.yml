@@ -16,9 +16,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@mdbook
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: taiki-e/install-action@aafe37d8c52b7112a59ade7606c9d466fc6290cb # mdbook
       # config reference is generated from the live schema
       - run: cargo run --quiet -- schema | python3 docs/gen-reference.py > docs/book/src/reference.md
       - run: |
@@ -31,7 +31,7 @@ jobs:
       - run: python3 docs/check-snippets.py
       - run: python3 docs/gen-llms-full.py
       - run: mdbook build docs/book
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         with:
           path: docs/book/book
@@ -44,5 +44,5 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/deploy-pages@v4
+      - uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
         id: deployment

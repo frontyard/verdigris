@@ -4,7 +4,8 @@
 //! [`Clusters`] registry shared by all proxy routes.
 
 pub mod cluster;
-mod headers;
+/// Header-policy helpers — crate-internal, exposed for fuzz targets.
+pub mod headers;
 mod lb;
 
 use std::collections::HashMap;
@@ -228,6 +229,23 @@ impl Proxy {
                     .map(|d| d.0.clone())
             })
             .flatten();
+        // a tunnel owns a socket after the response — keep the
+        // connection's admission slot (cloned share, not a new slot)
+        // counted for the tunnel's lifetime
+        let conn_slot = upgrade_intent
+            .then(|| req.extensions().get::<crate::server::ConnGuard>().cloned())
+            .flatten();
+        // route send deadline → tunnel inactivity bound (the upstream
+        // half of a tunnel has no TimeoutIo around it)
+        let send_deadline = upgrade_intent
+            .then(|| {
+                req.extensions()
+                    .get::<crate::server::timeout::SendDeadline>()
+                    .copied()
+            })
+            .flatten()
+            .map(|s| s.0)
+            .unwrap_or_default();
         let mut client_upgrade = if upgrade_intent {
             Some(hyper::upgrade::on(&mut req))
         } else {
@@ -313,9 +331,18 @@ impl Proxy {
             // per member/connection kind
             let mut headers = parts.headers.clone();
             headers::preserve_te_trailers(&mut headers, &orig_headers, h2);
-            if self.pass_host
-                && let Ok(v) = HeaderValue::from_str(&member.url.authority())
-            {
+            // exactly one outbound Host: the upstream authority when
+            // pass_host, else the client Host we routed on. `insert`
+            // collapses duplicate client Host headers (we routed on the
+            // first; the upstream must see that same value, not both),
+            // and it synthesizes Host for h2-inbound requests (whose
+            // authority lives in :authority) heading to h1 upstreams.
+            let host_out = if self.pass_host {
+                member.url.authority()
+            } else {
+                orig_host.clone()
+            };
+            if let Ok(v) = HeaderValue::from_str(&host_out) {
                 headers.insert(HOST, v);
             }
             if let Some(ops) = &self.headers {
@@ -402,6 +429,8 @@ impl Proxy {
                 }
                 let stop = TUNNEL_STOP.clone();
                 TUNNELS.spawn(async move {
+                    // conn slot held until the tunnel closes
+                    let _conn_slot = conn_slot;
                     crate::observe::metrics::tunnel_open();
                     let counts = (
                         Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -410,6 +439,7 @@ impl Proxy {
                     tokio::select! {
                         _ = stop.cancelled() => {}
                         _ = tunnel(client_up, upstream_up, counts.clone()) => {}
+                        _ = tunnel_idle(counts.clone(), send_deadline) => {}
                     }
                     crate::observe::metrics::tunnel_close(
                         counts.0.load(std::sync::atomic::Ordering::Relaxed),
@@ -550,6 +580,37 @@ async fn tunnel(
     }
 }
 
+/// Ends when a tunnel moves no bytes in either direction for `period`
+/// (the route's send deadline). An upstream that stops reading — or a
+/// tunnel left silent — would otherwise pin both sockets forever.
+/// `period == 0` means never fire.
+async fn tunnel_idle(
+    counts: (
+        Arc<std::sync::atomic::AtomicU64>,
+        Arc<std::sync::atomic::AtomicU64>,
+    ),
+    period: std::time::Duration,
+) {
+    if period.is_zero() {
+        std::future::pending::<()>().await;
+    }
+    let mut last = (
+        counts.0.load(std::sync::atomic::Ordering::Relaxed),
+        counts.1.load(std::sync::atomic::Ordering::Relaxed),
+    );
+    loop {
+        tokio::time::sleep(period).await;
+        let now = (
+            counts.0.load(std::sync::atomic::Ordering::Relaxed),
+            counts.1.load(std::sync::atomic::Ordering::Relaxed),
+        );
+        if now == last {
+            return;
+        }
+        last = now;
+    }
+}
+
 pin_project! {
     /// The upstream response body. When it completes cleanly the underlying
     /// connection is returned to the member's idle pool; when it errors or
@@ -596,5 +657,342 @@ impl Body for UpstreamBody {
 
     fn size_hint(&self) -> http_body::SizeHint {
         self.inner.size_hint()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[tokio::test(start_paused = true)]
+    async fn tunnel_idle_ends_quiet_tunnels_not_busy_ones() {
+        let counts = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
+        // quiet tunnel: fired after one idle window
+        let res = tokio::time::timeout(
+            std::time::Duration::from_secs(90),
+            tunnel_idle(counts.clone(), std::time::Duration::from_secs(30)),
+        )
+        .await;
+        assert!(res.is_ok(), "idle tunnel must end after one window");
+
+        // busy tunnel: bytes keep moving, watchdog never fires
+        let counts = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
+        let bump = {
+            let c = counts.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    c.0.fetch_add(1, Ordering::Relaxed);
+                }
+            })
+        };
+        let res = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            tunnel_idle(counts, std::time::Duration::from_secs(30)),
+        )
+        .await;
+        assert!(res.is_err(), "active tunnel must not be killed");
+        bump.abort();
+
+        // disabled: pending forever, timeout elapses
+        let counts = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
+        let res = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            tunnel_idle(counts, std::time::Duration::ZERO),
+        )
+        .await;
+        assert!(res.is_err(), "zero period must never fire");
+    }
+}
+
+#[cfg(test)]
+mod handle_tests {
+    use super::*;
+    use crate::config::model as cfg;
+    use crate::handler::RequestCtx;
+    use http::Method;
+    use http_body_util::BodyExt;
+    use std::net::SocketAddr;
+    use std::time::Duration;
+
+    fn ctx(path: &str) -> RequestCtx {
+        RequestCtx {
+            path: path.into(),
+            host: "cli.example".into(),
+            client_ip: "10.0.0.1".parse().unwrap(),
+            peer_ip: "10.0.0.1".parse().unwrap(),
+            peer_trusted: false,
+            tls: false,
+            scheme: "http",
+        }
+    }
+
+    fn req(uri: &str) -> http::Request<BoxBody> {
+        http::Request::builder()
+            .uri(uri)
+            .header(http::header::HOST, "cli.example")
+            .body(crate::body::empty())
+            .unwrap()
+    }
+
+    /// h1 upstream that replies `status`/`body` and records the Host it saw.
+    async fn fake(status: u16, body: &'static str) -> (SocketAddr, Arc<std::sync::Mutex<String>>) {
+        let lis = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = lis.local_addr().unwrap();
+        let hosts = Arc::new(std::sync::Mutex::new(String::new()));
+        let h = hosts.clone();
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = lis.accept().await {
+                let h = h.clone();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = vec![0u8; 8192];
+                    let mut used = 0;
+                    loop {
+                        match s.read(&mut buf[used..]).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => used += n,
+                        }
+                        if buf[..used].windows(4).any(|w| w == b"\r\n\r\n") {
+                            let text = String::from_utf8_lossy(&buf[..used]).to_string();
+                            if let Some(line) =
+                                text.lines().find(|l| l.to_lowercase().starts_with("host:"))
+                            {
+                                *h.lock().unwrap() = line[5..].trim().to_string();
+                            }
+                            let resp = format!(
+                                "HTTP/1.1 {status} X\r\ncontent-length: {}\r\n\r\n{body}",
+                                body.len()
+                            );
+                            let _ = s.write_all(resp.as_bytes()).await;
+                            used = 0;
+                        }
+                    }
+                });
+            }
+        });
+        (addr, hosts)
+    }
+
+    fn base(urls: Vec<String>) -> cfg::ProxyHandler {
+        cfg::ProxyHandler {
+            upstream: cfg::UpstreamRef::Urls(urls),
+            rewrite: None,
+            headers: None,
+            retries: cfg::RetryPolicy::default(),
+            pass_host: true,
+        }
+    }
+
+    fn proxy_for(urls: Vec<String>, f: impl FnOnce(&mut cfg::ProxyHandler)) -> Proxy {
+        let mut p = base(urls);
+        f(&mut p);
+        let empty = cfg::Config::default();
+        let mut clusters = Clusters::build(&empty).unwrap();
+        Proxy::build(&p, &mut clusters, "r").unwrap()
+    }
+
+    #[tokio::test]
+    async fn handle_happy_path_and_host_modes() {
+        let (addr, hosts) = fake(200, "hi").await;
+        // pass_host → upstream sees its own authority
+        let p = proxy_for(vec![format!("http://{addr}")], |p| p.pass_host = true);
+        let r = p.handle(req("/x"), &ctx("/x")).await;
+        assert_eq!(r.status(), 200);
+        r.into_body().collect().await.unwrap();
+        assert_eq!(hosts.lock().unwrap().as_str(), addr.to_string());
+
+        // !pass_host → upstream sees the routed client Host
+        let p = proxy_for(vec![format!("http://{addr}")], |p| p.pass_host = false);
+        let r = p.handle(req("/y"), &ctx("/y")).await;
+        assert_eq!(r.status(), 200);
+        r.into_body().collect().await.unwrap();
+        assert_eq!(hosts.lock().unwrap().as_str(), "cli.example");
+    }
+
+    #[tokio::test]
+    async fn rewrite_variants() {
+        let (addr, _) = fake(200, "hi").await;
+        let mk = |p: &Proxy, path: &str| p.rewrite_path(path);
+        // strip_prefix
+        let p = proxy_for(vec![format!("http://{addr}")], |p| {
+            p.rewrite = Some(cfg::Rewrite {
+                strip_prefix: Some("/api".into()),
+                ..Default::default()
+            });
+        });
+        assert_eq!(mk(&p, "/api/v1/x"), "/v1/x");
+        assert_eq!(mk(&p, "/api"), "/", "empty result becomes /");
+        // replace_prefix
+        let p = proxy_for(vec![format!("http://{addr}")], |p| {
+            p.rewrite = Some(cfg::Rewrite {
+                replace_prefix: Some(("/old".into(), "/new".into())),
+                ..Default::default()
+            });
+        });
+        assert_eq!(mk(&p, "/old/x"), "/new/x");
+        // regex
+        let p = proxy_for(vec![format!("http://{addr}")], |p| {
+            p.rewrite = Some(cfg::Rewrite {
+                regex: Some(cfg::RegexRewrite {
+                    pattern: "^/a/(.*)".into(),
+                    replace: "/b/$1".into(),
+                }),
+                ..Default::default()
+            });
+        });
+        assert_eq!(mk(&p, "/a/q"), "/b/q");
+        // no rewrite → verbatim
+        let p = proxy_for(vec![format!("http://{addr}")], |_| {});
+        assert_eq!(mk(&p, "/keep%2Fme"), "/keep%2Fme");
+        // no leading slash after rewrite → prepended
+        let p = proxy_for(vec![format!("http://{addr}")], |p| {
+            p.rewrite = Some(cfg::Rewrite {
+                regex: Some(cfg::RegexRewrite {
+                    pattern: "^/".into(),
+                    replace: "rel/".into(),
+                }),
+                ..Default::default()
+            });
+        });
+        assert_eq!(mk(&p, "/x"), "/rel/x");
+    }
+
+    #[test]
+    fn build_errors() {
+        let empty = cfg::Config::default();
+        let mut clusters = Clusters::build(&empty).unwrap();
+        // unknown named upstream
+        let mut p = base(vec![]);
+        p.upstream = cfg::UpstreamRef::Name("nope".into());
+        assert!(Proxy::build(&p, &mut clusters, "r").is_err());
+        // bad rewrite regex
+        let mut p = base(vec!["http://127.0.0.1:9".into()]);
+        p.rewrite = Some(cfg::Rewrite {
+            regex: Some(cfg::RegexRewrite {
+                pattern: "(".into(),
+                replace: "x".into(),
+            }),
+            ..Default::default()
+        });
+        assert!(Proxy::build(&p, &mut clusters, "r").is_err());
+    }
+
+    #[tokio::test]
+    async fn unavailable_when_no_healthy_members() {
+        let (addr, _) = fake(200, "hi").await;
+        let p = proxy_for(vec![format!("http://{addr}")], |_| {});
+        for m in &p.cluster.members {
+            m.mark_sick(Duration::from_secs(60));
+        }
+        let r = p.handle(req("/"), &ctx("/")).await;
+        assert_eq!(r.status(), 502);
+    }
+
+    #[tokio::test]
+    async fn connect_failure_maps_to_502_and_retry_exhaustion() {
+        // nothing listening on :1 → connect refused; GET is idempotent so
+        // retries fire until max_per_request, then error_for(Connect)
+        let p = proxy_for(vec!["http://127.0.0.1:1".into()], |p| {
+            p.retries.max_per_request = 1;
+        });
+        let r = p.handle(req("/"), &ctx("/")).await;
+        assert_eq!(r.status(), 502);
+        // non-idempotent method skips the retry path entirely
+        let rq = http::Request::builder()
+            .method(Method::POST)
+            .uri("/")
+            .header(http::header::HOST, "cli.example")
+            .body(crate::body::empty())
+            .unwrap();
+        let r = p.handle(rq, &ctx("/")).await;
+        assert_eq!(r.status(), 502);
+    }
+
+    #[test]
+    fn error_for_maps_all_arms() {
+        assert_eq!(Proxy::error_for(&UpError::ConnectTimeout).status(), 504);
+        assert_eq!(Proxy::error_for(&UpError::HeaderTimeout).status(), 504);
+        assert_eq!(Proxy::error_for(&UpError::Busy).status(), 503);
+        assert_eq!(Proxy::error_for(&UpError::Connect).status(), 502);
+        assert_eq!(Proxy::error_for(&UpError::Resolve).status(), 502);
+        assert_eq!(Proxy::error_for(&UpError::Send("x".into())).status(), 502);
+        assert_eq!(Proxy::error_for(&UpError::Tls("x".into())).status(), 502);
+    }
+
+    #[tokio::test]
+    async fn unavailable_custom_response() {
+        let (addr, _) = fake(200, "hi").await;
+        let mut c = cfg::UpstreamConfig {
+            servers: vec![format!("http://{addr}")],
+            unavailable: cfg::UnavailableResponse {
+                status: 503,
+                body: Some("try later".into()),
+            },
+            ..Default::default()
+        };
+        let cluster = Arc::new(Cluster::build("t", &c).unwrap());
+        let empty = cfg::Config::default();
+        let mut clusters = Clusters::build(&empty).unwrap();
+        let p = Proxy {
+            cluster: cluster.clone(),
+            rewrite: None,
+            headers: None,
+            retries: cfg::RetryPolicy::default(),
+            pass_host: true,
+        };
+        for m in &p.cluster.members {
+            m.mark_sick(Duration::from_secs(60));
+        }
+        let r = p.handle(req("/"), &ctx("/")).await;
+        assert_eq!(r.status(), 503);
+        let b = r.into_body().collect().await.unwrap().to_bytes();
+        assert!(b.starts_with(b"try later"));
+        let _ = (&mut c, &mut clusters);
+    }
+
+    #[test]
+    fn clusters_resolve_and_iterate() {
+        let cfg_text = r##"
+            [upstream.u]
+            servers = ["http://127.0.0.1:9"]
+        "##;
+        let cfg = crate::config::validate::parse_test_config(cfg_text);
+        let mut clusters = Clusters::build(&cfg).unwrap();
+        assert_eq!(clusters.iter().count(), 1);
+        // named resolves
+        let c = clusters
+            .resolve(&cfg::UpstreamRef::Name("u".into()), "r")
+            .unwrap();
+        assert_eq!(c.name, "u");
+        // anonymous urls materialize and dedupe on the same key
+        let a = clusters
+            .resolve(
+                &cfg::UpstreamRef::Urls(vec!["http://127.0.0.1:8".into()]),
+                "k",
+            )
+            .unwrap();
+        let b = clusters
+            .resolve(
+                &cfg::UpstreamRef::Urls(vec!["http://127.0.0.1:8".into()]),
+                "k",
+            )
+            .unwrap();
+        assert!(Arc::ptr_eq(&a, &b));
+        // unknown name errors
+        assert!(
+            clusters
+                .resolve(&cfg::UpstreamRef::Name("nope".into()), "r")
+                .is_err()
+        );
+        // empty urls error
+        assert!(
+            clusters
+                .resolve(&cfg::UpstreamRef::Urls(vec![]), "k2")
+                .is_err()
+        );
+        // spawn_background on a cluster without active health → noop
+        clusters.spawn_background(tokio_util::sync::CancellationToken::new());
     }
 }

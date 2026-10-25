@@ -19,9 +19,9 @@ jobs:
           - x86_64-unknown-linux-musl
           - aarch64-unknown-linux-musl
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: ${{ matrix.target }}
       - run: cargo install cross --locked
@@ -35,7 +35,7 @@ jobs:
           strip dist/$t/verd || true
           tar -C dist/$t -czf verd-$t.tar.gz verd
           sha256sum verd-$t.tar.gz >> checksums.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-${{ matrix.target }}
           path: |
@@ -47,12 +47,12 @@ jobs:
     name: sbom
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2
         with:
           tool: cargo-sbom
       - run: cargo sbom > verd-sbom.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sbom
           path: verd-sbom.json
@@ -62,24 +62,37 @@ jobs:
     needs: [build, sbom]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: release-*
           merge-multiple: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: sbom
       # one checksums.txt: each matrix leg appended its own line
       - run: sort -u checksums.txt -o checksums.txt
-      - uses: sigstore/cosign-installer@v3
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
       - name: sign artifacts (keyless)
         run: |
           for f in verd-*.tar.gz checksums.txt verd-sbom.json; do
             cosign sign-blob --yes "$f" \
               --bundle "$f.cosign.bundle"
           done
-      - uses: softprops/action-gh-release@v2
+      # curated notes come from the CHANGELOG.md section matching the
+      # tag; generated "What's Changed" is appended below it
+      - name: release notes from CHANGELOG.md
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          {
+            awk -v head="## [${v}]" '
+              index($0, head) == 1 { on = 1; next }
+              /^## \[/ && on { exit }
+              /^\[[^]]+\]:/ { next }   # keepachangelog link refs
+              on' CHANGELOG.md
+            printf '\n---\n%s\n' "Static musl binaries for x86_64 and aarch64 Linux, plus a multi-arch container image (ghcr.io). Artifacts are cosign keyless-signed; verd-sbom.json is the CycloneDX SBOM."
+          } > notes.md
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
             verd-*.tar.gz
@@ -87,20 +100,15 @@ jobs:
             verd-sbom.json
             *.cosign.bundle
           generate_release_notes: true
-          # crates.io: the package publishes as `verd`; binaries and
-          # images are the primary distribution channel.
-          body: |
-            Static musl binaries for x86_64 and aarch64 Linux, plus a
-            multi-arch container image (ghcr.io). Artifacts are cosign
-            keyless-signed; `verd-sbom.json` is the CycloneDX SBOM.
+          body_path: notes.md
 
   image:
     name: image
     needs: [build]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: release-*
           merge-multiple: true
@@ -110,14 +118,14 @@ jobs:
           cp dist/x86_64-unknown-linux-musl/verd dist/amd64/
           cp dist/aarch64-unknown-linux-musl/verd dist/arm64/
           cp Dockerfile.release dist/Dockerfile.release
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: dist
           file: dist/Dockerfile.release

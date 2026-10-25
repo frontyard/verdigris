@@ -19,6 +19,7 @@ max_connections_per_ip = 1000
 header_read = "10s"    # until the first request's headers arrive
 idle = "60s"           # keep-alive between requests
 body_read = "30s"
+send = "60s"           # write inactivity; also bounds silent tunnels
 tls_handshake = "10s"
 request_deadline = "0" # whole-request cap, per route; 0 = none
 ```

@@ -6,6 +6,9 @@ addr = "0.0.0.0:8080"
 
 [admin]
 listen = "0.0.0.0:2019"
+# demo only: non-loopback admin requires a token; real deployments
+# should export VERD_ADMIN_TOKEN (or bind admin to loopback instead)
+token = "${VERD_ADMIN_TOKEN:-verd-demo-admin}"
 
 [log.access]
 output = "stdout"
@@ -21,4 +24,4 @@ static = { root = "/var/www/site" }
 
 [[site.route]]
 prefix = "/api"
-proxy = ["http://upstream:9000"]
+proxy = { upstream = ["http://upstream:9000"] }

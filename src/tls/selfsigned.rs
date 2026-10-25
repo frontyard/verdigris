@@ -28,3 +28,17 @@ pub fn generate_pems(hosts: &[String]) -> (String, String) {
         rcgen::generate_simple_self_signed(hosts.to_vec()).expect("self-signed generation");
     (cert.pem(), signing_key.serialize_pem())
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn generates_usable_cert() {
+        let ck = super::generate(&["x.test".to_string()]).unwrap();
+        assert!(!ck.cert.is_empty());
+        let _ = ck;
+        let (cert, key) = super::generate_pems(&["a.test".into(), "*.b.test".into()]);
+        assert!(cert.contains("BEGIN CERTIFICATE") && key.contains("PRIVATE KEY"));
+        // empty hosts falls back to "localhost"
+        assert!(super::generate(&[]).is_ok());
+    }
+}

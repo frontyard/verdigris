@@ -74,6 +74,38 @@ pub fn primary(
     Key { raw, hash }
 }
 
+/// Remove `name=` pairs from a request target's query — used to keep
+/// credentials carried in a query parameter (ApiKey auth with
+/// `location = "query"`) out of persisted cache keys. The comparison
+/// percent-decodes the pair's key, so `api_%6bey=x` cannot smuggle the
+/// credential into the key under an encoded name. Returns the target
+/// unchanged when nothing matched.
+pub fn strip_query_param<'a>(target: &'a str, name: &str) -> std::borrow::Cow<'a, str> {
+    use std::borrow::Cow;
+    let Some(q) = target.find('?') else {
+        return Cow::Borrowed(target);
+    };
+    let query = &target[q + 1..];
+    let n_pairs = query.split('&').count();
+    let kept: Vec<&str> = query
+        .split('&')
+        .filter(|pair| {
+            let k = pair.split('=').next().unwrap_or("");
+            percent_encoding::percent_decode_str(k).decode_utf8_lossy() != name
+        })
+        .collect();
+    if kept.len() == n_pairs {
+        return Cow::Borrowed(target);
+    }
+    let mut out = String::with_capacity(target.len());
+    out.push_str(&target[..q]);
+    if !kept.is_empty() {
+        out.push('?');
+        out.push_str(&kept.join("&"));
+    }
+    Cow::Owned(out)
+}
+
 /// FNV-1a 64 — deterministic across builds, unlike `DefaultHasher`.
 pub fn fnv1a(s: &str) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -139,5 +171,17 @@ mod tests {
         );
         // cosmetic differences still fold: case and trailing dot
         assert_eq!(base.hash, primary(&get, "https", "H.", "/p", &[]).hash);
+    }
+
+    #[test]
+    fn strip_query_param_removes_secret_even_encoded() {
+        assert_eq!(strip_query_param("/p?a=1&k=s3kret&b=2", "k"), "/p?a=1&b=2");
+        assert_eq!(strip_query_param("/p?a=1&k=s3kret", "k"), "/p?a=1");
+        assert_eq!(strip_query_param("/p?k=s3kret", "k"), "/p");
+        assert_eq!(strip_query_param("/p?a=1", "k"), "/p?a=1");
+        // percent-encoded param name still matches (decoded compare)
+        assert_eq!(strip_query_param("/p?%6b=s3kret", "k"), "/p");
+        // bare ? with nothing after also collapses
+        assert_eq!(strip_query_param("/p?", "k"), "/p?");
     }
 }

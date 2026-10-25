@@ -499,6 +499,7 @@ mod tests {
             request_counter: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             first_request_done: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             read_gate: crate::server::timeout::DeadlineGate::default(),
+            conn_guard: crate::server::ConnGuard::for_test("127.0.0.1".parse().unwrap()),
         };
         let mut rec = LogRecord::new(
             &ctx,
@@ -520,5 +521,145 @@ mod tests {
 
         assert!(Filter::parse("bogus == 1").is_err());
         assert!(Filter::parse("status >= xx").is_err());
+    }
+}
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::*;
+    use std::net::IpAddr;
+
+    fn rec() -> LogRecord {
+        LogRecord {
+            req_id: "r1".into(),
+            client_ip: IpAddr::from([127, 0, 0, 1]),
+            method: "GET".into(),
+            host: "h".into(),
+            path: "/p".into(),
+            proto: "HTTP/1.1".into(),
+            tls: None,
+            route: None,
+            status: 200,
+            bytes: 10,
+            duration_ms: 1,
+            user_agent: "ua".into(),
+            referer: String::new(),
+            upstream: None,
+            identity: None,
+            cache: None,
+            meters: None,
+            req_bytes: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        }
+    }
+
+    #[test]
+    fn filter_operators() {
+        // each op family on each field kind
+        let cases: &[(&str, bool)] = &[
+            ("path == \"/p\"", true),
+            ("path != \"/p\"", false),
+            ("path <> \"/q\"", true),
+            ("path =~ \"/p*\"", true),
+            ("path !~ \"/q*\"", true),
+            ("host = \"h\"", true),
+            ("method = \"GET\"", true),
+            ("method > \"A\"", true),
+            ("method < \"ZZZ\"", true),
+            ("status = 200", true),
+            ("status > 199", true),
+            ("status < 201", true),
+            ("status >= 200", true),
+            ("status <= 200", true),
+            ("status =~ \"2*\"", false), // glob on status is false
+            ("upstream = \"u\"", false), // absent → ""
+            ("identity != \"\"", false),
+        ];
+        for (expr, want) in cases {
+            let f = Filter::parse(expr).unwrap();
+            assert_eq!(f.passes(&rec()), *want, "{expr}");
+        }
+        // conjunction + errors
+        let f = Filter::parse("status >= 400 && path != \"/healthz\"").unwrap();
+        assert!(!f.passes(&rec()));
+        let mut r = rec();
+        r.status = 500;
+        assert!(f.passes(&r));
+        assert!(Filter::parse("bogus = x").is_err());
+        assert!(Filter::parse("status >= abc").is_err());
+        // empty filter passes everything
+        assert!(Filter::default().passes(&rec()));
+        assert!(Filter::parse("").unwrap().passes(&rec()));
+    }
+
+    #[test]
+    fn logger_build_log_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.log");
+        let cfg = crate::config::model::AccessLog {
+            enabled: true,
+            output: path.to_string_lossy().into(),
+            format: crate::config::model::LogFormat::Json,
+            ..Default::default()
+        };
+        let l = AccessLogger::build(&cfg).unwrap();
+        l.log(&rec());
+        l.reopen(); // swaps the file sink
+        l.log(&rec());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("\"status\":200"));
+
+        // bad filter → build error
+        let cfg = crate::config::model::AccessLog {
+            filter: Some("bogus = x".into()),
+            ..cfg
+        };
+        assert!(AccessLogger::build(&cfg).is_err());
+        // disabled → nothing written
+        let cfg = crate::config::model::AccessLog {
+            enabled: false,
+            output: dir.path().join("b.log").to_string_lossy().into(),
+            ..Default::default()
+        };
+        let l = AccessLogger::build(&cfg).unwrap();
+        l.log(&rec());
+        // sample=0 → records dropped by the hash gate
+        let cfg = crate::config::model::AccessLog {
+            sample: 0.0,
+            output: "stdout".into(),
+            ..Default::default()
+        };
+        let l = AccessLogger::build(&cfg).unwrap();
+        l.log(&rec());
+        // pretty format
+        let cfg = crate::config::model::AccessLog {
+            output: dir.path().join("c.log").to_string_lossy().into(),
+            format: crate::config::model::LogFormat::Pretty,
+            ..Default::default()
+        };
+        let l = AccessLogger::build(&cfg).unwrap();
+        l.log(&rec());
+        assert!(
+            std::fs::read_to_string(dir.path().join("c.log"))
+                .unwrap()
+                .contains("GET")
+        );
+        // reopen on stdout logger → no-op
+        let l = AccessLogger::build(&crate::config::model::AccessLog::default()).unwrap();
+        l.reopen();
+    }
+
+    #[test]
+    fn escape_and_finalize() {
+        assert_eq!(escape("plain/path"), "plain/path");
+        assert_eq!(escape("a\"b"), "a\\\"b");
+        assert!(escape("a\x01b").contains("\\x01"));
+        assert_eq!(escape("uni—dash"), "uni—dash");
+
+        let mut r = rec();
+        r.finalize(std::time::Instant::now(), 503, 42);
+        assert_eq!(r.status, 503);
+        assert_eq!(r.bytes, 42);
+        let f = r.fields();
+        assert_eq!(f.status, 503);
     }
 }

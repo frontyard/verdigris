@@ -32,6 +32,11 @@ pub struct ConnCtx {
     /// Read-deadline gate: incremented while a request cycle is in
     /// flight, permanently `off` for upgrade tunnels.
     pub read_gate: crate::server::timeout::DeadlineGate,
+    /// This connection's admission slot. Clones share one slot — the
+    /// proxy's upgrade path hands a clone to the tunnel task so an
+    /// upgraded tunnel keeps counting against connection limits until
+    /// it actually closes.
+    pub conn_guard: crate::server::ConnGuard,
 }
 
 /// Entry point for every request, called by hyper per request on a
@@ -61,6 +66,9 @@ pub async fn handle(
     parts
         .extensions
         .insert(crate::server::timeout::DeadlineOff(ctx.read_gate.clone()));
+    // ...and hold the connection's admission slot for the tunnel's
+    // lifetime, so upgrade tunnels can't escape max_connections limits
+    parts.extensions.insert(ctx.conn_guard.clone());
     let req_id = RequestId::extract(&parts.headers);
     parts.extensions.insert(req_id.clone());
     let method_is_head = parts.method == http::Method::HEAD;
@@ -128,7 +136,7 @@ async fn pipeline(
     // 2. path normalization
     let path = parts.uri.path().to_string();
     let normalized = normalize::normalize_path(&path).map_err(|e| match e {
-        NormalizeError::Nul | NormalizeError::Utf8 => {
+        NormalizeError::Nul | NormalizeError::Control | NormalizeError::Utf8 => {
             error_response(http::StatusCode::BAD_REQUEST, "malformed path")
         }
     })?;
@@ -262,7 +270,14 @@ async fn pipeline(
     }
 
     // 6.8 cache — decide cacheability while `parts` is still available;
-    // the actual lookup happens after the request body is wrapped below
+    // the actual lookup happens after the request body is wrapped below.
+    // A query-carried api key is stripped from the key so credentials
+    // don't persist in the store.
+    let strip_query = route
+        .middleware
+        .auth
+        .as_ref()
+        .and_then(|a| a.credential_query_param());
     let cache_stage = route.middleware.cache.as_ref().map(|cm| {
         crate::cache::stage::plan(
             cm,
@@ -271,6 +286,7 @@ async fn pipeline(
             if ctx.tls { "https" } else { "http" },
             &normalized,
             identity.is_some(),
+            strip_query,
         )
     });
 
@@ -291,6 +307,11 @@ async fn pipeline(
         ),
         route.timeouts.body_read,
     );
+    // the route's send deadline also bounds tunnel inactivity if this
+    // request upgrades downstream of here
+    parts
+        .extensions
+        .insert(crate::server::timeout::SendDeadline(route.timeouts.send));
     let req = http::Request::from_parts(parts, body::boxed(body));
 
     // 8. handler under the route's request deadline
@@ -465,4 +486,76 @@ pub fn error_response(status: http::StatusCode, msg: &str) -> http::Response<Box
         http::HeaderValue::from_static("text/plain; charset=utf-8"),
     );
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::IpAddr;
+
+    #[test]
+    fn real_ip_trust_walk() {
+        let trusted: Vec<ipnet::IpNet> = vec!["10.0.0.0/8".parse().unwrap()];
+        let untrusted_peer: IpAddr = "203.0.113.9".parse().unwrap();
+        let trusted_peer: IpAddr = "10.0.0.5".parse().unwrap();
+        let mk = |xff: Option<&str>| {
+            let mut b = http::Request::builder().uri("/");
+            if let Some(v) = xff {
+                b = b.header("x-forwarded-for", v);
+            }
+            b.body(crate::body::empty()).unwrap().into_parts().0
+        };
+        // untrusted peer: XFF ignored entirely
+        let p = mk(Some("1.2.3.4"));
+        assert_eq!(real_ip(untrusted_peer, &p, &trusted), untrusted_peer);
+        // trusted peer, no XFF → peer
+        let p = mk(None);
+        assert_eq!(real_ip(trusted_peer, &p, &trusted), trusted_peer);
+        // trusted peer: first untrusted from the right
+        let p = mk(Some("1.1.1.1, 10.0.0.9, 2.2.2.2"));
+        assert_eq!(
+            real_ip(trusted_peer, &p, &trusted),
+            IpAddr::from([2, 2, 2, 2])
+        );
+        // all-trusted chain → leftmost
+        let p = mk(Some("10.1.1.1, 10.2.2.2"));
+        assert_eq!(
+            real_ip(trusted_peer, &p, &trusted),
+            IpAddr::from([10, 1, 1, 1])
+        );
+        // garbage XFF → peer
+        let p = mk(Some("not-an-ip"));
+        assert_eq!(real_ip(trusted_peer, &p, &trusted), trusted_peer);
+    }
+
+    #[test]
+    fn header_limit_and_content_length() {
+        let p = http::Request::builder()
+            .uri("/")
+            .header("x-a", "1")
+            .header("content-length", "7")
+            .body(crate::body::empty())
+            .unwrap()
+            .into_parts()
+            .0;
+        assert!(within_header_limit(&p, 100));
+        assert!(!within_header_limit(&p, 1));
+        assert_eq!(content_length(&p), Some(7));
+
+        let p = http::Request::builder()
+            .uri("/")
+            .header("content-length", "garbage")
+            .body(crate::body::empty())
+            .unwrap()
+            .into_parts()
+            .0;
+        assert_eq!(content_length(&p), None);
+    }
+
+    #[test]
+    fn error_response_shape() {
+        let r = error_response(http::StatusCode::BAD_GATEWAY, "upstream down");
+        assert_eq!(r.status(), 502);
+        assert_eq!(r.headers()["content-type"], "text/plain; charset=utf-8");
+    }
 }

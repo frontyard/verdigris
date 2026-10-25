@@ -73,4 +73,20 @@ mod tests {
         let schema = json_schema();
         assert!(schema.get("$schema").is_some() || schema.get("title").is_some());
     }
+
+    #[test]
+    fn format_file_rewrites_unformatted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("verd.toml");
+        std::fs::write(&path, "[[site]]\nhosts=[\"a\"]   # keep\n").unwrap();
+        // toml_edit is lossless: a parseable document round-trips
+        // unchanged, so this is a no-op
+        assert!(!format_file(&path).unwrap());
+        assert!(std::fs::read_to_string(&path).unwrap().contains("# keep"));
+
+        let missing = dir.path().join("ghost.toml");
+        assert!(matches!(format_file(&missing), Err(FmtError::Io(_, _))));
+        std::fs::write(&path, "[[[").unwrap();
+        assert!(matches!(format_file(&path), Err(FmtError::Syntax(_, _))));
+    }
 }

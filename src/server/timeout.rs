@@ -44,6 +44,10 @@ pub struct DeadlineGate {
     /// parked connection task must be woken so `poll_read` re-enters and
     /// the deadline can arm — nothing else drives that transition.
     pub read_waker: Arc<Mutex<Option<std::task::Waker>>>,
+    /// Armed while a `poll_write`/`poll_flush` stalls (slow-read
+    /// protection — `timeouts.send`). `(armed_at, duration)`; cleared on
+    /// any write progress. Same watchdog force-close as `armed`.
+    pub send_armed: Arc<Mutex<Option<(Instant, Duration)>>>,
 }
 
 impl DeadlineGate {
@@ -66,27 +70,40 @@ impl DeadlineGate {
 #[derive(Clone)]
 pub struct DeadlineOff(pub DeadlineGate);
 
-/// An `AsyncRead`/`AsyncWrite` wrapper enforcing the read deadline. `Unpin`
-/// whenever `T` is, so hyper's `serve_connection` accepts it.
+/// Marker placed in request extensions: the route's send-inactivity
+/// deadline, applied to upgrade-tunnel traffic in both directions — the
+/// upstream half of a tunnel isn't wrapped by [`TimeoutIo`], so the
+/// tunnel task enforces it via a byte-progress watchdog.
+#[derive(Clone, Copy)]
+pub struct SendDeadline(pub Duration);
+
+/// An `AsyncRead`/`AsyncWrite` wrapper enforcing read and send deadlines.
+/// `Unpin` whenever `T` is, so hyper's `serve_connection` accepts it.
 pub struct TimeoutIo<T> {
     inner: T,
     header_read: Duration,
     idle: Duration,
+    /// Write-side inactivity deadline: a `poll_write`/`poll_flush` that
+    /// stays pending longer than this means the client stopped reading
+    /// (slow-read DoS) — the watchdog force-closes the socket.
+    send: Duration,
     first_request_done: Arc<AtomicBool>,
     gate: DeadlineGate,
     /// A second handle on the same socket — lets the armed-deadline
-    /// watchdog force-close the connection when `poll_read` is never
-    /// re-entered (see `DeadlineGate::armed`). `None` when the fd
-    /// duplication failed.
+    /// watchdog force-close the connection when `poll_read`/`poll_write`
+    /// is never re-entered (see `DeadlineGate::armed`). `None` when the
+    /// fd duplication failed.
     tcp: Option<Arc<std::net::TcpStream>>,
 }
 
 impl<T> TimeoutIo<T> {
-    /// Wrap `inner` with phase-aware read deadlines.
+    /// Wrap `inner` with phase-aware read deadlines and a send timeout.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         inner: T,
         header_read: Duration,
         idle: Duration,
+        send: Duration,
         first_request_done: Arc<AtomicBool>,
         gate: DeadlineGate,
         tcp: Option<Arc<std::net::TcpStream>>,
@@ -95,10 +112,67 @@ impl<T> TimeoutIo<T> {
             inner,
             header_read,
             idle,
+            send,
             first_request_done,
             gate,
             tcp,
         }
+    }
+
+    /// Arm the send-inactivity deadline (idempotent while armed) and
+    /// spawn the force-close watchdog when `tcp` is available.
+    fn arm_send_deadline(&self) {
+        if self.send.is_zero() {
+            return;
+        }
+        let mut armed = self
+            .gate
+            .send_armed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // fast path: the deadline already elapsed and we're being polled
+        // — report it directly
+        if let Some((t, d)) = *armed
+            && t.elapsed() >= d
+        {
+            // leave armed; callers surface the error via the slot
+            return;
+        }
+        if armed.is_none() {
+            let dur = self.send;
+            *armed = Some((Instant::now(), dur));
+            if let Some(tcp) = self.tcp.clone() {
+                let send_armed = self.gate.send_armed.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(dur).await;
+                    let hit = {
+                        let armed = send_armed.lock().unwrap_or_else(|e| e.into_inner());
+                        armed.is_some_and(|(t, d)| t.elapsed() >= d)
+                    };
+                    if hit {
+                        let _ = tcp.shutdown(std::net::Shutdown::Both);
+                    }
+                });
+            }
+        }
+    }
+
+    /// Send-side progress — clear any armed send deadline.
+    fn clear_send_deadline(&self) {
+        self.gate
+            .send_armed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+    }
+
+    /// Whether the armed send deadline has already elapsed.
+    fn send_expired(&self) -> bool {
+        self.gate
+            .send_armed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some_and(|(t, d)| t.elapsed() >= d)
     }
 }
 
@@ -185,15 +259,57 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for TimeoutIo<T> {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+        let this = self.get_mut();
+        if this.send_expired() {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "send deadline exceeded",
+            )));
+        }
+        match Pin::new(&mut this.inner).poll_write(cx, buf) {
+            Poll::Pending => {
+                this.arm_send_deadline();
+                Poll::Pending
+            }
+            ready => {
+                this.clear_send_deadline();
+                ready
+            }
+        }
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+        let this = self.get_mut();
+        if this.send_expired() {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "send deadline exceeded",
+            )));
+        }
+        match Pin::new(&mut this.inner).poll_flush(cx) {
+            Poll::Pending => {
+                this.arm_send_deadline();
+                Poll::Pending
+            }
+            ready => {
+                this.clear_send_deadline();
+                ready
+            }
+        }
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+        let this = self.get_mut();
+        match Pin::new(&mut this.inner).poll_shutdown(cx) {
+            Poll::Pending => {
+                this.arm_send_deadline();
+                Poll::Pending
+            }
+            ready => {
+                this.clear_send_deadline();
+                ready
+            }
+        }
     }
 
     fn poll_write_vectored(
@@ -201,7 +317,23 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for TimeoutIo<T> {
         cx: &mut Context<'_>,
         bufs: &[io::IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.get_mut().inner).poll_write_vectored(cx, bufs)
+        let this = self.get_mut();
+        if this.send_expired() {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "send deadline exceeded",
+            )));
+        }
+        match Pin::new(&mut this.inner).poll_write_vectored(cx, bufs) {
+            Poll::Pending => {
+                this.arm_send_deadline();
+                Poll::Pending
+            }
+            ready => {
+                this.clear_send_deadline();
+                ready
+            }
+        }
     }
 
     fn is_write_vectored(&self) -> bool {
@@ -254,6 +386,7 @@ mod tests {
             inner,
             Duration::from_secs(60),
             Duration::from_secs(90),
+            Duration::from_secs(30),
             Arc::new(AtomicBool::new(first_done)),
             gate.clone(),
             None,
@@ -329,6 +462,67 @@ mod tests {
     }
 
     #[test]
+    fn pending_write_arms_send_deadline() {
+        let (_a, b) = duplex(8);
+        let gate = DeadlineGate::default();
+        let mut t = io(b, false, &gate);
+        let (w, _) = waker();
+        let mut cx = Context::from_waker(&w);
+        // fill the pipe so the next write must stall
+        match Pin::new(&mut t).poll_write(&mut cx, &[0u8; 8]) {
+            Poll::Ready(Ok(8)) => {}
+            other => panic!("fill write failed: {other:?}"),
+        }
+        match Pin::new(&mut t).poll_write(&mut cx, &[1u8; 4]) {
+            Poll::Pending => {}
+            other => panic!("expected stalled write, got {other:?}"),
+        }
+        let d = gate
+            .send_armed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .map(|(_, d)| d);
+        assert_eq!(d, Some(Duration::from_secs(30)));
+    }
+
+    #[tokio::test]
+    async fn write_progress_clears_send_deadline() {
+        let (mut a, b) = duplex(8);
+        let gate = DeadlineGate::default();
+        let mut t = io(b, false, &gate);
+        let (w, _) = waker();
+        let mut cx = Context::from_waker(&w);
+        let _ = Pin::new(&mut t).poll_write(&mut cx, &[0u8; 8]);
+        assert!(Pin::new(&mut t).poll_write(&mut cx, &[1u8; 4]).is_pending());
+        assert!(gate.send_armed.lock().unwrap().is_some());
+        // peer reads → the stalled write can now proceed → arm clears
+        let mut scratch = [0u8; 8];
+        let _ = a.read(&mut scratch).await.unwrap();
+        match Pin::new(&mut t).poll_write(&mut cx, &[1u8; 4]) {
+            Poll::Ready(Ok(_)) => {}
+            other => panic!("expected progress, got {other:?}"),
+        }
+        assert!(gate.send_armed.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn elapsed_send_deadline_errors() {
+        let (_a, b) = duplex(64);
+        let gate = DeadlineGate::default();
+        *gate.send_armed.lock().unwrap() = Some((
+            Instant::now() - Duration::from_secs(120),
+            Duration::from_secs(60),
+        ));
+        let mut t = io(b, false, &gate);
+        let (w, _) = waker();
+        let mut cx = Context::from_waker(&w);
+        match Pin::new(&mut t).poll_write(&mut cx, &[1u8; 4]) {
+            Poll::Ready(Err(e)) => assert_eq!(e.kind(), io::ErrorKind::TimedOut),
+            other => panic!("expected TimedOut, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn elapsed_deadline_errors() {
         let (_a, b) = duplex(64);
         let gate = DeadlineGate::default();
@@ -378,6 +572,7 @@ mod tests {
             stream,
             Duration::from_millis(60),
             Duration::from_millis(60),
+            Duration::from_secs(60),
             Arc::new(AtomicBool::new(false)),
             gate,
             Some(dup),

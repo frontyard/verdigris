@@ -52,7 +52,7 @@ pub async fn accept_loop(
         // resolve the current generation per connection — kept listeners
         // serve a reloaded config immediately
         let rt = shared.load();
-        let Some(_guard) = rt.limits.admit(peer.ip()) else {
+        let Some(guard) = rt.limits.admit(peer.ip()) else {
             crate::observe::metrics::conn_rejected();
             tracing::debug!(%peer, "connection rejected: limit exceeded");
             drop(stream);
@@ -66,8 +66,7 @@ pub async fn accept_loop(
         };
         let watcher = graceful.watcher();
         conns.spawn(async move {
-            let _g = _guard;
-            serve_conn(stream, peer, acceptor, rt, watcher).await;
+            serve_conn(stream, peer, acceptor, rt, watcher, guard).await;
         });
     }
 
@@ -93,6 +92,7 @@ async fn serve_conn(
     acceptor: Option<TlsAcceptor>,
     rt: Arc<Runtime>,
     watcher: Watcher,
+    conn_guard: crate::server::ConnGuard,
 ) {
     if let Err(e) = stream.set_nodelay(true) {
         tracing::debug!(%peer, error = %e, "set_nodelay failed");
@@ -125,6 +125,7 @@ async fn serve_conn(
                         tls_stream,
                         timeouts.header_read,
                         timeouts.idle,
+                        timeouts.send,
                         first_request_done.clone(),
                         read_gate.clone(),
                         watchdog_tcp.clone(),
@@ -146,6 +147,7 @@ async fn serve_conn(
             stream,
             timeouts.header_read,
             timeouts.idle,
+            timeouts.send,
             first_request_done.clone(),
             read_gate.clone(),
             watchdog_tcp.clone(),
@@ -159,6 +161,7 @@ async fn serve_conn(
         request_counter: Arc::new(AtomicUsize::new(0)),
         first_request_done: first_request_done.clone(),
         read_gate,
+        conn_guard,
     };
     crate::observe::metrics::conn_active(1.0);
     let svc = service_fn(|req| {
@@ -177,6 +180,17 @@ async fn serve_conn(
     builder
         .http1()
         .max_buf_size(HTTP1_MAX_BUF.max(header_limit.saturating_add(8 * 1024)));
+    // h2 hardening — don't rely on library defaults: bound concurrent
+    // streams, cap the decoded header list at our own header limit, and
+    // keep-alive pings evict dead/hoarded connections (ping floods are
+    // rate-limited inside h2 itself).
+    builder
+        .http2()
+        .timer(hyper_util::rt::TokioTimer::new())
+        .max_concurrent_streams(200)
+        .max_header_list_size(u32::try_from(rt.config.limits.header_bytes.0).unwrap_or(u32::MAX))
+        .keep_alive_interval(Some(std::time::Duration::from_secs(20)))
+        .keep_alive_timeout(std::time::Duration::from_secs(10));
     // `serve_connection_with_upgrades` so WebSocket-style requests can
     // detach into the proxy tunnel; `UpgradeableConnection` still
     // implements `GracefulConnection` for draining.

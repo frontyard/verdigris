@@ -410,3 +410,90 @@ fn mapped_raw(map: std::sync::Arc<memmap2::Mmap>, offset: u64, len: u64) -> BoxB
 pub fn mapped(map: &FileMap, offset: u64, len: u64) -> BoxBody {
     mapped_raw(map.0.clone(), offset, len)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http_body_util::BodyExt;
+
+    #[tokio::test]
+    async fn full_and_empty() {
+        let b = full("abc").collect().await.unwrap().to_bytes();
+        assert_eq!(&b[..], b"abc");
+        let b = empty().collect().await.unwrap().to_bytes();
+        assert!(b.is_empty());
+    }
+
+    #[tokio::test]
+    async fn file_body_reads_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f");
+        std::fs::write(&path, "0123456789").unwrap();
+        let f = std::fs::File::open(&path).unwrap();
+        let b = file(f, 2, 4).collect().await.unwrap().to_bytes();
+        assert_eq!(&b[..], b"2345");
+
+        // shared-file variant
+        let f = std::sync::Arc::new(std::fs::File::open(&path).unwrap());
+        let b = file_shared(f, 0, 3).collect().await.unwrap().to_bytes();
+        assert_eq!(&b[..], b"012");
+
+        // mmap variant
+        let f = std::fs::File::open(&path).unwrap();
+        let map = FileMap::new(&f).unwrap();
+        assert_eq!(map.len(), 10);
+        let b = mapped(&map, 4, 3).collect().await.unwrap().to_bytes();
+        assert_eq!(&b[..], b"456");
+    }
+
+    #[tokio::test]
+    async fn limit_body_enforces_and_counts() {
+        let inner = full("0123456789");
+        let b = LimitBody::new(inner, 5);
+        assert!(b.collect().await.is_err(), "over-limit → error frame");
+
+        // under the limit → passes through, counter shared
+        let count = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let inner = full("abc");
+        let b = LimitBody::counted(inner, 5, count.clone());
+        let got = b.collect().await.unwrap().to_bytes();
+        assert_eq!(&got[..], b"abc");
+        assert_eq!(count.load(std::sync::atomic::Ordering::Relaxed), 3);
+    }
+
+    #[tokio::test]
+    async fn timeout_body_times_out_slow_frames() {
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<Frame<Bytes>, BoxError>>(1);
+        let stream =
+            futures_util::stream::unfold(
+                rx,
+                |mut rx| async move { rx.recv().await.map(|f| (f, rx)) },
+            );
+        let inner = boxed(http_body_util::StreamBody::new(stream));
+        let mut b = std::pin::pin!(TimeoutBody::new(inner, Duration::from_millis(30)));
+        // first frame arrives promptly
+        tx.send(Ok(Frame::data(Bytes::from_static(b"x"))))
+            .await
+            .unwrap();
+        let f = std::future::poll_fn(|cx| b.as_mut().poll_frame(cx)).await;
+        assert!(f.unwrap().is_ok());
+        // next frame never arrives → timeout error
+        let f = std::future::poll_fn(|cx| b.as_mut().poll_frame(cx)).await;
+        assert!(f.unwrap().is_err());
+    }
+
+    #[test]
+    fn body_forbidden_rules() {
+        use http::{Method, StatusCode};
+        assert!(response_body_forbidden(&Method::HEAD, StatusCode::OK));
+        assert!(response_body_forbidden(
+            &Method::GET,
+            StatusCode::NO_CONTENT
+        ));
+        assert!(response_body_forbidden(
+            &Method::GET,
+            StatusCode::NOT_MODIFIED
+        ));
+        assert!(!response_body_forbidden(&Method::GET, StatusCode::OK));
+    }
+}

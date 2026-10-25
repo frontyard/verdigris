@@ -157,10 +157,10 @@ impl ConnLimits {
         }
         *entry += 1;
         drop(entry);
-        Some(ConnGuard {
+        Some(ConnGuard(Arc::new(ConnSlot {
             limits: self.clone(),
             ip,
-        })
+        })))
     }
 
     /// Current global connection count.
@@ -169,20 +169,47 @@ impl ConnLimits {
     }
 }
 
-/// Releases a connection slot on drop.
-pub struct ConnGuard {
+/// A connection slot. `Clone` shares the *same* slot — the counters
+/// release only when the last clone drops. The connection task holds
+/// one; the proxy's upgrade path hands another to the tunnel task so an
+/// upgraded tunnel keeps counting against `max_connections_per_ip`
+/// until it actually closes.
+#[derive(Clone)]
+pub struct ConnGuard(
+    // never read — the Arc is the guard; dropping the last clone
+    // releases the slot via ConnSlot::drop
+    #[allow(dead_code)] Arc<ConnSlot>,
+);
+
+impl ConnGuard {
+    /// A slot on a throwaway `ConnLimits` — for tests that need a
+    /// `ConnCtx` without going through admission.
+    #[cfg(test)]
+    pub(crate) fn for_test(ip: std::net::IpAddr) -> Self {
+        Self(Arc::new(ConnSlot {
+            limits: Arc::new(ConnLimits::new(&cfg::ServerConfig::default())),
+            ip,
+        }))
+    }
+}
+
+/// Shared slot state behind [`ConnGuard`]; the decrement lives here so
+/// clones can't double-release.
+struct ConnSlot {
     limits: Arc<ConnLimits>,
     ip: std::net::IpAddr,
 }
 
-impl Drop for ConnGuard {
+impl Drop for ConnSlot {
     fn drop(&mut self) {
         self.limits.global.fetch_sub(1, Ordering::Relaxed);
-        if let Some(mut n) = self.limits.per_ip.get_mut(&self.ip) {
-            *n = n.saturating_sub(1);
-            if *n == 0 {
-                drop(n);
-                self.limits.per_ip.remove(&self.ip);
+        // `entry` holds the shard lock across decrement+remove: a plain
+        // get_mut→remove sequence could drop an entry another thread
+        // just incremented for the same ip
+        if let dashmap::Entry::Occupied(mut e) = self.limits.per_ip.entry(self.ip) {
+            *e.get_mut() = e.get().saturating_sub(1);
+            if *e.get() == 0 {
+                e.remove();
             }
         }
     }
@@ -464,4 +491,27 @@ async fn reload_inner(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conn_guard_clone_shares_one_slot() {
+        let limits = Arc::new(ConnLimits::new(&cfg::ServerConfig::default()));
+        let ip = "10.0.0.7".parse().unwrap();
+        let g = limits.admit(ip).unwrap();
+        assert_eq!(limits.active(), 1);
+        assert_eq!(*limits.per_ip.get(&ip).unwrap(), 1);
+        // the tunnel's clone holds the same slot — dropping the conn's
+        // guard must not release it while the tunnel lives
+        let g2 = g.clone();
+        drop(g);
+        assert_eq!(limits.active(), 1);
+        assert_eq!(*limits.per_ip.get(&ip).unwrap(), 1);
+        drop(g2);
+        assert_eq!(limits.active(), 0);
+        assert!(limits.per_ip.get(&ip).is_none());
+    }
 }

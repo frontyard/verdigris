@@ -140,4 +140,56 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn build_rejects_bad_method_header_and_regex() {
+        let m = MatchConditions {
+            methods: vec!["NOT A METHOD".into()],
+            ..Default::default()
+        };
+        assert!(Conditions::build(&m).is_err());
+        let m = MatchConditions {
+            headers: [("bad name".into(), "v".into())].into_iter().collect(),
+            ..Default::default()
+        };
+        assert!(Conditions::build(&m).is_err());
+        let m = MatchConditions {
+            query: [("k".into(), "re:(".into())].into_iter().collect(),
+            ..Default::default()
+        };
+        assert!(Conditions::build(&m).is_err());
+    }
+
+    #[test]
+    fn matches_all_condition_kinds() {
+        let m = MatchConditions {
+            methods: vec!["GET".into()],
+            headers: [("x-env".into(), "re:^prod".into())].into_iter().collect(),
+            query: [
+                ("debug".into(), "".into()), // presence only
+                ("v".into(), "2".into()),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        let c = Conditions::build(&m).unwrap();
+        let mk = |method: &str, uri: &str, env: Option<&str>| {
+            let mut b = http::Request::builder().method(method).uri(uri);
+            if let Some(v) = env {
+                b = b.header("x-env", v);
+            }
+            b.body(crate::body::empty()).unwrap().into_parts().0
+        };
+        assert!(c.matches(&mk("GET", "/p?debug&v=2", Some("prod-us"))));
+        assert!(!c.matches(&mk("POST", "/p?debug&v=2", Some("prod-us"))));
+        assert!(!c.matches(&mk("GET", "/p?debug&v=2", None)));
+        assert!(!c.matches(&mk("GET", "/p?debug&v=2", Some("dev"))));
+        assert!(!c.matches(&mk("GET", "/p?v=2", Some("prod")))); // debug absent
+        assert!(!c.matches(&mk("GET", "/p?debug&v=1", Some("prod"))));
+        // no query on the uri at all
+        assert!(!c.matches(&mk("GET", "/p", Some("prod"))));
+        // empty conditions match anything
+        let c2 = Conditions::default();
+        assert!(c2.matches(&mk("DELETE", "/", None)));
+    }
 }
