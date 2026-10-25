@@ -1,6 +1,7 @@
 name: Fuzz
 
 on:
+  workflow_dispatch:
   pull_request:
     paths: ["fuzz/**", "src/**"]
   schedule:
