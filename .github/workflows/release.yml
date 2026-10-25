@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build:
-    name: build ${{ matrix.target }}
+    name: build (${{ matrix.target }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -42,7 +42,7 @@ jobs:
             dist/
 
   sbom:
-    name: cargo-sbom
+    name: sbom
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,7 +54,7 @@ jobs:
           path: verd-sbom.json
 
   release:
-    name: github release
+    name: release
     needs: [build, sbom]
     runs-on: ubuntu-latest
     steps:
@@ -91,7 +91,7 @@ jobs:
             keyless-signed; `verd-sbom.json` is the CycloneDX SBOM.
 
   image:
-    name: container image
+    name: image
     needs: [build]
     runs-on: ubuntu-latest
     steps:

@@ -22,6 +22,10 @@ jobs:
   clippy:
     name: clippy (${{ matrix.toolchain }})
     runs-on: ubuntu-latest
+    env:
+      # rust-toolchain.toml pins "stable"; env var takes precedence so
+      # the 1.88 leg actually runs 1.88
+      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
     strategy:
       matrix:
         toolchain: [stable, "1.88"]
@@ -37,6 +41,8 @@ jobs:
   test:
     name: test (${{ matrix.toolchain }})
     runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
     strategy:
       matrix:
         toolchain: [stable, "1.88"]
@@ -61,7 +67,7 @@ jobs:
         run: cargo doc --no-deps
 
   audit:
-    name: cargo audit
+    name: audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -70,7 +76,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
   deny:
-    name: cargo deny
+    name: deny
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -78,7 +84,7 @@ jobs:
       - run: cargo deny check
 
   coverage:
-    name: llvm-cov
+    name: coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

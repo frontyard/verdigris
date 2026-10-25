@@ -11,9 +11,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y wrk nginx
-      - name: verd vs nginx
-        run: BENCH_DUR=15s ./bench/run.sh
+      - name: run matrix
+        run: DURATION=15s ./bench/run.sh
       - uses: actions/upload-artifact@v4
         with:
           name: bench-results
-          path: bench/results.json
+          path: bench/results.*

@@ -21,7 +21,11 @@ jobs:
       - uses: taiki-e/install-action@mdbook
       # config reference is generated from the live schema
       - run: cargo run --quiet -- schema | python3 docs/gen-reference.py > docs/book/src/reference.md
-      - run: git diff --exit-code docs/book/src/reference.md || { echo "::error::reference.md is stale; regenerate: verd schema | python3 docs/gen-reference.py"; exit 1; }
+      - run: |
+          git diff --exit-code docs/book/src/reference.md || {
+            echo "::error::reference.md is stale; regenerate: verd schema | python3 docs/gen-reference.py"
+            exit 1
+          }
       # every TOML snippet in the docs and llms.txt must validate
       - run: cargo build --quiet --release
       - run: python3 docs/check-snippets.py

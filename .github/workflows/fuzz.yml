@@ -9,7 +9,7 @@ on:
 jobs:
   soak:
     if: github.event_name == 'schedule'
-    name: rss soak (30s)
+    name: soak (rss)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,7 +18,7 @@ jobs:
       - run: cargo test --test fault -- --ignored --nocapture
 
   smoke:
-    name: fuzz smoke (${{ matrix.target }})
+    name: smoke (${{ matrix.target }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -32,7 +32,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
       - run: cargo install cargo-fuzz --locked
       - name: short fuzz run
-        run: cargo fuzz run ${{ matrix.target }} fuzz -- -max_total_time=${{ env.FUZZ_TIME }} -artifact_prefix=/tmp/
+        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=${{ env.FUZZ_TIME }} -artifact_prefix=/tmp/
         env:
           FUZZ_TIME: ${{ github.event_name == 'schedule' && 900 || 60 }}
       - uses: actions/upload-artifact@v4
