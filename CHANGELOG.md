@@ -11,6 +11,12 @@ publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
+### Added
+
+- **Top-level `LICENSE` file** — dual-license pointer (MIT OR
+  Apache-2.0, SPDX) alongside `LICENSE-MIT`/`LICENSE-APACHE` so the
+  CII "license in a standard location" criterion is met literally.
+
 ## [0.2.7] - 2026-10-25
 
 ### Changed
