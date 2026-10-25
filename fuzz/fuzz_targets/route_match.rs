@@ -41,13 +41,14 @@ fuzz_target!(|data: &[u8]| {
     let Some((_, site)) = idx.lookup_idx(host) else {
         return;
     };
-    let req = http::Request::builder()
+    let Ok(req) = http::Request::builder()
         .method("GET")
         .uri(format!("http://{host}{norm}"))
         .body(())
-        .unwrap()
-        .into_parts()
-        .0;
+    else {
+        return;
+    };
+    let req = req.into_parts().0;
     // never panics on arbitrary host/path pairs
     let _ = site.match_route_idx(&req, &norm);
 });
