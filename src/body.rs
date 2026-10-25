@@ -95,7 +95,7 @@ impl Body for FileBody {
     }
 }
 
-/// Same as [`file`] but shares an already-open fd — the disk cache keeps
+/// Same as [`file()`] but shares an already-open fd — the disk cache keeps
 /// one `Arc<File>` per object and clones it per hit (an `Arc` bump, not
 /// another `open(2)`/`dup(2)`). Deliberately *not* mmap'd here: callers
 /// that can cache the map (the disk index) use [`FileMap`]/[`mapped`]
@@ -135,7 +135,7 @@ mod imp {
 
 /// A shared, read-only `mmap` of an immutable file. Cheap to clone;
 /// each hit builds `Bytes` views onto page-cache memory without a
-/// single syscall. See [`imp::map_file`] for the safety contract.
+/// single syscall. See `imp::map_file` for the safety contract.
 #[derive(Clone)]
 pub struct FileMap(std::sync::Arc<memmap2::Mmap>);
 
@@ -217,7 +217,7 @@ impl Body for MmapBody {
 }
 
 /// A response body serving `len` bytes of `file` starting at `offset`
-/// (blocking `std::fs` — see [`FileBody`]).
+/// (blocking `std::fs` — see `FileBody`).
 pub fn file(file: std::fs::File, offset: u64, len: u64) -> BoxBody {
     file_shared(std::sync::Arc::new(file), offset, len)
 }

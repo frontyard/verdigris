@@ -13,7 +13,7 @@
 //! resolve handles once per owning object — [`RouteMeters`] on a
 //! `router::Route`, [`MemberMeters`]/[`ClusterMeters`] on the upstream
 //! side, [`CacheMeters`] on a store — into `OnceLock`/`DashMap` slots
-//! gated by [`installed`]. A steady-state request then costs a handful
+//! gated by `installed`. A steady-state request then costs a handful
 //! of atomic ops, not a registry traversal or an allocation.
 
 use std::sync::Arc;

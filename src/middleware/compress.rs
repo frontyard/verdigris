@@ -19,7 +19,7 @@ use crate::config::model::CompressConfig;
 use crate::errors::BoxError;
 
 /// A negotiated compression algorithm (its `Accept-Encoding` token is
-/// [`Algo::token`]).
+/// `Algo::token`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Algo {
     /// Brotli — highest preference.

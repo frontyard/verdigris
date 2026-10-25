@@ -131,6 +131,10 @@ impl ConnLimits {
 
     /// Try to admit a connection from `ip`. Returns a guard that releases
     /// the slot on drop, or `None` when a limit is exceeded.
+    // fetch_update is deprecated on newer toolchains, but its replacement
+    // (try_update) is still unstable on the MSRV toolchain — allow until
+    // MSRV >= the stabilizing version.
+    #[allow(deprecated)]
     pub fn admit(self: &Arc<Self>, ip: std::net::IpAddr) -> Option<ConnGuard> {
         // global first — the common rejection
         if self

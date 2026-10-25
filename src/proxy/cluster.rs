@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use http::uri::Scheme;
 use rustls::ClientConfig;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use tokio::net::TcpStream;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -796,7 +797,7 @@ fn build_tls_client(tls: &cfg::UpstreamTls) -> Result<Arc<ClientConfig>, String>
         if let Some(ca) = &tls.ca {
             let data = std::fs::read(ca)
                 .map_err(|e| format!("cannot read upstream CA {}: {e}", ca.display()))?;
-            let certs = rustls_pemfile::certs(&mut data.as_slice())
+            let certs = CertificateDer::pem_reader_iter(data.as_slice())
                 .collect::<Result<Vec<CertificateDer>, _>>()
                 .map_err(|e| format!("cannot parse upstream CA {}: {e}", ca.display()))?;
             let (_, ignored) = roots.add_parsable_certificates(certs);

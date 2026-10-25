@@ -90,6 +90,9 @@ pub async fn handle(
 
 /// The pipeline proper; `Err` carries a ready-made response for early exits
 /// (limits, auth, redirects) that skip the handler.
+// Err is deliberately a full Response — it's a hot early-exit path and
+// the variant IS the value; boxing would add an alloc per rejection.
+#[allow(clippy::result_large_err)]
 async fn pipeline(
     mut parts: http::request::Parts,
     body: Incoming,

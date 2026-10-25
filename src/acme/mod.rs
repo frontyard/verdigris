@@ -23,6 +23,7 @@ use instant_acme::{
     Account, AccountCredentials, ChallengeType, ExternalAccountKey, Identifier, NewAccount,
     NewOrder, OrderStatus, RetryPolicy,
 };
+use rustls::pki_types::pem::PemObject;
 use rustls::sign::CertifiedKey;
 use tokio_util::sync::CancellationToken;
 
@@ -369,23 +370,25 @@ impl AcmeManager {
 /// Parse PEM chain + key into a rustls [`CertifiedKey`].
 fn key_from_pems(chain_pem: &str, key_pem: &str) -> Result<CertifiedKey, String> {
     let mut rd = std::io::BufReader::new(chain_pem.as_bytes());
-    let certs: Vec<rustls::pki_types::CertificateDer<'static>> = rustls_pemfile::certs(&mut rd)
-        .collect::<Result<_, _>>()
-        .map_err(|e| format!("cert PEM: {e}"))?;
+    let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
+        rustls::pki_types::CertificateDer::pem_reader_iter(&mut rd)
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("cert PEM: {e}"))?;
     if certs.is_empty() {
         return Err("cert PEM contains no certificates".into());
     }
     let mut rd = std::io::BufReader::new(key_pem.as_bytes());
-    let key = rustls_pemfile::private_key(&mut rd)
-        .map_err(|e| format!("key PEM: {e}"))?
-        .ok_or("key PEM contains no private key")?;
+    let key = rustls::pki_types::PrivateKeyDer::from_pem_reader(&mut rd)
+        .map_err(|e| format!("key PEM: {e}"))?;
     crate::tls::manual::build_key(certs, key)
 }
 
 /// Leaf `notAfter` of a PEM chain — re-parse via storage's helper.
 fn storage_not_after(chain_pem: &str) -> Option<SystemTime> {
     let mut rd = std::io::BufReader::new(chain_pem.as_bytes());
-    let der = rustls_pemfile::certs(&mut rd).next()?.ok()?;
+    let der = rustls::pki_types::CertificateDer::pem_reader_iter(&mut rd)
+        .next()?
+        .ok()?;
     let (_, cert) = x509_parser::parse_x509_certificate(&der).ok()?;
     let ts = cert.validity().not_after.timestamp();
     (ts > 0).then(|| SystemTime::UNIX_EPOCH + Duration::from_secs(ts as u64))

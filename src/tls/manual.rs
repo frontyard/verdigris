@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::sign::CertifiedKey;
 use tokio_util::sync::CancellationToken;
@@ -26,7 +27,7 @@ pub fn load_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>, String> {
     let data = std::fs::read(path)
         .map_err(|e| format!("cannot read certificate {}: {e}", path.display()))?;
     let mut rd = std::io::BufReader::new(data.as_slice());
-    let certs: Vec<_> = rustls_pemfile::certs(&mut rd)
+    let certs: Vec<_> = CertificateDer::pem_reader_iter(&mut rd)
         .collect::<Result<_, _>>()
         .map_err(|e| format!("cannot parse certificate PEM {}: {e}", path.display()))?;
     if certs.is_empty() {
@@ -40,9 +41,8 @@ pub fn load_key(path: &Path) -> Result<PrivateKeyDer<'static>, String> {
     let data = std::fs::read(path)
         .map_err(|e| format!("cannot read private key {}: {e}", path.display()))?;
     let mut rd = std::io::BufReader::new(data.as_slice());
-    rustls_pemfile::private_key(&mut rd)
-        .map_err(|e| format!("cannot parse private key PEM {}: {e}", path.display()))?
-        .ok_or_else(|| format!("no private key found in {}", path.display()))
+    PrivateKeyDer::from_pem_reader(&mut rd)
+        .map_err(|e| format!("cannot parse private key PEM {}: {e}", path.display()))
 }
 
 /// Combine chain + key, verifying they match where the provider can tell.

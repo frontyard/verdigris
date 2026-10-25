@@ -82,7 +82,7 @@ impl Site {
         self.match_route_idx(parts, normalized_path).map(|(_, r)| r)
     }
 
-    /// [`match_route`] plus the route's index in `self.routes` (needed by
+    /// [`Self::match_route`] plus the route's index in `self.routes` (needed by
     /// the cache's background-revalidation handles).
     pub fn match_route_idx(
         &self,
@@ -167,7 +167,7 @@ impl HostIndex {
         self.lookup_idx(host).map(|(_, s)| s)
     }
 
-    /// [`lookup`] plus the site's index in `self.sites`.
+    /// [`Self::lookup`] plus the site's index in `self.sites`.
     pub fn lookup_idx(&self, host: &str) -> Option<(usize, &Site)> {
         let host = normalize_host(host);
         if let Some(&i) = self.exact.get(&host) {

@@ -15,6 +15,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use rustls::pki_types::CertificateDer;
+use rustls::pki_types::pem::PemObject;
+
 /// Storage rooted at `acme.storage`.
 #[derive(Debug, Clone)]
 pub struct Storage {
@@ -99,7 +102,7 @@ fn sanitize(host: &str) -> String {
 /// `notBefore`/`notAfter` of the first certificate in a PEM bundle.
 fn leaf_validity(pem: &str) -> Option<(SystemTime, SystemTime)> {
     let mut rd = std::io::BufReader::new(pem.as_bytes());
-    let der = rustls_pemfile::certs(&mut rd).next()?.ok()?;
+    let der = CertificateDer::pem_reader_iter(&mut rd).next()?.ok()?;
     let (_, cert) = x509_parser::parse_x509_certificate(&der).ok()?;
     let v = cert.validity();
     let (nb, na) = (v.not_before.timestamp(), v.not_after.timestamp());

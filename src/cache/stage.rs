@@ -1,7 +1,7 @@
 //! The pipeline-facing cache stage: bypass rules, lookup, conditional
 //! revalidation, SWR background refresh, stale-if-error fallback, and
 //! request coalescing. The route's handler is invoked through
-//! [`run_handler`] so revalidation uses identical semantics.
+//! `run_handler` so revalidation uses identical semantics.
 
 use std::sync::Arc;
 
