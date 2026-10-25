@@ -191,7 +191,8 @@ reverse proxy with load balancing and retries, response caching
 (RAM/disk/hybrid), compression, rate limiting, CORS, security headers,
 admin API with atomic reloads, Prometheus metrics.
 
-[Unreleased]: https://github.com/frontyard/verdigris/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/frontyard/verdigris/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/frontyard/verdigris/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/frontyard/verdigris/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/frontyard/verdigris/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/frontyard/verdigris/compare/v0.2.0...v0.2.1
