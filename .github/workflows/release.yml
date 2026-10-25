@@ -93,7 +93,9 @@ jobs:
         run: |
           for f in verd-*.tar.gz checksums.txt verd-sbom.json; do
             cosign sign-blob --yes "$f" \
-              --bundle "$f.cosign.bundle"
+              --bundle "$f.cosign.bundle" \
+              --output-signature "$f.sig" \
+              --output-certificate "$f.pem"
           done
       # curated notes come from the CHANGELOG.md section matching the
       # tag; generated "What's Changed" is appended below it
@@ -119,6 +121,8 @@ jobs:
             checksums.txt
             verd-sbom.json
             *.cosign.bundle
+            *.sig
+            *.pem
           generate_release_notes: true
           body_path: notes.md
 

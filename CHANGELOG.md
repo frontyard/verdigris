@@ -18,6 +18,10 @@ publishes the matching section as the GitHub release notes.
   CII "license in a standard location" criterion is met literally.
 - **OpenSSF Best Practices badge** in the README — self-certification
   submitted at bestpractices.dev (project 15915).
+- **Release signatures in Scorecard-detectable formats** — cosign now
+  also emits detached `*.sig` + `*.pem` files alongside the
+  `*.cosign.bundle` bundles; OpenSSF Signed-Releases scans release
+  assets for these suffixes.
 
 ## [0.2.7] - 2026-10-25
 
