@@ -7,13 +7,13 @@ step on a maintainer machine.
 ## Cut a release
 
 ```sh
-scripts/release.sh            # patch (default)
-scripts/release.sh minor
-scripts/release.sh major
-scripts/release.sh 0.3.0      # explicit version
+release.sh            # patch (default)
+release.sh minor
+release.sh major
+release.sh 0.3.0      # explicit version
 ```
 
-The script (`scripts/release.sh`) does, in order:
+The script (`release.sh`) does, in order:
 
 1. Guardrails: clean tracked tree, tag must not exist yet.
 2. `Cargo.toml` version bump + `Cargo.lock` re-sync (CI builds

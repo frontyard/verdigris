@@ -4,15 +4,14 @@ on:
   push:
     tags: ["v*"]
 
-permissions:
-  contents: write
-  packages: write
-  id-token: write # cosign keyless signing
+permissions: {}
 
 jobs:
   build:
     name: build (${{ matrix.target }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       matrix:
         target:
@@ -20,13 +19,19 @@ jobs:
           - aarch64-unknown-linux-musl
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: ${{ matrix.target }}
+          lookup-only: true # release builds read caches but never write them
       - run: cargo install cross --locked
       - name: build static binary
         run: cross build --release --locked --target ${{ matrix.target }}
+        env:
+          # baked into the binary: /version and --version report it
+          VERD_GIT_SHA: ${{ github.sha }}
       - name: package artifact
         run: |
           t=${{ matrix.target }}
@@ -46,8 +51,12 @@ jobs:
   sbom:
     name: sbom
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2
         with:
           tool: cargo-sbom
@@ -61,8 +70,14 @@ jobs:
     name: release
     needs: [build, sbom]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # publish the GitHub release
+      id-token: write # cosign keyless signing
+      actions: read # download-artifact
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: release-*
@@ -106,8 +121,14 @@ jobs:
     name: image
     needs: [build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read # checkout + artifact metadata
+      actions: read # download-artifact
+      packages: write # push to GHCR
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: release-*

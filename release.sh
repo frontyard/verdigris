@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Release helper: bump version → changelog → lockfile → commit → tag → push.
 #
-#   scripts/release.sh [patch|minor|major|x.y.z] [-y] [--regen-docs]
+#   ./release.sh [patch|minor|major|x.y.z] [-y] [--regen-docs]
 #
 # - `patch` is the default; an explicit x.y.z is also accepted.
 # - The changelog's `## [Unreleased]` content becomes `## [x.y.z] - <date>`

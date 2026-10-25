@@ -11,6 +11,10 @@
 
 FROM clux/muslrust:stable AS build
 WORKDIR /src
+# bake the source SHA into the binary (/version, --version):
+#   docker build --build-arg VERD_GIT_SHA=$(git rev-parse HEAD) -t verd .
+ARG VERD_GIT_SHA=
+ENV VERD_GIT_SHA=${VERD_GIT_SHA}
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 RUN cargo build --release --locked \

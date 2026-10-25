@@ -3,7 +3,11 @@
 ## Changelog
 
 `CHANGELOG.md` must stay current with user-visible changes. When a
-change lands, add a **succinct** bullet under `## [Unreleased]`:
+change lands, add a **succinct** bullet under `## [Unreleased]` —
+**always** `[Unreleased]`, never into an already-tagged version section
+(tagged sections are frozen: the release workflow used them as the
+published release notes, so post-release edits there would diverge from
+what GitHub shows):
 
 - Keep a Changelog format: `### Security` / `Added` / `Changed` /
   `Fixed` / `Build & CI` (create a heading only when it has entries).

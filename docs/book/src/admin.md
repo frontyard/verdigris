@@ -25,6 +25,11 @@ tls = { cert = "admin.pem", key = "admin.key" }   # optional
 
 `{member}` is a member index or URL authority.
 
+`/version` reports `{"version":"x.y.z","commit":<sha-or-null>}` —
+`version` is the crate version baked at compile time, `commit` is the
+git SHA when the build sets `VERD_GIT_SHA` (release binaries do;
+locally `null` otherwise). `verd version` prints the same fields.
+
 ## Reload semantics
 
 SIGHUP, `POST /reload`, or `--watch` file changes all take the same path:

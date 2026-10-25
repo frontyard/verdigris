@@ -11,6 +11,37 @@ publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
+### Added
+
+- **`/version` and `verd version` now report the build commit SHA** —
+  release binaries stamp `VERD_GIT_SHA` from the tag's commit; the
+  source-build Dockerfile accepts `--build-arg VERD_GIT_SHA=`. A
+  one-line `build.rs` (`cargo:rerun-if-env-changed`) makes the stamp
+  reliable under cached builds; `admin.md` documents the field.
+
+### Security
+
+- **CI workflows hardened per zizmor audit** — `permissions: {}` at
+  workflow level with per-job grants (was workflow-wide write),
+  `persist-credentials: false` on every checkout, release `rust-cache`
+  is `lookup-only` (cache-poisoning), and the fuzz run command no
+  longer expands `${{ }}` inside `run:` (template-injection).
+
+### Build & CI
+
+- **zizmor workflow audit job** in CI — blocks regressions on the
+  items above. **cargo-nextest** runs the test suite (~7s vs ~40s).
+- **OSS-Fuzz integration submitted** ([google/oss-fuzz#16349](https://github.com/google/oss-fuzz/pull/16349))
+  — `fuzz/oss-fuzz/` keeps the in-repo copy of `project.yaml`,
+  `Dockerfile`, and `build.sh`; all 7 targets verified with
+  `infra/helper.py` (`build_fuzzers` + `check_build` + smoke run).
+- **OpenSSF Scorecard** runs weekly and on every `main` push
+  (`.github/workflows/scorecard.yml`) — publishes results to the
+  OpenSSF REST API, uploads SARIF to code scanning, and the README
+  shows the score badge.
+- **`release.sh` moved to the repo root** (was `scripts/release.sh`);
+  `RELEASING.md` updated accordingly.
+
 ## [0.2.3] - 2026-10-25
 
 ### Build & CI
@@ -158,7 +189,9 @@ reverse proxy with load balancing and retries, response caching
 (RAM/disk/hybrid), compression, rate limiting, CORS, security headers,
 admin API with atomic reloads, Prometheus metrics.
 
-[Unreleased]: https://github.com/frontyard/verdigris/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/frontyard/verdigris/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/frontyard/verdigris/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/frontyard/verdigris/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/frontyard/verdigris/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/frontyard/verdigris/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/frontyard/verdigris/releases/tag/v0.1.0

@@ -8,12 +8,17 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions: {}
+
 jobs:
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
+    permissions: {contents: read} # checkout
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt
@@ -22,6 +27,7 @@ jobs:
   clippy:
     name: clippy (${{ matrix.toolchain }})
     runs-on: ubuntu-latest
+    permissions: {contents: read} # checkout
     env:
       # rust-toolchain.toml pins "stable"; env var takes precedence so
       # the 1.88 leg actually runs 1.88
@@ -31,6 +37,8 @@ jobs:
         toolchain: [stable, "1.88"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: ${{ matrix.toolchain }}
@@ -41,6 +49,7 @@ jobs:
   test:
     name: test (${{ matrix.toolchain }})
     runs-on: ubuntu-latest
+    permissions: {contents: read} # checkout
     env:
       RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
     strategy:
@@ -48,18 +57,24 @@ jobs:
         toolchain: [stable, "1.88"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: ${{ matrix.toolchain }}
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      - run: cargo test --all-targets
+      - uses: taiki-e/install-action@c3076e6fa5aeb9a93daf1bd8eff73345250a8a9c # cargo-nextest
+      - run: cargo nextest run --all-targets
       - run: cargo test --doc
 
   doc:
     name: rustdoc
     runs-on: ubuntu-latest
+    permissions: {contents: read} # checkout
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - env:
@@ -74,6 +89,8 @@ jobs:
       checks: write # audit-check posts check-run annotations
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -81,16 +98,22 @@ jobs:
   deny:
     name: deny
     runs-on: ubuntu-latest
+    permissions: {contents: read} # checkout
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: taiki-e/install-action@63300d694c674b6bd0e1ca77d202a2bc41c4b623 # cargo-deny
       - run: cargo deny check
 
   coverage:
     name: coverage
     runs-on: ubuntu-latest
+    permissions: {contents: read} # checkout
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: llvm-tools-preview
@@ -104,3 +127,16 @@ jobs:
         with:
           name: lcov
           path: lcov.info
+
+  zizmor:
+    name: zizmor (workflow audit)
+    runs-on: ubuntu-latest
+    permissions: {contents: read} # checkout + GH_TOKEN audit
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@c3076e6fa5aeb9a93daf1bd8eff73345250a8a9c # zizmor
+      - run: zizmor .github/workflows
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

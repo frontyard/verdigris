@@ -7,13 +7,18 @@ on:
   schedule:
     - cron: "0 4 * * 0" # weekly, sunday 04:00 UTC
 
+permissions: {}
+
 jobs:
   soak:
     if: github.event_name == 'schedule'
     name: soak (rss)
     runs-on: ubuntu-latest
+    permissions: {contents: read} # checkout
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo test --test fault -- --ignored --nocapture
@@ -21,6 +26,7 @@ jobs:
   smoke:
     name: smoke (${{ matrix.target }})
     runs-on: ubuntu-latest
+    permissions: {contents: read} # checkout
     env:
       # rust-toolchain.toml pins "stable"; cargo-fuzz needs nightly -Z flags
       RUSTUP_TOOLCHAIN: nightly
@@ -36,11 +42,14 @@ jobs:
           - static_resolve
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@2c76c034f9e32a5d6e2c104dc4df23a22476db04 # nightly
       - run: cargo install cargo-fuzz --locked
       - name: short fuzz run
-        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=${{ env.FUZZ_TIME }} -artifact_prefix=/tmp/
+        run: cargo fuzz run "$TARGET" -- -max_total_time="$FUZZ_TIME" -artifact_prefix=/tmp/
         env:
+          TARGET: ${{ matrix.target }}
           FUZZ_TIME: ${{ github.event_name == 'schedule' && 900 || 60 }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
