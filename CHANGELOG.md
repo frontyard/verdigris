@@ -11,6 +11,8 @@ publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-10-25
+
 ### Added
 
 - **`/version` and `verd version` now report the build commit SHA** —
