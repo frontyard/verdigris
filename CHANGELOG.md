@@ -81,6 +81,12 @@ publishes the matching section as the GitHub release notes.
 
 ### Fixed
 
+- **Release container image no longer fails to start** — CI artifact
+  download stripped the execute bit, so the image's `/usr/bin/verd` was
+  non-executable (`permission denied` on entrypoint). `Dockerfile.release`
+  now uses `COPY --chmod=0755` and the release workflow restores the bit
+  after artifact regrouping.
+
 - **Per-IP connection accounting race** — decrement+remove now happens
   under the shard `entry()` lock; a fresh admit for the same IP can no
   longer lose its count.

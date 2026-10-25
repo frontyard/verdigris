@@ -3,7 +3,7 @@
 # extracted release artifacts directory (`dist/<arch>/verd`).
 FROM gcr.io/distroless/static-debian12:nonroot
 ARG TARGETARCH
-COPY ${TARGETARCH}/verd /usr/bin/verd
+COPY --chmod=0755 ${TARGETARCH}/verd /usr/bin/verd
 USER nonroot
 VOLUME ["/var/lib/verd", "/var/log/verd"]
 EXPOSE 8080 2019
