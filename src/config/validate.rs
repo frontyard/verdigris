@@ -110,6 +110,19 @@ fn check_listeners(ctx: &mut Ctx, cfg: &Config) {
     }
 }
 
+/// Label a site by its first host (or `default`), falling back to the
+/// index — `site["example.com"]` reads better than `site[0]` after
+/// includes have merged fragments from several files.
+fn site_label(i: usize, site: &SiteConfig) -> String {
+    if let Some(h) = site.hosts.first() {
+        format!("site[{h:?}]")
+    } else if site.default {
+        "site[default]".to_string()
+    } else {
+        format!("site[{i}]")
+    }
+}
+
 fn check_sites(ctx: &mut Ctx, cfg: &Config) {
     let mut exact_hosts: HashMap<String, usize> = HashMap::new();
     let mut wildcards: HashMap<String, usize> = HashMap::new();
@@ -117,7 +130,8 @@ fn check_sites(ctx: &mut Ctx, cfg: &Config) {
     let mut any_tls = false;
 
     for (i, site) in cfg.site.iter().enumerate() {
-        let path = format!("site[{i}].hosts");
+        let site_path = site_label(i, site);
+        let path = format!("{site_path}.hosts");
         if site.hosts.is_empty() && !site.default {
             ctx.error(path, "site has no hosts and is not marked default");
         }
@@ -129,14 +143,14 @@ fn check_sites(ctx: &mut Ctx, cfg: &Config) {
             if let Some(rest) = h.strip_prefix("*.") {
                 if rest.is_empty() || rest.contains('*') {
                     ctx.error(
-                        format!("site[{i}].hosts"),
+                        format!("{site_path}.hosts"),
                         format!("invalid wildcard host {host:?}"),
                     );
                     continue;
                 }
                 if wildcards.insert(rest.to_string(), i).is_some() {
                     ctx.error(
-                        format!("site[{i}].hosts"),
+                        format!("{site_path}.hosts"),
                         format!("duplicate wildcard host {host:?}"),
                     );
                 }
@@ -145,24 +159,21 @@ fn check_sites(ctx: &mut Ctx, cfg: &Config) {
                     default_count += 1;
                 } else {
                     ctx.error(
-                        format!("site[{i}].hosts"),
+                        format!("{site_path}.hosts"),
                         "bare \"*\" host needs `default = true`".to_string(),
                     );
                 }
             } else if exact_hosts.insert(h, i).is_some() {
                 ctx.error(
-                    format!("site[{i}].hosts"),
+                    format!("{site_path}.hosts"),
                     format!("duplicate host {host:?}"),
                 );
             }
         }
         if matches!(site.tls, SiteTls::Mode(TlsMode::Off)) {
-            if site.redirect_https {
+            if site.redirect_https == Some(true) {
                 // only warn — redirect on a plain site is a no-op
-                ctx.warn(
-                    format!("site[{i}]"),
-                    "redirect_https is set but tls = \"off\"",
-                );
+                ctx.warn(site_path.clone(), "redirect_https is set but tls = \"off\"");
             }
         } else {
             any_tls = true;
@@ -170,25 +181,28 @@ fn check_sites(ctx: &mut Ctx, cfg: &Config) {
         if let SiteTls::Manual(m) = &site.tls {
             if !m.cert.is_file() {
                 ctx.warn(
-                    format!("site[{i}].tls.cert"),
+                    format!("{site_path}.tls.cert"),
                     format!("certificate file {} does not exist", m.cert.display()),
                 );
             }
             if !m.key.is_file() {
                 ctx.warn(
-                    format!("site[{i}].tls.key"),
+                    format!("{site_path}.tls.key"),
                     format!("key file {} does not exist", m.key.display()),
                 );
             }
         }
-        if site.root.is_some() && !site.proxy.is_empty() {
+        if site.root.is_some() && site.proxy.is_some() {
             ctx.error(
-                format!("site[{i}]"),
+                site_path.clone(),
                 "site.root and site.proxy are mutually exclusive shorthands; use explicit routes",
             );
         }
+        if let Some(up) = &site.proxy {
+            check_upstream_ref(ctx, cfg, &format!("{site_path}.proxy"), up);
+        }
         for (j, route) in site.route.iter().enumerate() {
-            check_route(ctx, cfg, i, j, route);
+            check_route(ctx, cfg, &site_path, j, route);
         }
         check_trusted_proxies(ctx, cfg, i, site);
     }
@@ -212,7 +226,7 @@ fn check_sites(ctx: &mut Ctx, cfg: &Config) {
                 && s.hosts.iter().any(|h| h.starts_with("*."))
             {
                 ctx.warn(
-                    format!("site[{i}].hosts"),
+                    format!("{}.hosts", site_label(i, s)),
                     "wildcard hostnames need the dns-01 challenge, which verd does not implement; the cert will cover only non-wildcard hosts",
                 );
             }
@@ -254,7 +268,7 @@ fn check_trusted_proxies(ctx: &mut Ctx, _cfg: &Config, i: usize, site: &SiteConf
         && proxies.is_empty()
     {
         ctx.warn(
-            format!("site[{i}].trusted_proxies"),
+            format!("{}.trusted_proxies", site_label(i, site)),
             "explicit empty list disables trusted proxies for this site",
         );
     }
@@ -263,11 +277,11 @@ fn check_trusted_proxies(ctx: &mut Ctx, _cfg: &Config, i: usize, site: &SiteConf
 fn check_route(
     ctx: &mut Ctx,
     cfg: &Config,
-    site_idx: usize,
+    site_label: &str,
     route_idx: usize,
     route: &RouteConfig,
 ) {
-    let path = format!("site[{site_idx}].route[{route_idx}]");
+    let path = format!("{site_label}.route[{route_idx}]");
 
     // exactly one path matcher
     let matchers = [
@@ -322,19 +336,27 @@ fn check_route(
     }
 
     // exactly one handler
-    let handlers = [
-        route.static_files.is_some(),
-        route.proxy.is_some(),
-        route.redirect.is_some(),
-        route.respond.is_some(),
+    let handlers: Vec<&str> = [
+        ("static", route.static_files.is_some()),
+        ("proxy", route.proxy.is_some()),
+        ("redirect", route.redirect.is_some()),
+        ("respond", route.respond.is_some()),
     ]
     .into_iter()
-    .filter(|b| *b)
-    .count();
-    if handlers != 1 {
+    .filter_map(|(name, set)| set.then_some(name))
+    .collect();
+    if handlers.len() != 1 {
         ctx.error(
             path.clone(),
-            format!("route must have exactly one handler, found {handlers}"),
+            if handlers.is_empty() {
+                "route must have exactly one handler (static, proxy, redirect, or respond)"
+                    .to_string()
+            } else {
+                format!(
+                    "route must have exactly one handler; found {}",
+                    handlers.join(" + ")
+                )
+            },
         );
     }
 
@@ -451,12 +473,14 @@ fn check_route(
             if !["br", "brotli", "zstd", "gzip", "gz"].contains(&alg.as_str()) {
                 ctx.error(
                     format!("{path}.compress.algorithms"),
-                    format!("unknown algorithm {alg:?}; use br, zstd, or gzip"),
+                    format!(
+                        "unknown algorithm {alg:?}; use br, zstd, or gzip (brotli/gz aliases accepted)"
+                    ),
                 );
             }
         }
     }
-    if route.headers.is_some()
+    if route.response_headers.is_some()
         && route.static_files.is_none()
         && route.proxy.is_none()
         && route.respond.is_none()
@@ -475,29 +499,38 @@ fn check_patterns(ctx: &mut Ctx, path: &str, kind: &str, pats: &BTreeMap<String,
     }
 }
 
-fn check_proxy(ctx: &mut Ctx, cfg: &Config, path: &str, proxy: &ProxyHandler) {
-    check_proxy_retries(ctx, path, &proxy.retries);
-    match &proxy.upstream {
+/// Validate an upstream reference (named cluster or inline URL list).
+fn check_upstream_ref(ctx: &mut Ctx, cfg: &Config, path: &str, upstream: &UpstreamRef) {
+    match upstream {
         UpstreamRef::Name(name) => {
             if !cfg.upstream.contains_key(name) {
+                // `upstream = "app:9000"` smells like a missing scheme —
+                // point at the URL form instead of a nonsense table name
+                let hint = if name.contains(':') {
+                    format!("or use a URL such as \"http://{name}\"")
+                } else {
+                    format!("or use a URL such as \"http://{name}:PORT\"")
+                };
                 ctx.error(
-                    format!("{path}.proxy.upstream"),
-                    format!("unknown upstream {name:?}; define [upstream.{name}]"),
+                    path.to_string(),
+                    format!("unknown upstream {name:?}; define [upstream.{name}] {hint}"),
                 );
             }
         }
         UpstreamRef::Urls(urls) => {
             if urls.is_empty() {
-                ctx.error(
-                    format!("{path}.proxy.upstream"),
-                    "upstream URL list is empty".to_string(),
-                );
+                ctx.error(path.to_string(), "upstream URL list is empty".to_string());
             }
             for url in urls {
-                check_upstream_url(ctx, &format!("{path}.proxy.upstream"), url);
+                check_upstream_url(ctx, path, url);
             }
         }
     }
+}
+
+fn check_proxy(ctx: &mut Ctx, cfg: &Config, path: &str, proxy: &ProxyHandler) {
+    check_proxy_retries(ctx, path, &proxy.retries);
+    check_upstream_ref(ctx, cfg, &format!("{path}.proxy.upstream"), &proxy.upstream);
     if let Some(rw) = &proxy.rewrite {
         let kinds = [
             rw.strip_prefix.is_some(),
@@ -1177,7 +1210,10 @@ root = "/tmp"
 
         for bad in ["*.", "*.*.x.com"] {
             let cfg = parse_test_config(&format!("[[site]]\nhosts = [{bad:?}]\nroot = \"/tmp\""));
-            assert!(has_err(&cfg, "site[0].hosts", "invalid wildcard"), "{bad}");
+            assert!(
+                has_err(&cfg, &format!("site[{bad:?}].hosts"), "invalid wildcard"),
+                "{bad}"
+            );
         }
 
         let cfg = parse_test_config(
@@ -1190,10 +1226,14 @@ hosts = ["*.X.com"]
 root = "/tmp"
 "#,
         );
-        assert!(has_err(&cfg, "site[1].hosts", "duplicate wildcard"));
+        assert!(has_err(
+            &cfg,
+            "site[\"*.X.com\"].hosts",
+            "duplicate wildcard"
+        ));
 
         let cfg = parse_test_config("[[site]]\nhosts = [\"*\"]\nroot = \"/tmp\"");
-        assert!(has_err(&cfg, "site[0].hosts", "needs `default = true`"));
+        assert!(has_err(&cfg, "site[\"*\"].hosts", "needs `default = true`"));
 
         let cfg = parse_test_config(
             r#"
@@ -1224,8 +1264,8 @@ tls = { cert = "/definitely/missing.crt", key = "/definitely/missing.key" }
 root = "/tmp"
 "#,
         );
-        assert!(has_warn(&cfg, "site[0].tls.cert", "does not exist"));
-        assert!(has_warn(&cfg, "site[0].tls.key", "does not exist"));
+        assert!(has_warn(&cfg, "site[\"x\"].tls.cert", "does not exist"));
+        assert!(has_warn(&cfg, "site[\"x\"].tls.key", "does not exist"));
     }
 
     #[test]
@@ -1238,7 +1278,7 @@ root = "/tmp"
 proxy = ["http://127.0.0.1:1"]
 "#,
         );
-        assert!(has_err(&cfg, "site[0]", "mutually exclusive"));
+        assert!(has_err(&cfg, "site[\"x\"]", "mutually exclusive"));
 
         let cfg = parse_test_config(
             r#"
@@ -1249,7 +1289,7 @@ redirect_https = true
 root = "/tmp"
 "#,
         );
-        assert!(has_warn(&cfg, "site[0]", "redirect_https"));
+        assert!(has_warn(&cfg, "site[\"x\"]", "redirect_https"));
     }
 
     #[test]
@@ -1280,7 +1320,7 @@ trusted_proxies = []
 root = "/tmp"
 "#,
         );
-        assert!(has_warn(&cfg, "site[0].trusted_proxies", "disables"));
+        assert!(has_warn(&cfg, "site[\"x\"].trusted_proxies", "disables"));
     }
 
     #[test]
@@ -1301,15 +1341,19 @@ match = { methods = ["B A D"], headers = { "X-A" = "re:([" }, query = { q = "re:
 respond = { status = 200 }
 "#,
         );
-        assert!(has_err(&cfg, "site[0].route[0]", "must start with '/'"));
-        assert!(has_err(&cfg, "site[0].route[1]", "invalid route regex"));
-        assert!(has_err(&cfg, "site[0].route[2]", "invalid HTTP method"));
+        assert!(has_err(&cfg, "site[\"x\"].route[0]", "must start with '/'"));
+        assert!(has_err(&cfg, "site[\"x\"].route[1]", "invalid route regex"));
+        assert!(has_err(&cfg, "site[\"x\"].route[2]", "invalid HTTP method"));
         assert!(has_err(
             &cfg,
-            "site[0].route[2].headers.X-A",
+            "site[\"x\"].route[2].headers.X-A",
             "invalid regex"
         ));
-        assert!(has_err(&cfg, "site[0].route[2].query.q", "invalid regex"));
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].route[2].query.q",
+            "invalid regex"
+        ));
     }
 
     #[test]
@@ -1328,13 +1372,13 @@ redirect = { scheme = "https" }
         );
         assert!(has_err(
             &cfg,
-            "site[0].route[0]",
-            "exactly one handler, found 0"
+            "site[\"x\"].route[0]",
+            "exactly one handler (static"
         ));
         assert!(has_err(
             &cfg,
-            "site[0].route[1]",
-            "exactly one handler, found 2"
+            "site[\"x\"].route[1]",
+            "found redirect + respond"
         ));
 
         let cfg = parse_test_config(
@@ -1348,12 +1392,12 @@ static = { root = "/definitely/missing-dir", index = [] }
         );
         assert!(has_warn(
             &cfg,
-            "site[0].route[0].static.root",
+            "site[\"x\"].route[0].static.root",
             "does not exist"
         ));
         assert!(has_warn(
             &cfg,
-            "site[0].route[0].static",
+            "site[\"x\"].route[0].static",
             "directory requests"
         ));
     }
@@ -1384,12 +1428,20 @@ headers = { set = { "x-a" = "1" } }
         );
         assert!(has_err(
             &cfg,
-            "site[0].route[0]",
+            "site[\"x\"].route[0]",
             "exactly one of to/host/scheme"
         ));
-        assert!(has_err(&cfg, "site[0].route[1]", "must be http or https"));
-        assert!(has_err(&cfg, "site[0].route[2]", "not a valid HTTP status"));
-        assert!(has_warn(&cfg, "site[0].route[3].respond", "text/plain"));
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].route[1]",
+            "must be http or https"
+        ));
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].route[2]",
+            "not a valid HTTP status"
+        ));
+        assert!(has_warn(&cfg, "site[\"x\"].route[3].respond", "text/plain"));
         assert!(errors(&cfg).iter().all(|d| !d.path.contains("route[4]")));
     }
 
@@ -1418,12 +1470,12 @@ respond = { status = 200 }
 auth = { basic = {} }
 "#,
         );
-        assert!(has_err(&cfg, "site[0].route[0].auth", "found 0"));
-        assert!(has_err(&cfg, "site[0].route[1].auth", "found 2"));
-        assert!(has_err(&cfg, "site[0].route[2].auth.basic", "not both"));
+        assert!(has_err(&cfg, "site[\"x\"].route[0].auth", "found 0"));
+        assert!(has_err(&cfg, "site[\"x\"].route[1].auth", "found 2"));
+        assert!(has_err(&cfg, "site[\"x\"].route[2].auth.basic", "not both"));
         assert!(has_err(
             &cfg,
-            "site[0].route[3].auth.basic",
+            "site[\"x\"].route[3].auth.basic",
             "set users or htpasswd"
         ));
     }
@@ -1492,17 +1544,17 @@ auth = { api_key = { location = "header", name = "", keys = [] } }
         );
         assert!(has_err(
             &cfg,
-            "site[0].route[0].auth.bearer",
+            "site[\"x\"].route[0].auth.bearer",
             "tokens list is empty"
         ));
         assert!(has_err(
             &cfg,
-            "site[0].route[1].auth.api_key",
+            "site[\"x\"].route[1].auth.api_key",
             "name must not be empty"
         ));
         assert!(has_err(
             &cfg,
-            "site[0].route[1].auth.api_key",
+            "site[\"x\"].route[1].auth.api_key",
             "keys list is empty"
         ));
     }
@@ -1525,12 +1577,12 @@ rate_limit = { key = "ip", rate = "0/s" }
         );
         assert!(has_err(
             &cfg,
-            "site[0].route[0].rate_limit.key",
+            "site[\"x\"].route[0].rate_limit.key",
             "invalid key"
         ));
         assert!(has_err(
             &cfg,
-            "site[0].route[1].rate_limit.rate",
+            "site[\"x\"].route[1].rate_limit.rate",
             "greater than zero"
         ));
     }
@@ -1555,15 +1607,19 @@ respond = { status = 200 }
 cors = { origins = ["*"], credentials = true }
 "#,
         );
-        assert!(has_warn(&cfg, "site[0].route[0].cors", "origins is empty"));
+        assert!(has_warn(
+            &cfg,
+            "site[\"x\"].route[0].cors",
+            "origins is empty"
+        ));
         assert!(has_err(
             &cfg,
-            "site[0].route[1].cors.origins",
+            "site[\"x\"].route[1].cors.origins",
             "invalid regex"
         ));
         assert!(has_warn(
             &cfg,
-            "site[0].route[2].cors",
+            "site[\"x\"].route[2].cors",
             "credentials with wildcard"
         ));
     }
@@ -1631,30 +1687,34 @@ proxy = { upstream = ["http://u"], retries = { budget_fraction = 1.5 } }
         );
         assert!(has_err(
             &cfg,
-            "site[0].route[1].proxy.upstream",
+            "site[\"x\"].route[1].proxy.upstream",
             "URL list is empty"
         ));
         assert!(has_err(
             &cfg,
-            "site[0].route[1].proxy.rewrite",
+            "site[\"x\"].route[1].proxy.rewrite",
             "exactly one of"
         ));
         assert!(has_err(
             &cfg,
-            "site[0].route[2].proxy.rewrite.regex",
+            "site[\"x\"].route[2].proxy.rewrite.regex",
             "invalid regex"
         ));
         assert!(has_err(
             &cfg,
-            "site[0].route[3].proxy.rewrite.strip_prefix",
+            "site[\"x\"].route[3].proxy.rewrite.strip_prefix",
             "must start with '/'"
         ));
         assert!(has_err(
             &cfg,
-            "site[0].route[4].retries.budget_fraction",
+            "site[\"x\"].route[4].retries.budget_fraction",
             "between 0 and 1"
         ));
-        assert!(has_err(&cfg, "site[0].route[4].proxy.retries", "in [0, 1]"));
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].route[4].proxy.retries",
+            "in [0, 1]"
+        ));
         // inline URL list is checked per-url
         let cfg = parse_test_config(
             r#"
@@ -1665,7 +1725,11 @@ path = "/f"
 proxy = { upstream = ["bogus"] }
 "#,
         );
-        assert!(has_err(&cfg, "site[0].route[0].proxy.upstream", "scheme"));
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].route[0].proxy.upstream",
+            "scheme"
+        ));
     }
 
     #[test]
@@ -1709,12 +1773,12 @@ auth = { api_key = { location = "query", name = "k", keys = ["x"] } }
         assert!(has_err(&cfg, "cache.noobj", "max_object_bytes"));
         assert!(has_err(
             &cfg,
-            "site[0].route[0].cache.store",
+            "site[\"x\"].route[0].cache.store",
             "unknown cache store"
         ));
         assert!(has_warn(
             &cfg,
-            "site[0].route[1].auth.api_key",
+            "site[\"x\"].route[1].auth.api_key",
             "credentials in URLs"
         ));
     }
@@ -1733,7 +1797,7 @@ compress = { algorithms = ["br", "deflate"] }
         );
         assert!(has_err(
             &cfg,
-            "site[0].route[0].compress.algorithms",
+            "site[\"x\"].route[0].compress.algorithms",
             "unknown algorithm"
         ));
     }

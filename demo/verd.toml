@@ -1,8 +1,7 @@
 [server]
 server_header = "verd"
 
-[[server.listen]]
-addr = "0.0.0.0:8080"
+listen = ["0.0.0.0:8080"]
 
 [admin]
 listen = "0.0.0.0:2019"

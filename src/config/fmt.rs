@@ -1,7 +1,7 @@
 //! `verd fmt`: normalize a TOML config while preserving comments, using
 //! `toml_edit`'s lossless document representation. Formatting normalizes
-//! whitespace around `=` and trailing spaces; comments and key order are
-//! untouched.
+//! the gap around `=` to a single space and strips trailing whitespace;
+//! comments and key order are untouched.
 
 use std::path::Path;
 
@@ -20,10 +20,128 @@ pub enum FmtError {
 
 /// Format TOML text, preserving comments and key order.
 pub fn format_str(text: &str) -> Result<String, String> {
-    let doc: toml_edit::DocumentMut = text
+    let mut doc: toml_edit::DocumentMut = text
         .parse()
         .map_err(|e: toml_edit::TomlError| e.to_string())?;
+    normalize_table(doc.as_table_mut());
     Ok(doc.to_string())
+}
+
+/// Recursively normalize one table's entries.
+///
+/// toml_edit decor layout for `key = value`: the key's *suffix* is the
+/// gap before `=`, the value's *prefix* is the gap after `=`, and the
+/// value's *suffix* holds everything up to the next key — trailing
+/// whitespace and/or an end-of-line comment. The key's *prefix* holds
+/// the previous line's newline plus any comment lines and indentation.
+fn normalize_table(table: &mut toml_edit::Table) {
+    for (mut key, item) in table.iter_mut() {
+        match item {
+            toml_edit::Item::Value(v) => {
+                rstrip_lines(key.leaf_decor_mut());
+                gap_to_one_space(key.leaf_decor_mut(), true);
+                gap_to_one_space(v.decor_mut(), false);
+                clean_trailing(v.decor_mut());
+                if let toml_edit::Value::InlineTable(it) = v {
+                    normalize_inline_table(it);
+                }
+            }
+            toml_edit::Item::Table(t) => {
+                rstrip_lines(t.decor_mut());
+                clean_trailing(t.decor_mut());
+                normalize_table(t);
+            }
+            toml_edit::Item::ArrayOfTables(a) => {
+                for t in a.iter_mut() {
+                    rstrip_lines(t.decor_mut());
+                    clean_trailing(t.decor_mut());
+                    normalize_table(t);
+                }
+            }
+            toml_edit::Item::None => {}
+        }
+    }
+}
+
+/// Recursively normalize an inline table's `key = value` gaps — only the
+/// `=` gaps; `{ a = 1 }` keeps its brace/comma spacing.
+fn normalize_inline_table(table: &mut toml_edit::InlineTable) {
+    for (mut key, item) in table.iter_mut() {
+        gap_to_one_space(key.leaf_decor_mut(), true);
+        gap_to_one_space(item.decor_mut(), false);
+        if let toml_edit::Value::InlineTable(it) = item {
+            normalize_inline_table(it);
+        }
+    }
+}
+
+/// Collapse a mid-line `=` gap (key suffix / value prefix) to `" "`.
+/// These gaps are single-line by TOML rules, so no comment can appear.
+fn gap_to_one_space(decor: &mut toml_edit::Decor, suffix_side: bool) {
+    let gap = if suffix_side {
+        decor.suffix()
+    } else {
+        decor.prefix()
+    };
+    let needs_fix = gap
+        .and_then(|g| g.as_str())
+        .is_some_and(|s| s != " " && s.chars().all(char::is_whitespace));
+    if needs_fix {
+        if suffix_side {
+            decor.set_suffix(" ");
+        } else {
+            decor.set_prefix(" ");
+        }
+    }
+}
+
+/// Normalize a value's (or table header's) suffix: the chunk ends at a
+/// line end, so it holds trailing whitespace and/or a `#` comment.
+/// Pure whitespace → `""`; whitespace before a comment → `" "`.
+fn clean_trailing(decor: &mut toml_edit::Decor) {
+    let Some(s) = decor.suffix().and_then(|r| r.as_str().map(str::to_string)) else {
+        return;
+    };
+    let cleaned = match s.find('#') {
+        // one space between the value and the comment marker
+        Some(i) if s[..i].chars().all(char::is_whitespace) => {
+            format!(" {}", s[i..].trim_end())
+        }
+        Some(_) => s.trim_end().to_string(),
+        None if s.chars().all(char::is_whitespace) => String::new(),
+        None => s.trim_end().to_string(),
+    };
+    if cleaned != s {
+        decor.set_suffix(cleaned);
+    }
+}
+
+/// Strip trailing spaces/tabs on every *complete* line in a decor chunk —
+/// the final partial line (indentation before a key or `[`) is left alone.
+fn rstrip_lines(decor: &mut toml_edit::Decor) {
+    let strip = |r: &toml_edit::RawString| -> Option<String> {
+        let s = r.as_str()?;
+        if !s.contains('\n') {
+            return None;
+        }
+        let mut out = String::with_capacity(s.len());
+        for part in s.split_inclusive('\n') {
+            let line = part.strip_suffix('\n').unwrap_or(part);
+            out.push_str(line.trim_end());
+            if part.ends_with('\n') {
+                out.push('\n');
+            }
+        }
+        (out != s).then_some(out)
+    };
+    let pre = decor.prefix().and_then(strip);
+    let suf = decor.suffix().and_then(strip);
+    if let Some(s) = pre {
+        decor.set_prefix(s);
+    }
+    if let Some(s) = suf {
+        decor.set_suffix(s);
+    }
 }
 
 /// Format a file in place. Returns `true` if the content changed.
@@ -79,14 +197,42 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("verd.toml");
         std::fs::write(&path, "[[site]]\nhosts=[\"a\"]   # keep\n").unwrap();
-        // toml_edit is lossless: a parseable document round-trips
-        // unchanged, so this is a no-op
+        // `hosts=[` is unformatted — the file is rewritten and changed
+        assert!(format_file(&path).unwrap());
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(out.contains("hosts = [\"a\"]"), "{out}");
+        assert!(out.contains("# keep"));
+        // second run is a no-op
         assert!(!format_file(&path).unwrap());
-        assert!(std::fs::read_to_string(&path).unwrap().contains("# keep"));
 
         let missing = dir.path().join("ghost.toml");
         assert!(matches!(format_file(&missing), Err(FmtError::Io(_, _))));
         std::fs::write(&path, "[[[").unwrap();
         assert!(matches!(format_file(&path), Err(FmtError::Syntax(_, _))));
+    }
+
+    #[test]
+    fn gaps_and_trailing_ws_normalized() {
+        let input = "a   =   1  \nb=  \"x\"\n[t]\nk  =  [\n  1,\n]\n";
+        let out = format_str(input).unwrap();
+        assert_eq!(out, "a = 1\nb = \"x\"\n[t]\nk = [\n  1,\n]\n");
+    }
+
+    #[test]
+    fn gap_before_comment_kept() {
+        // the value→comment gap normalizes to one space; comment text
+        // itself is preserved
+        let input = "a=1 # note\nb=2# also a comment\n";
+        let out = format_str(input).unwrap();
+        assert_eq!(out, "a = 1 # note\nb = 2 # also a comment\n");
+    }
+
+    #[test]
+    fn inline_table_gaps_normalized() {
+        let input = "[[site]]\nhosts=[\"x\"]\nrespond = { status  =  200 , body=\"hi\" }\n";
+        let out = format_str(input).unwrap();
+        assert!(out.contains("hosts = [\"x\"]"), "{out}");
+        assert!(out.contains("status = 200"), "{out}");
+        assert!(out.contains("body = \"hi\""), "{out}");
     }
 }

@@ -35,7 +35,7 @@ Top-level keys: `server`, `timeouts`, `limits`, `log`, `admin`, `acme`,
   `rate_limit`, `cors`, `headers`, `security`, `compress`, `cache`,
   `limits`, `timeouts`). More specific prefixes win.
 - Upstreams may be named (`[upstream.NAME]` clusters with `servers`,
-  `lb`, `health`, `limits`, `tls`) or inline URL lists.
+  `lb`, `health`, `timeouts`, `tls`) or inline URL lists.
 
 ## Recipes (each validates against `verd validate`)
 
@@ -150,12 +150,14 @@ cache = { store = "main", ttl = "5m", stale_if_error = "5m" }
 - `api_key` requires `location` (`"header"` or `"query"`), `name`, `keys`.
 - `compress` has `algorithms` (`br`, `zstd`, `gzip`) and a single `level`,
   not per-algorithm switches.
-- `include` takes a **file or directory** (expands `*.toml` inside the
-  dir) — globs like `conf.d/*.toml` are not expanded.
+- `include` takes a file, a directory (expands `*.toml` inside the
+  dir), or a glob like `conf.d/*.toml` — a glob matching nothing is
+  silently ignored.
 - `pass_host = true` (the default) rewrites `Host` to the upstream
   authority; `false` passes the client's original `Host` through.
-- `site.proxy = [urls]` is a catch-all site shorthand; per-route use
-  `route.proxy = { upstream = "name" | [urls] }`.
+- `site.proxy` is a catch-all site shorthand accepting a cluster name,
+  one URL, or a URL list; per-route use `route.proxy = { upstream =
+  "name" | "url" | [urls] }`.
 - `rate` specs: `100/s`, `600/m`, `10000/h`, `50000/day`.
   `key`: `ip` | `identity` | `route` | `header:<Name>`.
 - Durations: `500ms`, `10s`, `5m`, `1h`, `1d`. Sizes: `B`, `KiB`,
@@ -169,6 +171,7 @@ cache = { store = "main", ttl = "5m", stale_if_error = "5m" }
 ## Doc pages
 
 - [Quickstart](docs/book/src/quickstart.md)
+- [Examples](docs/book/src/examples.md)
 - [Configuration model](docs/book/src/configuration.md)
 - [Static file serving](docs/book/src/static.md)
 - [Reverse proxy & load balancing](docs/book/src/proxy.md)
@@ -187,6 +190,8 @@ cache = { store = "main", ttl = "5m", stale_if_error = "5m" }
 ---
 
 # Verdigris
+
+**Documentation for verd 0.3.1.**
 
 Verdigris is a self-hosting web server and reverse proxy in a single static
 binary: nginx-class performance with Caddy-like zero-configuration TLS and
@@ -277,8 +282,8 @@ verd version
 Create `verd.toml`:
 
 ```toml
-[[server.listen]]
-addr = "0.0.0.0:8080"
+[server]
+listen = ["0.0.0.0:8080"]
 
 [[site]]
 default = true
@@ -365,23 +370,447 @@ curl -X POST localhost:2019/reload  # or via the admin API
 
 ---
 
+# Examples
+
+Each example is a complete `verd.toml` — copy it, replace the domains
+and paths, check it with `verd validate`, then `verd run`. The HTTPS
+examples assume DNS already resolves to the machine and ports 80 and
+443 are reachable; drop the `[acme]` section and use `tls = "off"` or
+`"selfsigned"` where that's not true.
+
+## Static site with automatic HTTPS
+
+The flagship "zero-config TLS" case: a certificate is issued at first
+request and renewed automatically; HTTP requests 308 to HTTPS.
+
+```toml
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+
+[[site]]
+hosts = ["example.com", "www.example.com"]
+tls = "auto"                    # ACME issues and renews the certificate
+root = "/var/www/example.com"   # catch-all static route shorthand
+```
+
+Security headers (HSTS, X-Frame-Options, …) come from
+`[server.security]` defaults — nothing to configure. See
+[TLS, ACME & redirects](tls.md) and [Static file serving](static.md).
+
+## Single-page application
+
+`spa = true` serves `index.html` for paths that don't match a file, so
+client-side routes like `/settings/billing` work on refresh. Hashed
+bundles under `/assets/` get immutable far-future caching.
+
+```toml
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+
+[[site]]
+hosts = ["app.example.com"]
+tls = "auto"
+
+[[site.route]]
+path = "/"
+static = { root = "/var/www/app/dist", spa = true,
+           cache_control = { "/assets/*" = "public, max-age=31536000, immutable" } }
+```
+
+## Reverse proxy to one backend
+
+`site.proxy` is the catch-all shorthand — every request forwards to the
+app. `X-Forwarded-For`/`X-Forwarded-Proto` are set automatically.
+
+```toml
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+
+[[site]]
+hosts = ["app.example.com"]
+tls = "auto"
+proxy = "http://127.0.0.1:3000"   # also accepts a cluster name or URL list
+```
+
+## Frontend and API on one domain
+
+Serving the API under `/api` on the site's own domain avoids CORS
+entirely. More specific prefixes win, so `/api` routes never touch the
+static handler; `strip_prefix` removes `/api` before forwarding
+(`/api/users` → `http://127.0.0.1:3000/users`).
+
+```toml
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+
+[[site]]
+hosts = ["example.com"]
+tls = "auto"
+
+[[site.route]]
+prefix = "/api"
+proxy = { upstream = "http://127.0.0.1:3000",
+          rewrite = { strip_prefix = "/api" } }
+
+[[site.route]]
+path = "/"
+static = { root = "/var/www/site", spa = true }
+```
+
+## Load balancing across replicas
+
+A named `[upstream.*]` cluster gives you balancing, health checking,
+retries, and pool tuning. `h2c://` URLs speak cleartext HTTP/2 (gRPC)
+to the backend.
+
+```toml
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+
+[upstream.api]
+servers = ["http://10.0.0.11:8080", "http://10.0.0.12:8080",
+           "http://10.0.0.13:8080"]
+lb = "least_conn"                 # round_robin | least_conn | ip_hash
+
+[upstream.api.health.active]      # periodic probes on each member
+path = "/healthz"
+interval = "5s"
+timeout = "2s"
+
+[upstream.api.health.passive]     # kick members out on real failures
+failures = 3
+cooldown = "30s"
+
+[upstream.api.timeouts]
+connect = "3s"
+response_header = "10s"
+max_connections = 256
+
+[[site]]
+hosts = ["api.example.com"]
+tls = "auto"
+proxy = "api"                     # the cluster name
+```
+
+`upstream.api.unavailable` customizes the response (status, body) when
+every member is down — handy for a branded maintenance page. See
+[Reverse proxy & load balancing](proxy.md).
+
+## Multiple sites on one instance
+
+Sites are matched by `Host`; a `default` site catches everything else
+(including requests to unknown names).
+
+```toml
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+
+[[site]]
+hosts = ["example.com", "www.example.com"]
+tls = "auto"
+root = "/var/www/example"
+
+[[site]]
+hosts = ["blog.example.com"]
+tls = "auto"
+proxy = "http://127.0.0.1:9000"
+
+# requests whose Host matches no site above land here
+[[site]]
+default = true
+tls = "off"
+
+[[site.route]]
+path = "/"
+respond = { status = 404, body = "unknown host" }
+```
+
+## Redirects: www → apex and domain moves
+
+`redirect_host` covers the plaintext leg (`http://www` goes straight to
+`https://example.com`); the redirect route handles HTTPS requests to
+`www`. `{path}` and `{query}` substitute from the request, so links
+keep working.
+
+```toml
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+
+[[site]]                          # canonical site
+hosts = ["example.com"]
+tls = "auto"
+root = "/var/www/example"
+
+[[site]]                          # www → apex
+hosts = ["www.example.com"]
+tls = "auto"
+redirect_host = "example.com"     # http://www… → https://example.com…
+
+[[site.route]]
+path = "/"
+redirect = { to = "https://example.com{path}{query}", status = 308 }
+```
+
+A permanent domain move is the same shape — every path 301s to the new
+domain:
+
+```toml
+[[site]]
+hosts = ["old.example.com", "www.old.example.com"]
+tls = "auto"
+
+[[site.route]]
+path = "/"
+redirect = { to = "https://new.example.com{path}{query}", status = 301 }
+```
+
+## WebSockets and other long-lived connections
+
+Upgrade requests (WebSocket) are detected and tunneled automatically —
+the only config that matters is timeouts: `request_deadline` would kill
+a healthy stream and `send` bounds tunnel inactivity, so both are
+disabled and liveness is left to the app's own ping/pong.
+
+```toml
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+
+[[site]]
+hosts = ["live.example.com"]
+tls = "auto"
+
+[[site.route]]
+prefix = "/ws"
+proxy = { upstream = "http://127.0.0.1:4000" }
+timeouts = { request_deadline = "0s", send = "0s" }
+```
+
+For SSE the same applies: streams must outlive the default deadline.
+
+## Protected routes: auth plus an IP allowlist
+
+Middleware composes per route — the LAN allowlist runs first, then
+basic auth.
+
+```toml
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+
+[[site]]
+hosts = ["grafana.internal.example"]
+tls = "auto"
+
+[[site.route]]
+path = "/"
+proxy = { upstream = "http://10.0.0.5:3000" }
+ip_allow = ["10.0.0.0/8", "192.168.0.0/16"]
+auth = { basic = { realm = "ops",
+                   users = { oncall = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$3nGf8u5Z2p2mJx0yq9Rk3g" } } }
+```
+
+Password values must be argon2/bcrypt hashes — generate with `argon2`
+or `htpasswd -B`; an `htpasswd` file path works instead of inline
+`users`. For machine clients use `bearer` or `api_key` with `${VAR}`
+interpolation. See [Middleware](middleware.md).
+
+## Public API: rate limiting and CORS
+
+```toml
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+
+[upstream.api]
+servers = ["http://10.0.0.11:8080", "http://10.0.0.12:8080"]
+
+[[site]]
+hosts = ["api.example.com"]
+tls = "auto"
+
+[[site.route]]
+prefix = "/v1"
+proxy = { upstream = "api" }
+rate_limit = { key = "ip", rate = "100/m", burst = 25 }
+cors = { origins = ["https://app.example.com"],
+         methods = ["GET", "POST", "OPTIONS"],
+         headers = ["content-type", "authorization"],
+         max_age = "1h" }
+# auth = { api_key = { location = "header", name = "x-api-key",
+#                      keys = ["${KEY1}"] } }
+```
+
+Preflight `OPTIONS` requests short-circuit before auth. `key` selects
+what a bucket applies to: `ip`, `identity` (authenticated user),
+`route`, or `header:<Name>`.
+
+## Response caching
+
+Cache stores are named and shared; routes opt in. Freshness honors
+upstream `Cache-Control`/`Expires` by default, `stale_*` covers the
+gaps, and authenticated requests bypass automatically.
+
+```toml
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+
+[cache.main]
+tier = "hybrid"                   # hot objects in RAM, rest on disk
+ram_bytes = "256MiB"
+disk_bytes = "10GiB"
+disk_path = "/var/lib/verd/cache"
+
+[upstream.app]
+servers = ["http://127.0.0.1:8080"]
+
+[[site]]
+hosts = ["cdn.example.com"]
+tls = "auto"
+
+[[site.route]]
+path = "/"
+proxy = { upstream = "app" }
+cache = { store = "main", stale_while_revalidate = "30s",
+          stale_if_error = "1h" }
+```
+
+See [Caching](caching.md) for tiers, purging, and `X-Cache`.
+
+## Fixed responses: health checks and maintenance mode
+
+`respond` needs no backend at all — a cheap health endpoint for the
+load balancer, or a maintenance page during a deploy. `exact` matches
+win over prefix routes regardless of declaration order.
+
+```toml
+[server]
+listen = ["127.0.0.1:8080"]
+
+[[site]]
+default = true
+tls = "off"
+
+[[site.route]]
+exact = "/healthz"
+respond = { status = 200, body = "ok" }
+
+[[site.route]]
+path = "/"
+respond = { status = 503, body = "back in a few minutes",
+            headers = { "retry-after" = "300" } }
+```
+
+## Local development
+
+Plain HTTP, pretty logs, files from the working directory:
+
+```toml
+[server]
+listen = ["127.0.0.1:8080"]
+
+[log]
+format = "pretty"
+level = "debug"
+
+[[site]]
+default = true
+tls = "off"
+root = "./public"
+```
+
+To test HTTPS locally swap the listener for
+`{ addr = "127.0.0.1:8443", tls = true }` and set `tls = "selfsigned"`
+on the site — a throwaway certificate is generated at boot.
+
+## Splitting a large config
+
+One file per site keeps `verd.toml` small. `conf.d/*.toml` is a glob —
+fragments load in sorted order, tables merge recursively, `[[site]]`
+lists append, and a scalar set twice to different values is an error.
+
+```toml
+# /etc/verd/verd.toml
+include = ["conf.d/*.toml"]
+
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+```
+
+```toml
+# /etc/verd/conf.d/blog.toml — one fragment per site
+[[site]]
+hosts = ["blog.example.com"]
+tls = "auto"
+root = "/var/www/blog"
+```
+
+An empty `conf.d/` is fine — a glob matching nothing is ignored, while
+a named file that doesn't exist is an error. `verd config` prints the
+merged result with secrets redacted when you want to check what the
+fragments added up to.
+
+
+
+---
+
 # Configuration
 
 Verdigris reads a single TOML file. `verd validate` checks it without
-starting; `verd fmt` formats it in place preserving comments;
-`verd schema` prints the generated JSON Schema.
+starting; `verd config` prints the merged, interpolated effective
+configuration (secrets redacted); `verd fmt` normalizes whitespace in
+place preserving comments; `verd schema` prints the generated JSON
+Schema.
 
 ## Includes
 
 Split large configs across files:
 
 ```toml
-include = ["conf.d"]
+include = ["conf.d", "extra-*.toml"]
 ```
 
-`include` accepts files, directories (`*.toml` inside, sorted), and
-globs. Sites merge, `[upstream.*]` and `[cache.*]` tables merge by name;
-scalar sections must not conflict.
+`include` accepts files, directories (`*.toml` directly inside,
+sorted), and glob patterns (`*` matches any characters in the file
+name). A named file or directory that doesn't exist is an error; a
+glob that matches nothing is silently ignored, so `conf.d/*.toml` can
+be populated later. Tables merge recursively — `[[site]]` entries append,
+`[upstream.*]` and `[cache.*]` tables merge by name — and **arrays
+concatenate** rather than conflict. Scalars set to different values in
+different fragments are an error.
 
 ## Secrets and environment interpolation
 
@@ -393,8 +822,10 @@ token = "${ADMIN_TOKEN}"        # from the environment
 # token = "${file:/run/secrets/admin-token}"   # or a file
 ```
 
-`${VAR}` errors when unset; `${VAR:-default}` supplies a default.
-`verd validate` resolves them, so CI can catch missing secrets.
+`${VAR}` errors when unset; `${VAR:-default}` supplies a default, as
+does `${file:/path:-default}` when the file is unreadable. A literal
+`${` is written `$${`. `verd validate` resolves them, so CI can catch
+missing secrets.
 
 ## Top-level layout
 
@@ -447,7 +878,7 @@ to its `index` or return `404`.
 servers = ["http://app1:9000", "http://app2:9000"]
 lb = "least_conn"                  # round_robin | least_conn | ip_hash
 
-[upstream.app.limits]
+[upstream.app.timeouts]
 max_connections = 256
 
 [upstream.app.health.passive]
@@ -486,12 +917,18 @@ Inline upstreams without a named cluster are fine for small configs:
 ```toml
 [[site]]
 hosts = ["app.example.com"]
-proxy = ["http://127.0.0.1:9000"]      # catch-all route to an inline cluster
+proxy = "http://127.0.0.1:9000"        # catch-all route to an inline cluster
 ```
+
+`site.proxy` also accepts a cluster name (`proxy = "app"`) or a URL
+list. Inside a route, `proxy.upstream` accepts the same three shapes:
+`"app"`, `"http://…"`, or `["http://…", …]`.
 
 ## Headers
 
-Request headers can be set/cleared per route; `Host` is rewritten to the
+Request headers can be set/cleared per route under
+`proxy.request_headers` (`headers` is accepted as an alias); response
+headers under `route.response_headers`. `Host` is rewritten to the
 member authority when `pass_host = true` (the default); set it `false`
 to pass the client's original `Host` through. Hop-by-hop headers are
 stripped; `X-Forwarded-For` is appended when the peer is trusted
@@ -506,9 +943,8 @@ stripped; `X-Forwarded-For` is appended when the peer is trusted
 ## Manual certificates
 
 ```toml
-[[server.listen]]
-addr = "0.0.0.0:443"
-tls = true
+[server]
+listen = [{ addr = "0.0.0.0:443", tls = true }]
 
 [[site]]
 hosts = ["example.com"]
@@ -691,7 +1127,7 @@ client that disconnects mid-body is logged as `499`.
 ```toml
 [log.access]
 format = "json"            # or "pretty"
-output = "/var/log/verd/access.log"   # or "stdout"
+output = "/var/log/verd/access.log"   # or "stdout" / "stderr"
 filter = 'path != "/healthz" && status != 404'
 sample = 0.25              # deterministic fraction
 ```
@@ -884,20 +1320,20 @@ request_deadline = "0" # whole-request cap, per route; 0 = none
 
 | nginx | verd.toml |
 |---|---|
-| `server { listen 443 ssl; }` | `[[server.listen]] addr="0.0.0.0:443" tls=true` |
+| `server { listen 443 ssl; }` | `server.listen = [{ addr = "0.0.0.0:443", tls = true }]` |
 | `server_name example.com` | `hosts = ["example.com"]` on `[[site]]` |
 | `location / { root … }` | `[[site.route]] path="/" static={root="…"}` |
-| `proxy_pass http://app` | `proxy = ["http://app"]` or `{ upstream = "app" }` |
+| `proxy_pass http://app` | `proxy = "http://app"` or `{ upstream = "app" }` |
 | `upstream { least_conn; }` | `[upstream.app] lb="least_conn"` |
 | `limit_req_zone` | `route.rate_limit` |
-| `add_header X-…` | `route.headers = { set = { … } }` |
+| `add_header X-…` | `route.response_headers = { set = { … } }` |
 | `access_log /var/log/x` | `[log.access] output = "/var/log/x"` |
 | `ssl_certificate(…)` | `site.tls = { cert="…", key="…" }` |
 
 | Caddy | verd.toml |
 |---|---|
 | `example.com { file_server }` | `hosts=["example.com"] tls="auto"` + static route |
-| `reverse_proxy app:9000` | `proxy = ["http://app:9000"]` |
+| `reverse_proxy app:9000` | `proxy = "http://app:9000"` |
 | automatic HTTPS | `tls = "auto"` + `[acme]` account block |
 | `basic_auth` | `route.auth = { basic = { users = { name="hash" } } }` |
 
@@ -973,7 +1409,8 @@ set via environment variables.
 |---|---|
 | `verd run` | Start the server. Default when a config file exists. |
 | `verd validate` | Check a config file for errors; exits non-zero on failure. |
-| `verd fmt` | Format a config file in place, preserving comments. |
+| `verd config` | Print the effective merged/interpolated config as TOML (secrets redacted). |
+| `verd fmt` | Normalize whitespace in a config file in place, preserving comments. |
 | `verd schema` | Print the JSON Schema for the config format to stdout. |
 | `verd version` | Print version, build commit, and target triple. |
 
@@ -981,7 +1418,7 @@ set via environment variables.
 
 | Flag | Env var | Applies to | Effect |
 |---|---|---|---|
-| `-c, --config PATH` | `VERD_CONFIG` | `run`, `validate`, `fmt` | Config file path. Without it, `verd` searches `./verd.toml`, `./config/verd.toml`, `/etc/verd/verd.toml`. |
+| `-c, --config PATH` | `VERD_CONFIG` | `run`, `validate`, `config`, `fmt` | Config file path. Without it, `verd` searches `./verd.toml`, `./config/verd.toml`, `/etc/verd/verd.toml`. |
 | `--watch` | — | `run` | Reload config when the file changes on disk (in addition to `POST /reload`). |
 | `--check` | — | `fmt` | Exit non-zero if unformatted instead of rewriting. |
 | `-o, --output PATH` | — | `schema` | Write the schema to a file instead of stdout. |

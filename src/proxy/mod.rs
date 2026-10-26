@@ -145,13 +145,16 @@ impl Proxy {
                     .transpose()?;
                 Ok::<CompiledRewrite, String>(CompiledRewrite {
                     strip: r.strip_prefix.clone(),
-                    replace: r.replace_prefix.clone(),
+                    replace: r.replace_prefix.as_ref().map(|pp| {
+                        let (f, t) = pp.pair();
+                        (f.to_string(), t.to_string())
+                    }),
                     regex,
                 })
             })
             .transpose()?;
         let headers = p
-            .headers
+            .request_headers
             .as_ref()
             .map(middleware::HeaderOps::build)
             .transpose()?;
@@ -779,7 +782,7 @@ mod handle_tests {
         cfg::ProxyHandler {
             upstream: cfg::UpstreamRef::Urls(urls),
             rewrite: None,
-            headers: None,
+            request_headers: None,
             retries: cfg::RetryPolicy::default(),
             pass_host: true,
         }
@@ -827,7 +830,7 @@ mod handle_tests {
         // replace_prefix
         let p = proxy_for(vec![format!("http://{addr}")], |p| {
             p.rewrite = Some(cfg::Rewrite {
-                replace_prefix: Some(("/old".into(), "/new".into())),
+                replace_prefix: Some(cfg::PrefixPair::Tuple("/old".into(), "/new".into())),
                 ..Default::default()
             });
         });

@@ -1,8 +1,10 @@
 //! Secret interpolation in configuration strings: `${VAR}` reads an
 //! environment variable, `${VAR:-default}` falls back when unset or empty,
-//! and `${file:/path}` reads a file (trailing newlines trimmed) — suited to
-//! Docker and Kubernetes mounted secrets. Interpolation applies to string
-//! values anywhere in the config, including inside arrays and tables.
+//! and `${file:/path}` reads a file (trailing newlines trimmed; a
+//! `:-default` fallback applies when the file is unreadable) — suited to
+//! Docker and Kubernetes mounted secrets. `$${` renders a literal `${`.
+//! Interpolation applies to string values anywhere in the config,
+//! including inside arrays and tables.
 
 use std::path::PathBuf;
 
@@ -55,21 +57,29 @@ fn substitute(
     input: &str,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, InterpolateError> {
-    if !input.contains("${") {
+    if !input.contains('$') {
         return Ok(input.to_string());
     }
     let mut out = String::with_capacity(input.len());
     let mut rest = input;
-    while let Some(start) = rest.find("${") {
-        out.push_str(&rest[..start]);
-        let inner_start = start + 2;
-        let end = rest[inner_start..]
-            .find('}')
-            .map(|e| inner_start + e)
-            .ok_or_else(|| InterpolateError::Malformed(input.to_string()))?;
-        let expr = &rest[inner_start..end];
-        out.push_str(&resolve(expr, input, env)?);
-        rest = &rest[end + 1..];
+    while let Some(dollar) = rest.find('$') {
+        out.push_str(&rest[..dollar]);
+        let after = &rest[dollar + 1..];
+        if let Some(tail) = after.strip_prefix('$') {
+            // `$$` renders a literal `$`
+            out.push('$');
+            rest = tail;
+        } else if let Some(tail) = after.strip_prefix('{') {
+            let end = tail
+                .find('}')
+                .ok_or_else(|| InterpolateError::Malformed(input.to_string()))?;
+            out.push_str(&resolve(&tail[..end], input, env)?);
+            rest = &tail[end + 1..];
+        } else {
+            // lone `$` — not a marker
+            out.push('$');
+            rest = after;
+        }
     }
     out.push_str(rest);
     Ok(out)
@@ -80,11 +90,22 @@ fn resolve(
     whole: &str,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, InterpolateError> {
-    if let Some(path) = expr.strip_prefix("file:") {
-        let path = PathBuf::from(path.trim());
-        let content = std::fs::read_to_string(&path)
-            .map_err(|e| InterpolateError::UnreadableFile(path.clone(), e.to_string()))?;
-        return Ok(content.trim_end_matches(['\n', '\r']).to_string());
+    if let Some(expr) = expr.strip_prefix("file:") {
+        let (path, default) = match expr.split_once(":-") {
+            Some((p, d)) => (p.trim(), Some(d)),
+            None => (expr.trim(), None),
+        };
+        let path = PathBuf::from(path);
+        return match std::fs::read_to_string(&path) {
+            Ok(content) => Ok(content.trim_end_matches(['\n', '\r']).to_string()),
+            Err(e) => match default {
+                Some(d) => Ok(d.to_string()),
+                None => Err(InterpolateError::UnreadableFile(
+                    path.clone(),
+                    e.to_string(),
+                )),
+            },
+        };
     }
     // `${VAR}` or `${VAR:-default}`; the variable name must be non-empty.
     let (name, default) = match expr.split_once(":-") {
@@ -179,5 +200,46 @@ mod tests {
         let mut v = val("$HOME literally, no braces");
         interp(&mut v).unwrap();
         assert_eq!(v.as_str().unwrap(), "$HOME literally, no braces");
+    }
+
+    #[test]
+    fn double_dollar_escapes_marker() {
+        let mut v = val("costs $${price} and $${VERD_TEST_VAR}");
+        interp(&mut v).unwrap();
+        assert_eq!(v.as_str().unwrap(), "costs ${price} and ${VERD_TEST_VAR}");
+    }
+
+    #[test]
+    fn triple_dollar_is_literal_then_expansion() {
+        // `$$${VAR}` = literal `${` followed by... no — `$$` escapes only
+        // before `${`; `$` then `${VAR}` expands.
+        let mut v = val("$$${VERD_TEST_VAR}");
+        interp(&mut v).unwrap();
+        assert_eq!(v.as_str().unwrap(), "$sekret");
+    }
+
+    #[test]
+    fn file_default_used_when_unreadable() {
+        let mut v = val("${file:/definitely/missing/secret:-fallback}");
+        interp(&mut v).unwrap();
+        assert_eq!(v.as_str().unwrap(), "fallback");
+    }
+
+    #[test]
+    fn file_default_ignored_when_readable() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(b"real\n").unwrap();
+        let mut v = val(&format!("${{file:{}:-fallback}}", f.path().display()));
+        interp(&mut v).unwrap();
+        assert_eq!(v.as_str().unwrap(), "real");
+    }
+
+    #[test]
+    fn file_without_default_still_errors() {
+        let mut v = val("${file:/definitely/missing/secret}");
+        assert!(matches!(
+            interp(&mut v),
+            Err(InterpolateError::UnreadableFile(_, _))
+        ));
     }
 }

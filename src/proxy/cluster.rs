@@ -672,7 +672,7 @@ pub struct Cluster {
     /// Round-robin cursor.
     pub rr: AtomicUsize,
     /// Timeout/limit config.
-    pub limits: cfg::UpstreamLimits,
+    pub limits: cfg::UpstreamTimeouts,
     /// DNS grace config.
     pub dns: cfg::UpstreamDns,
     /// Upstream TLS config.
@@ -702,7 +702,9 @@ impl Cluster {
             .enumerate()
             .map(|(i, raw)| {
                 UpstreamUrl::parse(raw)
-                    .map(|url| Member::build(i, url, c.limits.max_connections, cluster_lbl.clone()))
+                    .map(|url| {
+                        Member::build(i, url, c.timeouts.max_connections, cluster_lbl.clone())
+                    })
                     .map_err(|e| format!("upstream.{name}.servers[{i}]: {e}"))
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -714,7 +716,7 @@ impl Cluster {
             members,
             lb: c.lb,
             rr: AtomicUsize::new(0),
-            limits: c.limits.clone(),
+            limits: c.timeouts.clone(),
             dns: c.dns.clone(),
             tls: c.tls.clone(),
             health: c.health.clone(),
@@ -972,7 +974,7 @@ mod tests {
                 servers,
                 lb: cfg::LoadBalancing::default(),
                 health: cfg::HealthCheck::default(),
-                limits: cfg::UpstreamLimits {
+                timeouts: cfg::UpstreamTimeouts {
                     connect: Duration::from_millis(300),
                     idle,
                     max_connections: max_conn,
@@ -1360,7 +1362,7 @@ mod tests {
                 health: hc.clone(),
                 ..Default::default()
             };
-            c.limits.connect = Duration::from_millis(200);
+            c.timeouts.connect = Duration::from_millis(200);
             Arc::new(Cluster::build("t", &c).unwrap())
         };
         let dead = rebuild(vec!["http://127.0.0.1:1".into()]);

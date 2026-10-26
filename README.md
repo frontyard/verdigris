@@ -56,8 +56,8 @@ cargo build --release --locked
 Minimal `verd.toml`:
 
 ```toml
-[[server.listen]]
-addr = "0.0.0.0:8080"
+[server]
+listen = ["0.0.0.0:8080"]
 
 [[site]]
 default = true
@@ -71,6 +71,7 @@ static = { root = "/var/www/site" }
 ```sh
 verd run                    # finds ./verd.toml, then /etc/verd/
 verd validate               # check the config without serving
+verd config                 # print the effective config (secrets redacted)
 verd schema                 # dump the full JSON Schema of the config
 ```
 

@@ -1,4 +1,4 @@
-//! Command line interface: `verd run | validate | version | fmt | schema`.
+//! Command line interface: `verd run | validate | config | version | fmt | schema`.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -36,6 +36,13 @@ enum Command {
         #[arg(short, long, env = "VERD_CONFIG", value_name = "PATH")]
         config: Option<PathBuf>,
     },
+    /// Print the effective configuration (merged, interpolated, fully
+    /// defaulted) as TOML. Secret values are redacted.
+    Config {
+        /// Path to the configuration file.
+        #[arg(short, long, env = "VERD_CONFIG", value_name = "PATH")]
+        config: Option<PathBuf>,
+    },
     /// Print version and build information.
     Version,
     /// Format a configuration file in place, preserving comments.
@@ -64,6 +71,7 @@ pub fn run() -> ExitCode {
     match cli.command {
         Command::Run { config, watch } => cmd_run(config, watch),
         Command::Validate { config } => cmd_validate(config),
+        Command::Config { config } => cmd_config(config),
         Command::Version => cmd_version(),
         Command::Fmt { config, check } => cmd_fmt(config, check),
         Command::Schema { output } => cmd_schema(output),
@@ -312,6 +320,34 @@ fn cmd_validate(config: Option<PathBuf>) -> ExitCode {
     }
 }
 
+fn cmd_config(config: Option<PathBuf>) -> ExitCode {
+    let path = match resolve_config_path(config) {
+        Ok(path) => path,
+        Err(tried) => return missing_config_error(&tried),
+    };
+    let loaded = match crate::config::load(&path) {
+        Ok(loaded) => loaded,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    print_diagnostics(&loaded);
+    if !loaded.is_valid() {
+        return ExitCode::FAILURE;
+    }
+    match crate::config::dump(&loaded.config) {
+        Ok(text) => {
+            println!("{text}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn print_diagnostics(loaded: &crate::config::Loaded) {
     for diag in &loaded.diagnostics {
         eprintln!("{diag}");
@@ -427,6 +463,8 @@ mod tests {
                 check: true
             }
         ));
+        let cli = Cli::try_parse_from(["verd", "config", "-c", "x.toml"]).unwrap();
+        assert!(matches!(cli.command, Command::Config { config: Some(_) }));
         let cli = Cli::try_parse_from(["verd", "schema", "-o", "s.json"]).unwrap();
         assert!(matches!(cli.command, Command::Schema { output: Some(_) }));
         let cli = Cli::try_parse_from(["verd", "--log-level", "debug", "version"]).unwrap();
@@ -472,11 +510,11 @@ mod tests {
     fn cmd_fmt_modes() {
         let dir = tempfile::tempdir().unwrap();
 
-        // toml_edit round-trips losslessly, so a parseable file always
-        // satisfies --check and format_file is a no-op
+        // sloppy spacing fails --check and is normalized in write mode
         let cfg = write_cfg(&dir, "[[site]]\nhosts=[\"x\"]   \n");
-        assert_eq!(cmd_fmt(Some(cfg.clone()), true), ExitCode::SUCCESS);
+        assert_eq!(cmd_fmt(Some(cfg.clone()), true), ExitCode::FAILURE);
         assert_eq!(cmd_fmt(Some(cfg.clone()), false), ExitCode::SUCCESS);
+        assert_eq!(cmd_fmt(Some(cfg.clone()), true), ExitCode::SUCCESS);
 
         // missing file → error; malformed → check-mode error
         let ghost = dir.path().join("ghost.toml");

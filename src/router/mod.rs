@@ -210,13 +210,13 @@ pub fn build(config: &cfg::Config, mw: &middleware::Factory) -> Result<HostIndex
                 ..Default::default()
             });
         }
-        if !site_cfg.proxy.is_empty() {
+        if let Some(up) = &site_cfg.proxy {
             route_cfgs.push(cfg::RouteConfig {
                 path: Some("/".into()),
                 proxy: Some(cfg::ProxyHandler {
-                    upstream: cfg::UpstreamRef::Urls(site_cfg.proxy.clone()),
+                    upstream: up.clone(),
                     rewrite: None,
-                    headers: None,
+                    request_headers: None,
                     retries: cfg::RetryPolicy::default(),
                     pass_host: true,
                 }),
@@ -312,7 +312,7 @@ pub fn build(config: &cfg::Config, mw: &middleware::Factory) -> Result<HostIndex
             patterns,
             regexes,
             tls: site_cfg.tls.clone(),
-            redirect_https: site_cfg.redirect_https,
+            redirect_https: site_cfg.redirect_https.unwrap_or(true),
             redirect_host: site_cfg.redirect_host.clone(),
             trusted_proxies: site_cfg.trusted_proxies.clone(),
         });

@@ -3,9 +3,8 @@
 ## Manual certificates
 
 ```toml
-[[server.listen]]
-addr = "0.0.0.0:443"
-tls = true
+[server]
+listen = [{ addr = "0.0.0.0:443", tls = true }]
 
 [[site]]
 hosts = ["example.com"]
