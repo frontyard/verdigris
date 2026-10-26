@@ -14,7 +14,7 @@ gets a TTL override.
 ## Cells — same storage class only, no substitutes
 
 | | raw (`/raw/…`) | mem (`/m3u8/chNNN.m3u8`) | disk (`/ts/segNNNN.ts`) |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | verd | `static` route | `tier = "ram"` cache+proxy | `tier = "disk"` cache+proxy |
 | nginx | `alias` + `sendfile` | `proxy_cache` on **tmpfs** (nginx has no pure-RAM body cache — ramdisk is its standard approach) | `proxy_cache` on ext4 |
 | caddy_fc | `file_server` | `fastcache` handler, `disk_size 0` (**RAM-only**) | `fastcache` 64MB RAM + 2GB disk — bodies served from `*os.File` (sendfile-capable) |

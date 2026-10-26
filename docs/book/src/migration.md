@@ -1,7 +1,7 @@
 # Migrating from nginx / Caddy
 
 | nginx | verd.toml |
-|---|---|
+| --- | --- |
 | `server { listen 443 ssl; }` | `server.listen = [{ addr = "0.0.0.0:443", tls = true }]` |
 | `server_name example.com` | `hosts = ["example.com"]` on `[[site]]` |
 | `location / { root … }` | `[[site.route]] path="/" static={root="…"}` |
@@ -13,7 +13,7 @@
 | `ssl_certificate(…)` | `site.tls = { cert="…", key="…" }` |
 
 | Caddy | verd.toml |
-|---|---|
+| --- | --- |
 | `example.com { file_server }` | `hosts=["example.com"] tls="auto"` + static route |
 | `reverse_proxy app:9000` | `proxy = "http://app:9000"` |
 | automatic HTTPS | `tls = "auto"` + `[acme]` account block |

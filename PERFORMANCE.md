@@ -10,7 +10,7 @@ Latest TLS-only run (8s × 64 conns, MB/s, 2026-10-23, `GOGC=800` on the
 Go leg):
 
 | cell | verd | nginx | caddy_fc | ferron |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | raw 3MiB | **15,534** | 13,240 | 12,390 | 10,557 |
 | raw 32MiB | 14,346 | 12,657 | 12,616 | **14,531** |
 | cached small-obj | 13,691 | 9,411 | 11,049 | **14,674** |

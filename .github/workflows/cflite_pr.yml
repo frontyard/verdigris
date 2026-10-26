@@ -22,6 +22,7 @@ jobs:
   fuzz:
     name: code-change (${{ matrix.sanitizer }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     concurrency:
       group: ${{ github.workflow }}-${{ matrix.sanitizer }}-${{ github.ref }}
       cancel-in-progress: true

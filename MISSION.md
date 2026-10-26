@@ -1,5 +1,9 @@
 # Verdigris Mission
 
+<!-- markdownlint-disable MD013 -->
+<!-- This manifesto is written in long-line prose; the 80-col wrap
+     enforced elsewhere doesn't apply here. -->
+
 ## Overview
 
 Verdigris is a web server and reverse proxy designed to be simple to run and fast. It is written in Rust.

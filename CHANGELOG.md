@@ -81,6 +81,17 @@ workflow publishes the matching section as the GitHub release notes.
   job; the files in `.clusterfuzzlite/` stay copy-paste ready for a
   future OSS-Fuzz resubmission (`COPY` ↔ `git clone` swap is noted in
   the Dockerfile header).
+- **Lint and secret-scan gates** — new `lint.yml` enforces
+  `markdownlint`, `typos` (allowlist in `_typos.toml`), `actionlint`,
+  a `gitleaks` history scan, and `dependency-review-action` on PRs;
+  a changelog check also fails PRs that touch `src/` or `Cargo.*`
+  without a `CHANGELOG.md` entry (`no-changelog` label skips).
+- **Weekly dead-link sweep** — `links.yml` runs lychee over all
+  tracked `.md`/`.txt` files; doc-example URLs and private IPs are
+  excluded via `lychee.toml`.
+- **Workflow hygiene** — every workflow now declares a `concurrency`
+  group (cancel on PR updates; serialize releases/tagging/corpus
+  writes) and per-job `timeout-minutes`.
 
 ## [0.3.1] - 2026-10-26
 

@@ -6,7 +6,7 @@ Verdigris is a self-hosting web server and reverse proxy in a single static
 binary: nginx-class performance with Caddy-like zero-configuration TLS and
 a readable TOML configuration.
 
-**What it does**
+## What it does
 
 - HTTP/1.1 and HTTP/2 (plus h2c) on the same listener, downstream and upstream
 - Static files with ranges, ETag/Last-Modified validators, precompressed variants
@@ -18,7 +18,7 @@ a readable TOML configuration.
 - Prometheus metrics, structured access logs, and an admin API with
   atomic config reloads (SIGHUP, file watch, or `POST /reload`)
 
-**Design rules**
+## Design rules
 
 - One binary, one `verd.toml`, no external dependencies at runtime.
 - Configuration is validated before it can serve; a bad reload never
@@ -26,7 +26,7 @@ a readable TOML configuration.
 - Response bodies stream end-to-end; nothing buffers a whole body unless
   a feature explicitly requires it.
 
-**For LLMs / tooling**
+## For LLMs / tooling
 
 The repository root ships `llms.txt` (curated summary + recipes) and
 `llms-full.txt` (the whole book in one file), following the llmstxt.org

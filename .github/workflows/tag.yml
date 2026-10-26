@@ -6,10 +6,16 @@ on:
 
 permissions: {}
 
+concurrency:
+  # serialize — a second merge to main queues instead of racing tag pushes
+  group: tag
+  cancel-in-progress: false
+
 jobs:
   tag:
     name: tag version bumps on main
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write # push the v* tag onto the merge commit
       actions: write # dispatch release.yml (token pushes don't trigger it)

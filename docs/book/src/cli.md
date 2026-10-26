@@ -4,7 +4,7 @@
 set via environment variables.
 
 | Command | Purpose |
-|---|---|
+| --- | --- |
 | `verd run` | Start the server. Default when a config file exists. |
 | `verd validate` | Check a config file for errors; exits non-zero on failure. |
 | `verd config` | Print the effective merged/interpolated config as TOML (secrets redacted). |
@@ -15,7 +15,7 @@ set via environment variables.
 ## Flags
 
 | Flag | Env var | Applies to | Effect |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `-c, --config PATH` | `VERD_CONFIG` | `run`, `validate`, `config`, `fmt` | Config file path. Without it, `verd` searches `./verd.toml`, `./config/verd.toml`, `/etc/verd/verd.toml`. |
 | `--watch` | — | `run` | Reload config when the file changes on disk (in addition to `POST /reload`). |
 | `--check` | — | `fmt` | Exit non-zero if unformatted instead of rewriting. |

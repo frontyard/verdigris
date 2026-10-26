@@ -41,7 +41,7 @@ missing secrets.
 ## Top-level layout
 
 | Section | Contents |
-|---|---|
+| --- | --- |
 | `[server]` | listeners, limits, timeouts, connection caps, trusted proxies |
 | `[admin]` | admin listener, bearer token, optional TLS |
 | `[log]` | server log + access log (format/output/filter/sample) |

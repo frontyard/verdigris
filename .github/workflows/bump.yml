@@ -13,10 +13,16 @@ on:
 
 permissions: {}
 
+concurrency:
+  # serialize dispatches — a second bump queues instead of racing the first
+  group: bump
+  cancel-in-progress: false
+
 jobs:
   bump:
     name: release commit on dev → auto-merge to main
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write # push the Release commit to dev
       pull-requests: write # open + auto-merge the dev→main PR

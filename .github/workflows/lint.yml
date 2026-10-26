@@ -1,0 +1,123 @@
+name: Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    # labeled/unlabeled re-run so the no-changelog escape hatch applies
+    # without needing a new push
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  markdownlint:
+    name: markdownlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {contents: read} # checkout
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # generated docs/book/src/reference.md is skipped via .markdownlintignore
+      - run: npx --yes markdownlint-cli@0.50.0 '**/*.md'
+
+  typos:
+    name: typos
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {contents: read} # checkout
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
+        with:
+          tool: typos
+      # allowlist lives in _typos.toml
+      - run: typos
+
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {contents: read} # checkout
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: install + run (version- and hash-pinned)
+        env:
+          VER: "1.7.9"
+          SHA256: 233b280d05e100837f4af1433c7b40a5dcb306e3aa68fb4f17f8a7f45a7df7b4
+        run: |
+          curl -sSfL -o /tmp/actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${VER}/actionlint_${VER}_linux_amd64.tar.gz"
+          echo "${SHA256}  /tmp/actionlint.tar.gz" | sha256sum -c -
+          tar xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+          /tmp/actionlint .github/workflows/*.yml
+
+  gitleaks:
+    name: gitleaks (secret scan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {contents: read} # checkout + full history
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # scan all history, not just the tip
+      - name: install + run (version- and hash-pinned)
+        env:
+          VER: "8.28.0"
+          SHA256: a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb
+        run: |
+          curl -sSfL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VER}/gitleaks_${VER}_linux_x64.tar.gz"
+          echo "${SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
+          tar xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks git --redact .
+
+  dependency-review:
+    name: dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {contents: read} # checkout + dependency diff
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+
+  changelog:
+    name: changelog updated
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {contents: read} # checkout + base fetch
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # diff against the PR base
+      - name: code changes require a CHANGELOG entry
+        env:
+          BASE: ${{ github.base_ref }}
+          SKIP: ${{ contains(github.event.pull_request.labels.*.name, 'no-changelog') }}
+        run: |
+          [ "$SKIP" = "true" ] && { echo "skipped via 'no-changelog' label"; exit 0; }
+          git fetch -q origin "refs/heads/$BASE"
+          changed="$(git diff --name-only "origin/$BASE...HEAD")"
+          echo "$changed" | grep -qE '^(src/|Cargo\.toml|Cargo\.lock)' || {
+            echo "no user-visible code changes"; exit 0
+          }
+          echo "$changed" | grep -qx 'CHANGELOG.md' || {
+            echo "::error::src/ or Cargo.* changed without a CHANGELOG.md entry — see AGENTS.md (apply the 'no-changelog' label to skip)"
+            exit 1
+          }

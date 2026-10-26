@@ -59,7 +59,7 @@ impl Static {
             }
         }
         // These values land in response headers via `HeaderValue::from_str`
-        // per request — reject unparseable ones here rather than panic on
+        // per request — reject unparsable ones here rather than panic on
         // every matching request.
         for (ext, v) in &c.mime_types {
             HeaderValue::from_str(v).map_err(|_| {
