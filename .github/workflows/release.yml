@@ -47,6 +47,14 @@ jobs:
         env:
           # baked into the binary: /version and --version report it
           VERD_GIT_SHA: ${{ steps.checkout.outputs.commit }}
+          # Cross.toml pre-build installs cargo-auditable in the
+          # container; the wrapper embeds dependency metadata
+          # (.dep-v0) into the shipped binary. Both vars are required:
+          # the wrapper refuses to run unless CARGO_AUDITABLE_ORIG_ARGS
+          # is set — `cargo auditable` normally provides it as JSON; we
+          # replicate the same serialized CargoArgs for this invocation.
+          RUSTC_WORKSPACE_WRAPPER: cargo-auditable
+          CARGO_AUDITABLE_ORIG_ARGS: '{"offline":false,"locked":true,"frozen":false,"config":[]}'
       - name: package artifact
         run: |
           t=${{ matrix.target }}
@@ -96,6 +104,11 @@ jobs:
     env:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
+      # egress audit on the job holding OIDC + signing powers — logs
+      # outbound traffic; flip to `block` + allowlist once baselined
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.tag || github.ref }}
@@ -161,6 +174,10 @@ jobs:
     env:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
+      # egress audit on the job that authenticates to GHCR
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.tag || github.ref }}

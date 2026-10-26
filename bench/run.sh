@@ -132,18 +132,18 @@ if have nginx; then
         -e "s|NGINXDISKDIR|$PWD/bench/.gen/nginx-disk|g" \
         bench/nginx.conf > bench/.gen/nginx.conf
     nginx -c "$PWD/bench/.gen/nginx.conf" && nginx_ok=1
-    PIDS+=($(cat /tmp/verd-bench-nginx.pid 2>/dev/null || echo 0))
+    PIDS+=("$(cat /tmp/verd-bench-nginx.pid 2>/dev/null || echo 0)")
 elif have docker; then
     sed -e "s|WWWDIR|/srv/www|g" -e "s|CERTDIR|/srv/bench-gen|g" \
         -e "s|NGINXMEMDIR|/nginx-mem|g" -e "s|NGINXDISKDIR|/nginx-disk|g" \
         bench/nginx.conf > bench/.gen/nginx.docker.conf
-    DOCKERS+=($(docker run -d --network host \
+    DOCKERS+=("$(docker run -d --network host \
         -v "$PWD/bench/.gen/nginx.docker.conf:/etc/nginx/nginx.conf:ro" \
         -v "$PWD/bench/.gen:/srv/bench-gen:ro" \
         -v "$PWD/$WWW:/srv/www:ro" \
         -v "$PWD/bench/.gen/nginx-disk:/nginx-disk" \
         --tmpfs /nginx-mem:rw,size=768m \
-        nginx:alpine))
+        nginx:alpine)")
     nginx_ok=1
 else
     echo "nginx not found and docker unavailable; skipping nginx"
@@ -178,7 +178,7 @@ elif have docker; then
             -t verd-bench-caddy-fc bench >/dev/null
     mkdir -p bench/.gen/fastcache bench/.gen/fastcache-tls bench/.gen/fastcache-mem
     sed "s|CERTDIR|/srv/bench-gen|g" bench/Caddyfile.fastcache > bench/.gen/Caddyfile.fastcache.docker
-    DOCKERS+=($(docker run -d --network host \
+    DOCKERS+=("$(docker run -d --network host \
         -v "$PWD/bench/.gen/Caddyfile.fastcache.docker:/etc/caddy/Caddyfile:ro" \
         -v "$PWD/bench/.gen:/srv/bench-gen:ro" \
         -v "$PWD/$WWW:/srv/www:ro" \
@@ -186,7 +186,7 @@ elif have docker; then
         -v "$PWD/bench/.gen/fastcache-tls:/tmp/verd-bench-fastcache-tls" \
         -v "$PWD/bench/.gen/fastcache-mem:/tmp/verd-bench-fastcache-mem" \
         -e "GOGC=$GOGC" \
-        verd-bench-caddy-fc))
+        verd-bench-caddy-fc)")
     caddy_fc_ok=1
 else
     echo "caddy-fc: no fastcache caddy binary and no docker; skipping" >&2
@@ -205,10 +205,10 @@ if have ferron; then
 elif have docker; then
     sed -e "s|/srv/www|/srv/www|g" -e "s|CERTDIR|/srv/bench-gen|g" \
         bench/ferron.conf > bench/.gen/ferron.conf
-    DOCKERS+=($(docker run -d --network host \
+    DOCKERS+=("$(docker run -d --network host \
         -v "$PWD/bench/.gen/ferron.conf:/etc/ferron/ferron.conf:ro" \
         -v "$PWD/bench/.gen:/srv/bench-gen:ro" \
-        -v "$PWD/$WWW:/srv/www:ro" ferronserver/ferron:3))
+        -v "$PWD/$WWW:/srv/www:ro" ferronserver/ferron:3)")
     ferron_ok=1
 else
     echo "ferron not found and docker unavailable; skipping ferron"
@@ -240,10 +240,6 @@ fi
 # per-listener stores, nginx keys include scheme, verd shares.
 declare -A HTTP_PORT=( [verd]=8080 [nginx]=8180 [caddy_fc]=8290 [ferron]=8380 )
 declare -A TLS_PORT=( [verd]=8443 [nginx]=9443 [caddy_fc]=10444 [ferron]=11443 )
-declare -A DISK_OK=( [verd]=1 [nginx]=1 [caddy_fc]=1 [ferron]=0 )
-declare -A HIT_RE=( [verd]="x-cache: HIT" [nginx]="x-cache-status: *HIT" \
-                    [caddy_fc]="fastcache; hit" [ferron]="FerronCache; hit" )
-
 enabled() { [ "$1" = verd ] || eval "[ \"\$${1}_ok\" = 1 ]"; }
 
 # warm a prefix with real names: m3u8 chNNN.m3u8, ts segNNNN.ts

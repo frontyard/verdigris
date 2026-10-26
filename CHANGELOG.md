@@ -105,9 +105,36 @@ workflow publishes the matching section as the GitHub release notes.
 - **Weekly dead-link sweep** — `links.yml` runs lychee over all
   tracked `.md`/`.txt` files; doc-example URLs and private IPs are
   excluded via `lychee.toml`.
-- **AI code review** — `devin-review.yml` posts the `/devin review`
-  trigger comment when a non-draft, non-fork PR is opened or marked
-  ready; requires the Devin GitHub App connection on the org.
+- **`CI.md`** — documents every workflow, what each job gates vs.
+  reports, the release pipeline flow, and deliberately-skipped checks.
+- **Auditable release binaries** — `Cross.toml` installs a pinned,
+  hash-verified `cargo-auditable` inside the `cross` build containers
+  and `RUSTC_WORKSPACE_WRAPPER` embeds dependency metadata (`.dep-v0`)
+  into the shipped binaries, so `cargo audit bin` can scan the
+  artifact itself — complementary to the CycloneDX SBOM.
+- **Egress auditing on privileged release jobs** — `release.yml` runs
+  `harden-runner` (audit mode) on the OIDC/signing and GHCR-push jobs,
+  logging outbound traffic for baseline before any blocking policy.
+- **Semver-checks (advisory)** — `ci.yml` diffs the public `verd` API
+  against the newest `v*` tag via `cargo semver-checks`; the report
+  surfaces required-bump signal without gating (0.x may legitimately
+  break the lib API between minors — flip to required at 1.0).
+- **Weekly matrix checks** — `weekly.yml` runs the suite under
+  `cargo test --release` (stable; different failure surface without
+  debug/overflow checks) and on nightly rustc (advisory — catches
+  upstream regressions early).
+- **Shell script linting** — `lint.yml` runs `shellcheck -S warning`
+  over every tracked `*.sh` (`release.sh`, `bench/run.sh`,
+  `.clusterfuzzlite/build.sh`); info-level findings are tolerated for
+  intentional idioms. Also fixes real findings: unquoted command
+  substitutions in `bench/run.sh`, dead `DISK_OK`/`HIT_RE` tables, and
+  unquoted `$SRC`/`$OUT` in the fuzz build.
+- **Codecov thresholds** — `codecov.yml` makes the uploaded coverage
+  actionable: project auto-baseline (±1%) and 80% patch targets as
+  informational (non-gating) status checks.
+- **AI code review** — Devin Review runs server-side via the Devin
+  GitHub App (Settings → Review; a comment-posting workflow can't
+  trigger it — bot-authored `/devin review` comments are filtered).
 - **Workflow hygiene** — workflows now declare `concurrency` groups
   (cancel on PR updates; releases serialize per tag and corpus writes
   serialize globally, since a shared group can only hold one queued

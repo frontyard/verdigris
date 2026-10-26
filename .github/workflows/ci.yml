@@ -186,6 +186,46 @@ jobs:
           tool: cargo-machete
       - run: cargo machete
 
+  semver:
+    name: semver-checks (API breaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # advisory — 0.x versions may legitimately break the lib API between
+    # minor bumps; the report surfaces the required bump so the release
+    # number is a decision, not a surprise. Flip to gating at 1.0.
+    # continue-on-error alone isn't advisory: the check still reports a
+    # failure conclusion on the PR. The step exits 0 instead, emitting a
+    # warning annotation + the full report in the job summary.
+    continue-on-error: true
+    permissions: {contents: read} # checkout + tag history
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # baseline is the newest stable tag
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        with:
+          tool: cargo-semver-checks
+      - run: |
+          base="$(git tag --list 'v*' --sort=-version:refname | grep -v -- '-' | head -1)"
+          if [ -z "$base" ]; then
+            echo "no release tag yet — nothing to compare against"
+            exit 0
+          fi
+          echo "baseline: $base"
+          set +e
+          cargo semver-checks check-release --baseline-rev "$base" 2>&1 | tee /tmp/semver.txt
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -eq 100 ]; then
+            echo "::warning::semver-checks: API breaks vs $base — next release needs a version bump accordingly (see job summary)"
+            { echo "## semver-checks vs $base"; echo '```'; sed 's/\x1b\[[0-9;]*m//g' /tmp/semver.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$rc" -ne 0 ]; then
+            echo "::warning::semver-checks did not run to completion (exit $rc)"
+          fi
+
   zizmor:
     name: zizmor (workflow audit)
     runs-on: ubuntu-latest
