@@ -105,6 +105,15 @@ workflow publishes the matching section as the GitHub release notes.
 - **Weekly dead-link sweep** — `links.yml` runs lychee over all
   tracked `.md`/`.txt` files; doc-example URLs and private IPs are
   excluded via `lychee.toml`.
+- **Shell script linting** — `lint.yml` runs `shellcheck -S warning`
+  over every tracked `*.sh` (`release.sh`, `bench/run.sh`,
+  `.clusterfuzzlite/build.sh`); info-level findings are tolerated for
+  intentional idioms. Also fixes real findings: unquoted command
+  substitutions in `bench/run.sh`, dead `DISK_OK`/`HIT_RE` tables, and
+  unquoted `$SRC`/`$OUT` in the fuzz build.
+- **Codecov thresholds** — `codecov.yml` makes the uploaded coverage
+  actionable: project auto-baseline (±1%) and 80% patch targets as
+  informational (non-gating) status checks.
 - **AI code review** — `devin-review.yml` posts the `/devin review`
   trigger comment when a non-draft, non-fork PR is opened or marked
   ready; requires the Devin GitHub App connection on the org.

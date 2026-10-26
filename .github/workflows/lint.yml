@@ -62,6 +62,21 @@ jobs:
           tar xzf /tmp/actionlint.tar.gz -C /tmp actionlint
           /tmp/actionlint .github/workflows/*.yml
 
+  shellcheck:
+    name: shellcheck (shell scripts)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {contents: read} # checkout
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # shellcheck ships in the ubuntu runner image. -S warning: info
+      # findings flag intentional idioms in the bench harness
+      # (`set -- $pair` splitting, `x && y || true` guards); warnings
+      # and errors still gate.
+      - run: git ls-files '*.sh' | xargs shellcheck -S warning
+
   gitleaks:
     name: gitleaks (secret scan)
     runs-on: ubuntu-latest
