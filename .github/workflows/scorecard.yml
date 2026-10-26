@@ -9,10 +9,15 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   analysis:
     name: scorecard
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read # checkout
       security-events: write # SARIF upload to code scanning

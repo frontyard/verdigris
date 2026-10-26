@@ -22,6 +22,7 @@ jobs:
   fuzz:
     name: code-change (${{ matrix.sanitizer }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     concurrency:
       group: ${{ github.workflow }}-${{ matrix.sanitizer }}-${{ github.ref }}
       cancel-in-progress: true
@@ -47,7 +48,11 @@ jobs:
           language: rust
           sanitizer: ${{ matrix.sanitizer }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          fuzz-seconds: 600
+          # 300s × ~4 runner cores ≈ 1200 core-s — more effective coverage
+          # than the old single-core 600s, at half the wall time. Depth is
+          # the daily batch's job (3600s + persistent corpus).
+          fuzz-seconds: 300
+          parallel-fuzzing: true
           mode: code-change
           minimize-crashes: true
           # fork PRs can't get security-events: write — skip SARIF there

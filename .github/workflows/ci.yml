@@ -10,10 +10,15 @@ env:
 
 permissions: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions: {contents: read} # checkout
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -27,6 +32,7 @@ jobs:
   clippy:
     name: clippy (${{ matrix.toolchain }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions: {contents: read} # checkout
     env:
       # rust-toolchain.toml pins "stable"; env var takes precedence so
@@ -49,6 +55,7 @@ jobs:
   test:
     name: test (${{ matrix.toolchain }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions: {contents: read} # checkout
     env:
       RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
@@ -63,13 +70,16 @@ jobs:
         with:
           toolchain: ${{ matrix.toolchain }}
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      - uses: taiki-e/install-action@31bc3c614629c629e983adbbe0ac85c251535667 # releases/cargo-nextest
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        with:
+          tool: cargo-nextest
       - run: cargo nextest run --all-targets
       - run: cargo test --doc
 
   doc:
     name: rustdoc
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions: {contents: read} # checkout
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -84,17 +94,21 @@ jobs:
   deny:
     name: deny
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions: {contents: read} # checkout
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@63300d694c674b6bd0e1ca77d202a2bc41c4b623 # releases/cargo-deny
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        with:
+          tool: cargo-deny
       - run: cargo deny check
 
   coverage:
     name: coverage
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions: {contents: read} # checkout
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -103,7 +117,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: llvm-tools-preview
-      - uses: taiki-e/install-action@c3076e6fa5aeb9a93daf1bd8eff73345250a8a9c # releases/cargo-llvm-cov
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        with:
+          tool: cargo-llvm-cov
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: coverage report + soft gate
         run: |
@@ -117,23 +133,29 @@ jobs:
   machete:
     name: cargo-machete (unused deps)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions: {contents: read} # checkout
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@4c742896e8021fa2e5da9824267c64091d2bfaed # releases/cargo-machete
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        with:
+          tool: cargo-machete
       - run: cargo machete
 
   zizmor:
     name: zizmor (workflow audit)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions: {contents: read} # checkout + GH_TOKEN audit
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@60ea8ae3df458c0ef507a156a82e377be5ad1be5 # releases/zizmor
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        with:
+          tool: zizmor
       - run: zizmor .github/workflows
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

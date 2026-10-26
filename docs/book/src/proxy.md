@@ -5,7 +5,7 @@
 servers = ["http://app1:9000", "http://app2:9000"]
 lb = "least_conn"                  # round_robin | least_conn | ip_hash
 
-[upstream.app.limits]
+[upstream.app.timeouts]
 max_connections = 256
 
 [upstream.app.health.passive]
@@ -44,12 +44,18 @@ Inline upstreams without a named cluster are fine for small configs:
 ```toml
 [[site]]
 hosts = ["app.example.com"]
-proxy = ["http://127.0.0.1:9000"]      # catch-all route to an inline cluster
+proxy = "http://127.0.0.1:9000"        # catch-all route to an inline cluster
 ```
+
+`site.proxy` also accepts a cluster name (`proxy = "app"`) or a URL
+list. Inside a route, `proxy.upstream` accepts the same three shapes:
+`"app"`, `"http://…"`, or `["http://…", …]`.
 
 ## Headers
 
-Request headers can be set/cleared per route; `Host` is rewritten to the
+Request headers can be set/cleared per route under
+`proxy.request_headers` (`headers` is accepted as an alias); response
+headers under `route.response_headers`. `Host` is rewritten to the
 member authority when `pass_host = true` (the default); set it `false`
 to pass the client's original `Host` through. Hop-by-hop headers are
 stripped; `X-Forwarded-For` is appended when the peer is trusted

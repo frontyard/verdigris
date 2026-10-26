@@ -17,6 +17,7 @@ jobs:
   build:
     name: build (${{ matrix.sanitizer }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     concurrency:
       group: ${{ github.workflow }}-${{ matrix.sanitizer }}-${{ github.ref }}
       cancel-in-progress: true

@@ -9,9 +9,14 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -19,7 +24,21 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - uses: taiki-e/install-action@aafe37d8c52b7112a59ade7606c9d466fc6290cb # releases/mdbook
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        with:
+          tool: mdbook
+      # the book title carries the crate version — release.sh keeps it
+      # in sync; guard here so a manual Cargo.toml bump can't drift it
+      - run: |
+          v="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+          grep -q "title = \"Verdigris v$v\"" docs/book/book.toml || {
+            echo "::error::docs/book/book.toml title is stale; expected 'Verdigris v$v' (run release.sh)"
+            exit 1
+          }
+          grep -q "Documentation for verd $v" docs/book/src/introduction.md || {
+            echo "::error::docs/book/src/introduction.md version line is stale; expected 'verd $v'"
+            exit 1
+          }
       # config reference is generated from the live schema
       - run: cargo run --quiet -- schema | python3 docs/gen-reference.py > docs/book/src/reference.md
       - run: |
@@ -41,6 +60,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       pages: write # deploy to GitHub Pages
       id-token: write # pages OIDC

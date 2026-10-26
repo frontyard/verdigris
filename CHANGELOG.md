@@ -11,6 +11,63 @@ workflow publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
+### Added
+
+- **Version shown in the docs** — the book title bar (every page) and
+  the introduction page now carry the crate version; `release.sh`
+  updates both on bump and the docs workflow fails the build if they
+  drift from `Cargo.toml`.
+- **Examples chapter in the docs** — complete copy-paste `verd.toml`
+  recipes for the common cases: static + ACME, SPA, single-backend and
+  load-balanced proxying, frontend+API on one domain, virtual hosting,
+  redirects, WebSockets, auth + IP allowlists, rate limits + CORS,
+  caching, health endpoints, local development, and `conf.d` splits.
+- **`verd config` subcommand** — prints the effective configuration
+  (includes merged, `${…}` interpolated, defaults applied) as TOML with
+  secret values and URL credentials redacted.
+- **Include globs** — `include = ["extra-*.toml"]` and
+  `include = ["conf.d/site-*.toml"]` now expand as documented, sorted
+  like directory entries. A glob that matches nothing is a no-op (a
+  missing file or directory is still an error), so `conf.d/*.toml` can
+  be populated later.
+- **Interpolation escapes and file defaults** — `$${` renders a
+  literal `${`, and `${file:/path:-fallback}` uses the fallback when
+  the file is unreadable.
+- **Friendlier value shapes** — `server.listen` accepts bare
+  `"ip:port"` strings alongside `{ addr, tls }` tables; `site.proxy`
+  accepts a cluster name, a single URL string, or a URL list;
+  `route.proxy.upstream` accepts a single URL string too;
+  `rewrite.replace_prefix` accepts `{ from, to }` in addition to the
+  two-element array; `hsts_max_age` accepts humantime strings like
+  `"180d"` in addition to raw seconds; `server.graceful_timeout` takes
+  humantime strings like every other duration.
+- **`log.access.output = "stderr"`** as a destination alongside
+  `stdout` and file paths.
+- **Enum aliases** — `lb` accepts `"round-robin"`, `"least-conn"`,
+  `"ip-hash"` spellings; `tls` accepts `"self-signed"`/`"self_signed"`.
+
+### Changed
+
+- **Clearer field names with compatibility aliases** —
+  `route.proxy.headers` is now `request_headers`, `route.headers` is
+  `response_headers`, and `upstream.*.limits` is `upstream.*.timeouts`;
+  the old names still parse. `site.proxy`/`route.path` remain aliases
+  for the full forms, and validation messages now name sites by host
+  (`site["example.com"].route[2]`) and list the offending handler keys.
+- **`verd fmt` actually formats** — whitespace around `=` collapses to
+  one space and trailing whitespace is stripped; comments, key order,
+  and brace/comma spacing are preserved.
+
+### Fixed
+
+- **Spurious `redirect_https` warning** — `tls = "off"` sites no longer
+  warn unless `redirect_https` is explicitly set.
+- **Merge-conflict path** no longer ends with a trailing dot
+  (`log.level.` → `log.level`), and the message notes that arrays
+  append rather than conflict.
+- **`site.proxy` is validated** — unknown cluster names and malformed
+  URLs in the site-level shorthand are reported like route-level ones.
+
 ### Build & CI
 
 - **ClusterFuzzLite continuous fuzzing** — the OSS-Fuzz submission
@@ -24,6 +81,17 @@ workflow publishes the matching section as the GitHub release notes.
   job; the files in `.clusterfuzzlite/` stay copy-paste ready for a
   future OSS-Fuzz resubmission (`COPY` ↔ `git clone` swap is noted in
   the Dockerfile header).
+- **Lint and secret-scan gates** — new `lint.yml` enforces
+  `markdownlint`, `typos` (allowlist in `_typos.toml`), `actionlint`,
+  a `gitleaks` history scan, and `dependency-review-action` on PRs;
+  a changelog check also fails PRs that touch `src/` or `Cargo.*`
+  without a `CHANGELOG.md` entry (`no-changelog` label skips).
+- **Weekly dead-link sweep** — `links.yml` runs lychee over all
+  tracked `.md`/`.txt` files; doc-example URLs and private IPs are
+  excluded via `lychee.toml`.
+- **Workflow hygiene** — every workflow now declares a `concurrency`
+  group (cancel on PR updates; serialize releases/tagging/corpus
+  writes) and per-job `timeout-minutes`.
 
 ## [0.3.1] - 2026-10-26
 

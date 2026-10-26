@@ -33,7 +33,7 @@ Top-level keys: `server`, `timeouts`, `limits`, `log`, `admin`, `acme`,
   `rate_limit`, `cors`, `headers`, `security`, `compress`, `cache`,
   `limits`, `timeouts`). More specific prefixes win.
 - Upstreams may be named (`[upstream.NAME]` clusters with `servers`,
-  `lb`, `health`, `limits`, `tls`) or inline URL lists.
+  `lb`, `health`, `timeouts`, `tls`) or inline URL lists.
 
 ## Recipes (each validates against `verd validate`)
 
@@ -148,12 +148,14 @@ cache = { store = "main", ttl = "5m", stale_if_error = "5m" }
 - `api_key` requires `location` (`"header"` or `"query"`), `name`, `keys`.
 - `compress` has `algorithms` (`br`, `zstd`, `gzip`) and a single `level`,
   not per-algorithm switches.
-- `include` takes a **file or directory** (expands `*.toml` inside the
-  dir) — globs like `conf.d/*.toml` are not expanded.
+- `include` takes a file, a directory (expands `*.toml` inside the
+  dir), or a glob like `conf.d/*.toml` — a glob matching nothing is
+  silently ignored.
 - `pass_host = true` (the default) rewrites `Host` to the upstream
   authority; `false` passes the client's original `Host` through.
-- `site.proxy = [urls]` is a catch-all site shorthand; per-route use
-  `route.proxy = { upstream = "name" | [urls] }`.
+- `site.proxy` is a catch-all site shorthand accepting a cluster name,
+  one URL, or a URL list; per-route use `route.proxy = { upstream =
+  "name" | "url" | [urls] }`.
 - `rate` specs: `100/s`, `600/m`, `10000/h`, `50000/day`.
   `key`: `ip` | `identity` | `route` | `header:<Name>`.
 - Durations: `500ms`, `10s`, `5m`, `1h`, `1d`. Sizes: `B`, `KiB`,
@@ -167,6 +169,7 @@ cache = { store = "main", ttl = "5m", stale_if_error = "5m" }
 ## Doc pages
 
 - [Quickstart](docs/book/src/quickstart.md)
+- [Examples](docs/book/src/examples.md)
 - [Configuration model](docs/book/src/configuration.md)
 - [Static file serving](docs/book/src/static.md)
 - [Reverse proxy & load balancing](docs/book/src/proxy.md)

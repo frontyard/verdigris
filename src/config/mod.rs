@@ -40,7 +40,9 @@ pub enum LoadError {
     #[error("{0}: includes nested deeper than {1} levels (cycle?)")]
     IncludeDepth(PathBuf, usize),
     /// Two fragments set the same scalar to different values.
-    #[error("{0}: key {1:?} is set to conflicting values by multiple config sources")]
+    #[error(
+        "{0}: key {1:?} is set to conflicting values by multiple config sources (arrays append; scalars must agree)"
+    )]
     MergeConflict(PathBuf, String),
 }
 
@@ -85,6 +87,52 @@ pub fn load(path: &Path) -> Result<Loaded, LoadError> {
         config,
         diagnostics,
     })
+}
+
+/// Key names that smell secret-bearing — values under them are blanked in
+/// config dumps (`verd config`, admin `/config`).
+pub(crate) const SECRET_KEYS: [&str; 6] =
+    ["password", "token", "secret", "key", "key_file", "api_key"];
+
+/// Serialize the effective configuration as TOML with secrets redacted —
+/// the merged, interpolated, fully-defaulted view (`verd config`).
+pub fn dump(cfg: &Config) -> Result<String, String> {
+    let mut v = toml::Value::try_from(cfg).map_err(|e| e.to_string())?;
+    redact_toml(&mut v);
+    toml::to_string_pretty(&v).map_err(|e| e.to_string())
+}
+
+/// Recursively replace values whose key name suggests a secret, and scrub
+/// `user:pass@` credentials embedded in URL strings.
+fn redact_toml(v: &mut toml::Value) {
+    match v {
+        toml::Value::Table(m) => {
+            for (k, val) in m.iter_mut() {
+                if SECRET_KEYS
+                    .iter()
+                    .any(|s| k.to_ascii_lowercase().contains(s))
+                {
+                    *val = toml::Value::String("***".into());
+                } else {
+                    redact_toml(val);
+                }
+            }
+        }
+        toml::Value::Array(a) => a.iter_mut().for_each(redact_toml),
+        toml::Value::String(s) => {
+            if let Some(scheme_end) = s.find("://") {
+                let rest = &s[scheme_end + 3..];
+                let authority_end = rest.find('/').unwrap_or(rest.len());
+                let authority = &rest[..authority_end];
+                if let Some(at) = authority.rfind('@')
+                    && at > 0
+                {
+                    *s = format!("{}://***@{}", &s[..scheme_end], &authority[at + 1..]);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Warn when the config file itself is unsafe: group/other-writable is
@@ -162,8 +210,7 @@ fn load_document(path: &Path, depth: usize) -> Result<toml::Value, LoadError> {
     }
 
     for include in includes {
-        let target = base_dir.join(&include);
-        for fragment in expand_include(&target).map_err(|e| match e {
+        for fragment in expand_include(base_dir, &include).map_err(|e| match e {
             LoadError::IncludeMissing(_, p) => LoadError::IncludeMissing(path.to_path_buf(), p),
             e => e,
         })? {
@@ -175,15 +222,17 @@ fn load_document(path: &Path, depth: usize) -> Result<toml::Value, LoadError> {
     Ok(value)
 }
 
-/// Expand an include target to a sorted list of files: the file itself, or
-/// every `*.toml` directly inside the directory.
-fn expand_include(target: &Path) -> Result<Vec<PathBuf>, LoadError> {
+/// Expand an include entry to a sorted list of files: the file itself,
+/// every `*.toml` directly inside the directory, or a glob pattern like
+/// `conf.d/*.toml` or `extra-*.toml` (`*` matches any characters).
+fn expand_include(base_dir: &Path, include: &str) -> Result<Vec<PathBuf>, LoadError> {
+    let target = base_dir.join(include);
     if target.is_file() {
-        return Ok(vec![target.to_path_buf()]);
+        return Ok(vec![target]);
     }
     if target.is_dir() {
-        let mut files: Vec<PathBuf> = std::fs::read_dir(target)
-            .map_err(|e| LoadError::Io(target.to_path_buf(), e.to_string()))?
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&target)
+            .map_err(|e| LoadError::Io(target.clone(), e.to_string()))?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
             .filter(|p| p.extension().is_some_and(|e| e == "toml") && p.is_file())
@@ -191,10 +240,30 @@ fn expand_include(target: &Path) -> Result<Vec<PathBuf>, LoadError> {
         files.sort();
         return Ok(files);
     }
-    Err(LoadError::IncludeMissing(
-        target.to_path_buf(),
-        target.to_path_buf(),
-    ))
+    if include.contains('*') {
+        // Split at the last '/' before the first '*' into a literal
+        // directory part and a filename glob.
+        let star = include.find('*').unwrap_or(include.len());
+        let dir_len = include[..star].rfind('/').map(|i| i + 1).unwrap_or(0);
+        let (dir_part, name_pat) = include.split_at(dir_len);
+        let dir = base_dir.join(if dir_part.is_empty() { "." } else { dir_part });
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .map_err(|e| LoadError::Io(dir.clone(), e.to_string()))?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.is_file()
+                    && p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| crate::handler::static_files::glob_match(name_pat, n))
+            })
+            .collect();
+        files.sort();
+        // Zero matches is not an error: `conf.d/*.toml` is meant to be
+        // populated later. A missing directory still fails via read_dir.
+        return Ok(files);
+    }
+    Err(LoadError::IncludeMissing(target.clone(), target))
 }
 
 /// Deep-merge `frag` into `base`: tables merge recursively, arrays append,
@@ -204,7 +273,13 @@ fn merge(base: &mut toml::Value, frag: toml::Value) -> Result<(), String> {
         (toml::Value::Table(b), toml::Value::Table(f)) => {
             for (key, fval) in f {
                 match b.get_mut(&key) {
-                    Some(bval) => merge(bval, fval).map_err(|sub| format!("{key}.{sub}"))?,
+                    Some(bval) => merge(bval, fval).map_err(|sub| {
+                        if sub.is_empty() {
+                            key.clone()
+                        } else {
+                            format!("{key}.{sub}")
+                        }
+                    })?,
                     None => {
                         b.insert(key, fval);
                     }
@@ -492,5 +567,279 @@ proxy = { upstream = "api" }
         let dir = tempfile::tempdir().unwrap();
         let path = write(dir.path(), "verd.toml", "");
         assert!(config_file_perm_diag(&path, &Config::default()).is_none());
+    }
+
+    #[test]
+    fn include_glob_expands_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "extra-01.toml",
+            r#"[[site]]
+hosts = ["a.example.com"]
+root = "/tmp"
+"#,
+        );
+        write(
+            dir.path(),
+            "extra-02.toml",
+            r#"[[site]]
+hosts = ["b.example.com"]
+root = "/tmp"
+"#,
+        );
+        write(
+            dir.path(),
+            "other.toml",
+            r#"[log]
+level = "warn"
+"#,
+        );
+        let path = write(
+            dir.path(),
+            "verd.toml",
+            r#"include = ["extra-*.toml"]
+"#,
+        );
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.config.site.len(), 2);
+        // glob only matched extra-*, so log.level keeps the default
+        assert_eq!(loaded.config.log.level, "info");
+    }
+
+    #[test]
+    fn include_glob_in_subdir() {
+        let dir = tempfile::tempdir().unwrap();
+        let frag_dir = dir.path().join("conf.d");
+        std::fs::create_dir(&frag_dir).unwrap();
+        write(
+            &frag_dir,
+            "site-x.toml",
+            "[[site]]\nhosts = [\"x\"]\nroot = \"/tmp\"\n",
+        );
+        write(&frag_dir, "notes.md", "not a match");
+        let path = write(
+            dir.path(),
+            "verd.toml",
+            r#"include = ["conf.d/site-*.toml"]"#,
+        );
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.config.site.len(), 1);
+    }
+
+    #[test]
+    fn include_glob_no_match_is_a_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(dir.path(), "verd.toml", r#"include = ["ghost-*.toml"]"#);
+        assert!(load(&path).is_ok());
+    }
+
+    #[test]
+    fn include_glob_missing_dir_is_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(dir.path(), "verd.toml", r#"include = ["nope/*.toml"]"#);
+        assert!(load(&path).is_err());
+    }
+
+    #[test]
+    fn merge_conflict_path_has_no_trailing_dot() {
+        let mut base: toml::Value = toml::from_str("[log]\nlevel = \"info\"").unwrap();
+        let frag: toml::Value = toml::from_str("[log]\nlevel = \"debug\"").unwrap();
+        let err = merge(&mut base, frag).unwrap_err();
+        assert_eq!(err, "log.level");
+    }
+
+    #[test]
+    fn dump_redacts_secret_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(
+            dir.path(),
+            "verd.toml",
+            r#"[admin]
+token = "hunter2"
+[[site]]
+hosts = ["x"]
+root = "/tmp"
+"#,
+        );
+        let loaded = load(&path).unwrap();
+        let out = dump(&loaded.config).unwrap();
+        assert!(!out.contains("hunter2"), "{out}");
+        assert!(out.contains("***"), "{out}");
+    }
+
+    #[test]
+    fn dump_redacts_url_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(
+            dir.path(),
+            "verd.toml",
+            r#"[[site]]
+hosts = ["x"]
+proxy = "http://user:pass@127.0.0.1:9000"
+"#,
+        );
+        let loaded = load(&path).unwrap();
+        let out = dump(&loaded.config).unwrap();
+        assert!(!out.contains("user:pass"), "{out}");
+        assert!(out.contains("http://***@127.0.0.1:9000"), "{out}");
+    }
+
+    #[test]
+    fn graceful_timeout_accepts_humantime() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(
+            dir.path(),
+            "verd.toml",
+            "[server]\ngraceful_timeout = \"45s\"\n",
+        );
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.config.server.graceful_timeout.as_secs(), 45);
+    }
+
+    #[test]
+    fn listen_accepts_bare_strings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(
+            dir.path(),
+            "verd.toml",
+            r#"[server]
+listen = ["0.0.0.0:8080", { addr = "0.0.0.0:8443", tls = true }]
+"#,
+        );
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.config.server.listen.len(), 2);
+        assert!(!loaded.config.server.listen[0].tls);
+        assert!(loaded.config.server.listen[1].tls);
+    }
+
+    #[test]
+    fn hsts_max_age_accepts_int_and_duration() {
+        let dir = tempfile::tempdir().unwrap();
+        for (val, want_secs) in [("180", 180u64), ("\"30d\"", 30 * 24 * 3600)] {
+            let path = write(
+                dir.path(),
+                "verd.toml",
+                &format!("[server.security]\nhsts_max_age = {val}\n"),
+            );
+            let loaded = load(&path).unwrap();
+            assert_eq!(
+                loaded.config.server.security.hsts_max_age.as_secs(),
+                want_secs
+            );
+        }
+    }
+
+    #[test]
+    fn site_proxy_accepts_name_url_and_list() {
+        let toml_src = r#"
+[upstream.app]
+servers = ["http://10.0.0.1:1"]
+[[site]]
+hosts = ["x"]
+proxy = "app"
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(dir.path(), "verd.toml", toml_src);
+        let loaded = load(&path).unwrap();
+        assert!(loaded.is_valid(), "{:?}", loaded.diagnostics);
+
+        for proxy in [
+            "\"http://127.0.0.1:9000\"",
+            "[\"http://127.0.0.1:9000\", \"http://127.0.0.1:9001\"]",
+        ] {
+            let path = write(
+                dir.path(),
+                "v2.toml",
+                &format!("[[site]]\nhosts = [\"x\"]\nproxy = {proxy}\n"),
+            );
+            let loaded = load(&path).unwrap();
+            assert!(loaded.is_valid(), "{proxy}: {:?}", loaded.diagnostics);
+        }
+
+        // a bare URL string is read as a URL, not a name
+        let path = write(
+            dir.path(),
+            "v3.toml",
+            "[[site]]\nhosts = [\"x\"]\nproxy = \"missing\"\n",
+        );
+        let loaded = load(&path).unwrap();
+        assert!(!loaded.is_valid());
+        assert!(
+            loaded
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("unknown upstream \"missing\"")),
+            "{:?}",
+            loaded.diagnostics
+        );
+    }
+
+    #[test]
+    fn upstream_limits_alias_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(
+            dir.path(),
+            "verd.toml",
+            r#"[upstream.app]
+servers = ["http://10.0.0.1:1"]
+[upstream.app.limits]
+connect = "1s"
+"#,
+        );
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.config.upstream["app"].timeouts.connect.as_secs(), 1);
+    }
+
+    #[test]
+    fn replace_prefix_accepts_named_and_tuple() {
+        let dir = tempfile::tempdir().unwrap();
+        for rewrite in [
+            r#"replace_prefix = { from = "/a", to = "/b" }"#,
+            r#"replace_prefix = ["/a", "/b"]"#,
+        ] {
+            let path = write(
+                dir.path(),
+                "verd.toml",
+                &format!(
+                    "[[site]]\nhosts = [\"x\"]\n[[site.route]]\npath = \"/\"\nproxy = {{ upstream = \"http://127.0.0.1:1\", rewrite = {{ {rewrite} }} }}\n"
+                ),
+            );
+            let loaded = load(&path).unwrap();
+            let pp = loaded.config.site[0].route[0]
+                .proxy
+                .as_ref()
+                .unwrap()
+                .rewrite
+                .as_ref()
+                .unwrap()
+                .replace_prefix
+                .as_ref()
+                .unwrap();
+            assert_eq!(pp.pair(), ("/a", "/b"), "{rewrite}");
+        }
+    }
+
+    #[test]
+    fn enum_aliases_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(
+            dir.path(),
+            "verd.toml",
+            r#"[upstream.app]
+servers = ["http://10.0.0.1:1"]
+lb = "least-conn"
+[[site]]
+hosts = ["x"]
+tls = "self-signed"
+proxy = "app"
+"#,
+        );
+        let loaded = load(&path).unwrap();
+        assert!(loaded.is_valid(), "{:?}", loaded.diagnostics);
+        assert!(matches!(
+            loaded.config.site[0].tls,
+            model::SiteTls::Mode(model::TlsMode::SelfSigned)
+        ));
     }
 }

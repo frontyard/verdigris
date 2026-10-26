@@ -45,6 +45,69 @@ pub mod status_map {
     }
 }
 
+/// Serde adapter for [`Duration`] fields: a humantime string (`"30s"`,
+/// `"180d"`) or a bare integer number of seconds (accepted for
+/// compatibility with configs written before the field took strings).
+/// Serializes as the canonical humantime string.
+pub mod secs_or_duration {
+    use std::time::Duration;
+
+    use serde::de::Error;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    /// Deserialize `123` (seconds) or `"180d"`.
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Int(u64),
+            Str(String),
+        }
+        match Repr::deserialize(d)? {
+            Repr::Int(secs) => Ok(Duration::from_secs(secs)),
+            Repr::Str(s) => humantime::parse_duration(&s).map_err(Error::custom),
+        }
+    }
+
+    /// Serialize as `"180d"`.
+    pub fn serialize<S: Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&humantime::format_duration(*d).to_string())
+    }
+
+    /// Same for `Option<Duration>` fields.
+    pub mod option {
+        use std::time::Duration;
+
+        use serde::de::Error;
+        use serde::{Deserialize, Deserializer, Serializer};
+
+        /// Deserialize `null`, `123` (seconds), or `"180d"`.
+        pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Duration>, D::Error> {
+            Option::<super::Repr>::deserialize(d)?
+                .map(|r| match r {
+                    super::Repr::Int(secs) => Ok(Duration::from_secs(secs)),
+                    super::Repr::Str(s) => humantime::parse_duration(&s).map_err(Error::custom),
+                })
+                .transpose()
+        }
+
+        /// Serialize `null` or `"180d"`.
+        pub fn serialize<S: Serializer>(d: &Option<Duration>, s: S) -> Result<S::Ok, S::Error> {
+            match d {
+                Some(d) => s.serialize_str(&humantime::format_duration(*d).to_string()),
+                None => s.serialize_none(),
+            }
+        }
+    }
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Int(u64),
+        Str(String),
+    }
+}
+
 /// A byte size parsed from `123`, `"123B"`, `"16KiB"`, `"10MB"`, `"4GiB"`.
 /// Unit-less strings and integers mean bytes. `K`/`M`/`G` suffixes are
 /// decimal (×1000); `Ki`/`Mi`/`Gi` are binary (×1024).

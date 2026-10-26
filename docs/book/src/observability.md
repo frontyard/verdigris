@@ -9,7 +9,7 @@ client that disconnects mid-body is logged as `499`.
 ```toml
 [log.access]
 format = "json"            # or "pretty"
-output = "/var/log/verd/access.log"   # or "stdout"
+output = "/var/log/verd/access.log"   # or "stdout" / "stderr"
 filter = 'path != "/healthz" && status != 404'
 sample = 0.25              # deterministic fraction
 ```

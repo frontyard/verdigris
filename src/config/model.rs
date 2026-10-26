@@ -10,7 +10,7 @@ use std::time::Duration;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::config::values::{ByteSize, RateSpec};
+use crate::config::values::{ByteSize, RateSpec, secs_or_duration};
 
 fn default_true() -> bool {
     true
@@ -23,7 +23,8 @@ pub struct Config {
     /// Additional files or directories of `*.toml` fragments merged into this
     /// configuration, relative to the directory containing this file.
     /// Fragment files are loaded in sorted order; scalar conflicts between
-    /// fragments and the main file are errors.
+    /// fragments and the main file are errors. A glob pattern matching no
+    /// files is a no-op; a missing file or directory is an error.
     pub include: Vec<String>,
     /// Server-wide settings: listeners, connection limits, shutdown.
     pub server: ServerConfig,
@@ -50,16 +51,20 @@ pub struct Config {
 #[serde(default, deny_unknown_fields)]
 pub struct ServerConfig {
     /// Addresses to listen on. Defaults to a single plaintext listener on
-    /// port 80. Mark a listener `tls = true` to terminate TLS on it.
+    /// port 80. Entries are either `"ip:port"` strings or
+    /// `{ addr = "ip:port", tls = true }` tables to terminate TLS.
+    #[schemars(with = "Vec<ListenAddrSchema>")]
     pub listen: Vec<ListenAddr>,
     /// Time to wait for in-flight requests during shutdown or reload before
     /// connections are closed.
+    #[serde(with = "humantime_serde")]
+    #[schemars(with = "String")]
     pub graceful_timeout: Duration,
     /// CIDRs whose `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`,
     /// `X-Real-IP` and `Forwarded` headers are trusted. Empty: trust none.
     #[schemars(with = "Vec<String>")]
     pub trusted_proxies: Vec<ipnet::IpNet>,
-    /// Value of the `Server` response header, or `"off"` to omit it.
+    /// Value of the `Server` response header; `"off"` or `""` omits it.
     pub server_header: String,
     /// Maximum concurrent connections across all listeners.
     pub max_connections: usize,
@@ -92,8 +97,10 @@ pub struct SecurityConfig {
     pub enabled: bool,
     /// `Strict-Transport-Security`, emitted only on TLS responses.
     pub hsts: bool,
-    /// HSTS `max-age` in seconds.
-    pub hsts_max_age: u64,
+    /// HSTS `max-age`: `"180d"`, or a bare number of seconds.
+    #[serde(with = "secs_or_duration")]
+    #[schemars(with = "String")]
+    pub hsts_max_age: Duration,
     /// Append `includeSubDomains` to the HSTS header.
     pub hsts_subdomains: bool,
     /// `X-Content-Type-Options: nosniff`.
@@ -114,7 +121,7 @@ impl Default for SecurityConfig {
         Self {
             enabled: true,
             hsts: true,
-            hsts_max_age: 15_552_000, // 180 days
+            hsts_max_age: Duration::from_secs(180 * 24 * 3600),
             hsts_subdomains: false,
             content_type_options: true,
             frame_options: "DENY".into(),
@@ -134,8 +141,10 @@ pub struct RouteSecurity {
     pub enabled: Option<bool>,
     /// Override HSTS on/off for this route.
     pub hsts: Option<bool>,
-    /// Override HSTS `max-age`.
-    pub hsts_max_age: Option<u64>,
+    /// Override HSTS `max-age` (`"180d"`, or a bare number of seconds).
+    #[serde(with = "secs_or_duration::option")]
+    #[schemars(with = "Option<String>")]
+    pub hsts_max_age: Option<Duration>,
     /// Override `includeSubDomains`.
     pub hsts_subdomains: Option<bool>,
     /// Override `X-Content-Type-Options`.
@@ -150,15 +159,55 @@ pub struct RouteSecurity {
     pub cross_domain_policy: Option<String>,
 }
 
-/// A single listen socket.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(default, deny_unknown_fields)]
+/// A single listen socket: an `"ip:port"` string or an
+/// `{ addr = "ip:port", tls = true }` table.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct ListenAddr {
     /// `IP:port` to bind, e.g. `0.0.0.0:80` or `[::]:443`.
     #[schemars(with = "String")]
     pub addr: SocketAddr,
     /// Terminate TLS on this listener.
     pub tls: bool,
+}
+
+impl<'de> Deserialize<'de> for ListenAddr {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Table {
+            addr: SocketAddr,
+            #[serde(default)]
+            tls: bool,
+        }
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Addr(SocketAddr),
+            Table(Table),
+        }
+        match Repr::deserialize(d)? {
+            Repr::Addr(addr) => Ok(Self { addr, tls: false }),
+            Repr::Table(t) => Ok(Self {
+                addr: t.addr,
+                tls: t.tls,
+            }),
+        }
+    }
+}
+
+/// Schema shape for a `server.listen` entry (`"ip:port"` or `{addr, tls}`).
+#[derive(JsonSchema)]
+#[schemars(untagged)]
+pub enum ListenAddrSchema {
+    /// `"ip:port"` — a plaintext listener.
+    Addr(String),
+    /// `{ addr = "ip:port", tls = true }`.
+    Full {
+        /// `IP:port` to bind.
+        addr: String,
+        /// Terminate TLS on this listener.
+        tls: bool,
+    },
 }
 
 impl Default for ListenAddr {
@@ -313,8 +362,8 @@ pub struct AccessLog {
     pub enabled: bool,
     /// Format: `json` or `pretty`.
     pub format: LogFormat,
-    /// Destination: `stdout` or a file path. File output is reopened on
-    /// `SIGUSR1` for logrotate.
+    /// Destination: `stdout`, `stderr`, or a file path. File output is
+    /// reopened on `SIGUSR1` for logrotate.
     pub output: String,
     /// Optional filter expression evaluated against log fields, e.g.
     /// `path != "/healthz" && status != 404`. Matching requests are logged.
@@ -466,8 +515,9 @@ pub struct UpstreamConfig {
     pub lb: LoadBalancing,
     /// Health checking.
     pub health: HealthCheck,
-    /// Per-upstream timeouts and limits.
-    pub limits: UpstreamLimits,
+    /// Per-upstream timeouts and the per-member connection cap.
+    #[serde(alias = "limits")]
+    pub timeouts: UpstreamTimeouts,
     /// DNS re-resolution behaviour for hostname upstreams.
     pub dns: UpstreamDns,
     /// TLS options for `https://` upstreams.
@@ -501,10 +551,13 @@ impl Default for UnavailableResponse {
 pub enum LoadBalancing {
     /// Rotate through healthy upstreams in order.
     #[default]
+    #[serde(alias = "round-robin", alias = "roundrobin")]
     RoundRobin,
     /// Send to the healthy upstream with fewest in-flight requests.
+    #[serde(alias = "least-conn", alias = "leastconn", alias = "least_conns")]
     LeastConn,
     /// Hash the client IP so it consistently reaches the same upstream.
+    #[serde(alias = "ip-hash", alias = "iphash")]
     IpHash,
 }
 
@@ -568,10 +621,11 @@ impl Default for PassiveHealth {
     }
 }
 
-/// Per-upstream timeouts and limits.
+/// Per-upstream timeouts and the per-member connection cap.
+/// (`[upstream.*.limits]` is accepted as an alias.)
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
-pub struct UpstreamLimits {
+pub struct UpstreamTimeouts {
     /// TCP/TLS connect timeout.
     #[serde(with = "humantime_serde")]
     #[schemars(with = "String")]
@@ -588,7 +642,7 @@ pub struct UpstreamLimits {
     pub max_connections: usize,
 }
 
-impl Default for UpstreamLimits {
+impl Default for UpstreamTimeouts {
     fn default() -> Self {
         Self {
             connect: Duration::from_secs(5),
@@ -727,11 +781,12 @@ pub enum TlsMode {
     /// No TLS for this site.
     Off,
     /// Generate a self-signed certificate (local development).
+    #[serde(alias = "self-signed", alias = "self_signed")]
     SelfSigned,
 }
 
 /// A virtual site: a set of hosts with routes and optional TLS.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct SiteConfig {
     /// Optional display name used in logs, metrics and the admin API.
@@ -743,15 +798,17 @@ pub struct SiteConfig {
     pub default: bool,
     /// TLS mode: `"auto"` (ACME), `{cert, key}`, `"selfsigned"`, or `"off"`.
     pub tls: SiteTls,
-    /// Redirect plaintext HTTP to HTTPS when TLS is enabled.
-    pub redirect_https: bool,
+    /// Redirect plaintext HTTP to HTTPS when TLS is enabled; defaults on.
+    /// Set explicitly `false` only to serve a TLS site on plain HTTP.
+    pub redirect_https: Option<bool>,
     /// Host the HTTPS redirect points at; defaults to the request's Host.
     /// Useful for `www → apex` style consolidation across schemes.
     pub redirect_host: Option<String>,
     /// Shorthand for a catch-all static file route rooted here.
     pub root: Option<PathBuf>,
-    /// Shorthand for a catch-all reverse proxy route to these upstream URLs.
-    pub proxy: Vec<String>,
+    /// Shorthand for a catch-all reverse proxy route: a named upstream
+    /// (`"app"`), an upstream URL (`"http://app:9000"`), or a list of URLs.
+    pub proxy: Option<UpstreamRef>,
     /// Routes, evaluated in order of specificity, not declaration order.
     pub route: Vec<RouteConfig>,
     /// Per-site override of the trusted proxy CIDR list.
@@ -759,38 +816,23 @@ pub struct SiteConfig {
     pub trusted_proxies: Option<Vec<ipnet::IpNet>>,
 }
 
-impl Default for SiteConfig {
-    fn default() -> Self {
-        Self {
-            name: None,
-            hosts: Vec::new(),
-            default: false,
-            tls: SiteTls::default(),
-            redirect_https: true,
-            redirect_host: None,
-            root: None,
-            proxy: Vec::new(),
-            route: Vec::new(),
-            trusted_proxies: None,
-        }
-    }
-}
-
 /// One route: a matcher, one handler, and middleware.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct RouteConfig {
-    /// Shorthand for `prefix`.
+    /// Alias for `prefix`.
     pub path: Option<String>,
     /// Match this exact path only.
     pub exact: Option<String>,
-    /// Match paths starting with this prefix.
+    /// Match paths starting with this prefix. Prefix matching is
+    /// segment-aware: `/api` matches `/api` and `/api/…` but not `/apix`.
     pub prefix: Option<String>,
     /// Match paths against this regular expression. Evaluated last; a regex
     /// route never overrides a prefix route.
     pub regex: Option<String>,
     /// Additional match conditions: methods, headers, query parameters.
-    #[serde(rename = "match")]
+    /// (`conditions` is accepted as an alias.)
+    #[serde(rename = "match", alias = "conditions")]
     pub match_: Option<MatchConditions>,
     /// Priority among routes that tie on specificity. Higher wins.
     pub priority: i32,
@@ -822,7 +864,9 @@ pub struct RouteConfig {
     /// Response compression.
     pub compress: Option<CompressConfig>,
     /// Response header manipulation applied to this route's responses.
-    pub headers: Option<HeaderOps>,
+    /// (`headers` is accepted as an alias.)
+    #[serde(alias = "headers")]
+    pub response_headers: Option<HeaderOps>,
     /// Per-route security-header overrides.
     pub security: Option<RouteSecurity>,
     /// Per-route timeout overrides (e.g. `0s` deadline for SSE/WebSocket).
@@ -899,7 +943,10 @@ pub struct StaticHandler {
     /// SPA mode: serve `index.html` for unknown paths.
     #[serde(default)]
     pub spa: bool,
-    /// Extra fallback files tried before the index, e.g. `["/500.html"]`.
+    /// Extra fallback files tried before SPA/listing/404: on a miss each
+    /// entry is resolved relative to `root` (or the requested directory
+    /// after `index` misses) and the first existing file is served. Not
+    /// nginx `try_files` semantics — the request path is not rewritten.
     #[serde(default)]
     pub try_files: Vec<String>,
     /// Serve a sibling `.gz`, `.br`, or `.zst` file when the client accepts
@@ -951,8 +998,9 @@ pub struct ProxyHandler {
     #[serde(default)]
     pub rewrite: Option<Rewrite>,
     /// Request header manipulation applied before forwarding upstream.
-    #[serde(default)]
-    pub headers: Option<HeaderOps>,
+    /// (`headers` is accepted as an alias.)
+    #[serde(default, alias = "headers")]
+    pub request_headers: Option<HeaderOps>,
     /// Retry policy for idempotent requests on connection failure.
     #[serde(default)]
     pub retries: RetryPolicy,
@@ -962,14 +1010,33 @@ pub struct ProxyHandler {
     pub pass_host: bool,
 }
 
-/// Upstream reference: a name or an inline URL list.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+/// Upstream reference: a name, a single URL (`"http://app:9000"`), or an
+/// inline URL list.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(untagged)]
 pub enum UpstreamRef {
     /// Name of a top-level `[upstream.<name>]` cluster.
     Name(String),
     /// Inline list of upstream URLs forming an anonymous cluster.
     Urls(Vec<String>),
+}
+
+impl<'de> Deserialize<'de> for UpstreamRef {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Name(String),
+            Urls(Vec<String>),
+        }
+        match Repr::deserialize(d)? {
+            // `"http://…"`/`"h2c://…"` reads as a one-element URL list;
+            // a bare word is a cluster name.
+            Repr::Name(s) if s.contains("://") => Ok(Self::Urls(vec![s])),
+            Repr::Name(s) => Ok(Self::Name(s)),
+            Repr::Urls(u) => Ok(Self::Urls(u)),
+        }
+    }
 }
 
 /// Path rewriting before forwarding upstream.
@@ -979,9 +1046,35 @@ pub struct Rewrite {
     /// Remove this prefix from the request path.
     pub strip_prefix: Option<String>,
     /// Replace this path prefix with another.
-    pub replace_prefix: Option<(String, String)>,
+    pub replace_prefix: Option<PrefixPair>,
     /// Apply `pattern` regex substitution once to the path.
     pub regex: Option<RegexRewrite>,
+}
+
+/// Prefix replacement: `{ from = "/api", to = "/v1" }`. The legacy
+/// two-element array `["/api", "/v1"]` is also accepted.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(untagged)]
+pub enum PrefixPair {
+    /// `{ from = "…", to = "…" }`.
+    Named {
+        /// Existing path prefix to replace.
+        from: String,
+        /// Replacement path prefix.
+        to: String,
+    },
+    /// `["/from", "/to"]` — first element is `from`, second is `to`.
+    Tuple(String, String),
+}
+
+impl PrefixPair {
+    /// Split into `(from, to)`.
+    pub fn pair(&self) -> (&str, &str) {
+        match self {
+            Self::Named { from, to } => (from, to),
+            Self::Tuple(f, t) => (f, t),
+        }
+    }
 }
 
 /// Regex path rewrite: `pattern` → `replace`.
@@ -1239,7 +1332,8 @@ pub struct CacheBypass {
     /// resolved by `route.auth`) bypass the cache.
     #[serde(default = "default_true")]
     pub authenticated: bool,
-    /// HTTP methods that bypass (default: all except GET and HEAD).
+    /// Additional HTTP methods that bypass the cache. Only GET and HEAD
+    /// are cacheable anyway — list them here to bypass even those.
     pub methods: Vec<String>,
     /// Cookie names whose presence bypasses the cache.
     pub cookies: Vec<String>,

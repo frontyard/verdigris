@@ -11,10 +11,16 @@ on:
 
 permissions: {}
 
+concurrency:
+  # serialize releases — never cancel or race an in-flight release
+  group: release
+  cancel-in-progress: false
+
 jobs:
   build:
     name: build (${{ matrix.target }})
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: read
     strategy:
@@ -58,6 +64,7 @@ jobs:
   sbom:
     name: sbom
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -65,7 +72,7 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
           persist-credentials: false
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: cargo-sbom
       - run: cargo sbom > verd-sbom.json
@@ -78,6 +85,7 @@ jobs:
     name: release
     needs: [build, sbom]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write # publish the GitHub release
       id-token: write # cosign keyless signing + attestation OIDC
@@ -143,6 +151,7 @@ jobs:
     name: image
     needs: [build]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read # checkout + artifact metadata
       actions: read # download-artifact

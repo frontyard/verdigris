@@ -10,6 +10,7 @@ pub mod ratelimit;
 
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use http::{HeaderName, HeaderValue, StatusCode};
 
@@ -80,8 +81,8 @@ impl HeaderOps {
 pub struct Security {
     /// Emit `Strict-Transport-Security` on TLS responses.
     pub hsts: bool,
-    /// HSTS `max-age` seconds.
-    pub hsts_max_age: u64,
+    /// HSTS `max-age`.
+    pub hsts_max_age: Duration,
     /// HSTS `includeSubDomains` flag.
     pub hsts_subdomains: bool,
     /// Emit `X-Content-Type-Options: nosniff`.
@@ -143,7 +144,7 @@ impl Security {
             }
         };
         if tls && self.hsts {
-            let mut v = format!("max-age={}", self.hsts_max_age);
+            let mut v = format!("max-age={}", self.hsts_max_age.as_secs());
             if self.hsts_subdomains {
                 v.push_str("; includeSubDomains");
             }
@@ -262,7 +263,11 @@ impl Factory {
         _site: &cfg::SiteConfig,
         route: &cfg::RouteConfig,
     ) -> Result<Middleware, String> {
-        let headers = route.headers.as_ref().map(HeaderOps::build).transpose()?;
+        let headers = route
+            .response_headers
+            .as_ref()
+            .map(HeaderOps::build)
+            .transpose()?;
         let auth = route.auth.as_ref().map(Auth::build).transpose()?;
         let cors = route.cors.as_ref().map(Cors::build).transpose()?;
         let rate_limit = route
@@ -370,7 +375,7 @@ mod tests {
         let global = cfg::SecurityConfig {
             enabled: true,
             hsts: true,
-            hsts_max_age: 100,
+            hsts_max_age: Duration::from_secs(100),
             hsts_subdomains: true,
             content_type_options: true,
             frame_options: "DENY".into(),

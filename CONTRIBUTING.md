@@ -8,6 +8,7 @@ Bug reports and pull requests are welcome. For security issues, follow
 A PR is mergeable when it:
 
 - **Passes CI locally first** — the same commands the workflow runs:
+
   ```sh
   cargo fmt --check
   cargo clippy --all-targets -- -D warnings
@@ -15,6 +16,7 @@ A PR is mergeable when it:
   cargo doc --no-deps -D warnings
   cargo deny check                  # supply-chain policy
   ```
+
 - **Keeps `#![deny(unsafe_code)]`** — the only sanctioned `unsafe` is the
   read-only mmap in `src/body.rs`; new unsafe needs a written
   justification in the PR description.

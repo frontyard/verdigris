@@ -3,8 +3,8 @@
 Create `verd.toml`:
 
 ```toml
-[[server.listen]]
-addr = "0.0.0.0:8080"
+[server]
+listen = ["0.0.0.0:8080"]
 
 [[site]]
 default = true

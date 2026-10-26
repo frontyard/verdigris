@@ -57,6 +57,15 @@ fi
 # --- version bump -----------------------------------------------------------
 if [ "$cur" != "$new" ]; then
     sed -i "0,/^version = \"$cur\"/s//version = \"$new\"/" Cargo.toml
+    # docs show the version prominently (book title bar + landing page);
+    # keep them in lockstep with Cargo.toml
+    sed -i "s/^title = \"Verdigris v[0-9.]*\"/title = \"Verdigris v$new\"/" docs/book/book.toml
+    grep -q "title = \"Verdigris v$new\"" docs/book/book.toml \
+        || { echo "failed to update docs/book/book.toml title" >&2; exit 1; }
+    sed -i "s/^\*\*Documentation for verd [0-9.]*\.\*\*/**Documentation for verd $new.**/" \
+        docs/book/src/introduction.md
+    grep -q "Documentation for verd $new" docs/book/src/introduction.md \
+        || { echo "failed to update docs/book/src/introduction.md" >&2; exit 1; }
     cargo metadata --quiet --format-version 1 >/dev/null   # re-sync Cargo.lock
 fi
 
@@ -89,7 +98,7 @@ if [ $regen -eq 1 ]; then
 fi
 
 # --- commit, tag, push -------------------------------------------------------
-git add Cargo.toml Cargo.lock CHANGELOG.md
+git add Cargo.toml Cargo.lock CHANGELOG.md docs/book/book.toml docs/book/src/introduction.md
 [ $regen -eq 1 ] && git add docs/book/src/reference.md llms-full.txt || true
 git diff --cached --quiet || git commit -m "Release v$new"
 if [ $no_tag -eq 1 ]; then

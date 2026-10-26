@@ -6,7 +6,7 @@ running as `nonroot` with a read-only root filesystem.
 ## Writable directories
 
 | Path | Used for |
-|---|---|
+| --- | --- |
 | `/var/lib/verd` | disk-cache objects, ACME account + certificates |
 | `/var/log/verd` | access-log files (or log to stdout) |
 | `/etc/verd` | config + manual cert files (mount **read-only**) |

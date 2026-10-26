@@ -4,6 +4,7 @@
 
 - [Installation](./installation.md)
 - [Quickstart](./quickstart.md)
+- [Examples](./examples.md)
 - [Configuration](./configuration.md)
 - [Static file serving](./static.md)
 - [Reverse proxy & load balancing](./proxy.md)

@@ -11,7 +11,7 @@ tls = { cert = "admin.pem", key = "admin.key" }   # optional
 ```
 
 | Endpoint | Description |
-|---|---|
+| --- | --- |
 | `GET /health` | liveness |
 | `GET /ready` | readiness (bind to your LB health check) |
 | `GET /metrics` | Prometheus exposition |

@@ -175,11 +175,10 @@ async fn show_config(State(state): State<Arc<AdminState>>) -> Json<Value> {
 
 /// Recursively replace values whose key name suggests a secret.
 fn redact(v: &mut Value) {
-    const SECRET_KEYS: [&str; 6] = ["password", "token", "secret", "key", "key_file", "api_key"];
     match v {
         Value::Object(m) => {
             for (k, val) in m.iter_mut() {
-                if SECRET_KEYS
+                if crate::config::SECRET_KEYS
                     .iter()
                     .any(|s| k.to_ascii_lowercase().contains(s))
                 {

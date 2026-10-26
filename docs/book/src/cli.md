@@ -4,18 +4,19 @@
 set via environment variables.
 
 | Command | Purpose |
-|---|---|
+| --- | --- |
 | `verd run` | Start the server. Default when a config file exists. |
 | `verd validate` | Check a config file for errors; exits non-zero on failure. |
-| `verd fmt` | Format a config file in place, preserving comments. |
+| `verd config` | Print the effective merged/interpolated config as TOML (secrets redacted). |
+| `verd fmt` | Normalize whitespace in a config file in place, preserving comments. |
 | `verd schema` | Print the JSON Schema for the config format to stdout. |
 | `verd version` | Print version, build commit, and target triple. |
 
 ## Flags
 
 | Flag | Env var | Applies to | Effect |
-|---|---|---|---|
-| `-c, --config PATH` | `VERD_CONFIG` | `run`, `validate`, `fmt` | Config file path. Without it, `verd` searches `./verd.toml`, `./config/verd.toml`, `/etc/verd/verd.toml`. |
+| --- | --- | --- | --- |
+| `-c, --config PATH` | `VERD_CONFIG` | `run`, `validate`, `config`, `fmt` | Config file path. Without it, `verd` searches `./verd.toml`, `./config/verd.toml`, `/etc/verd/verd.toml`. |
 | `--watch` | — | `run` | Reload config when the file changes on disk (in addition to `POST /reload`). |
 | `--check` | — | `fmt` | Exit non-zero if unformatted instead of rewriting. |
 | `-o, --output PATH` | — | `schema` | Write the schema to a file instead of stdout. |

@@ -315,6 +315,7 @@ pub struct AccessLogger {
 
 enum Sink {
     Stdout,
+    Stderr,
     File(std::fs::File),
 }
 
@@ -322,12 +323,14 @@ impl Write for Sink {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
             Self::Stdout => std::io::stdout().write(buf),
+            Self::Stderr => std::io::stderr().write(buf),
             Self::File(f) => f.write(buf),
         }
     }
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
             Self::Stdout => std::io::stdout().flush(),
+            Self::Stderr => std::io::stderr().flush(),
             Self::File(f) => f.flush(),
         }
     }
@@ -342,6 +345,7 @@ impl AccessLogger {
         };
         let (out, path) = match cfg.output.as_str() {
             "stdout" | "" => (Sink::Stdout, None),
+            "stderr" => (Sink::Stderr, None),
             path => (Sink::File(open_append(path)?), Some(path.to_string())),
         };
         Ok(Self {
