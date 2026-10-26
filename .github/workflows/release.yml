@@ -191,17 +191,20 @@ jobs:
         id: tags
         run: |
           git fetch --tags --force --quiet
-          newest="$(git tag --list 'v*' --sort=-version:refname | head -1)"
-          echo "newest tag on repo: $newest — releasing: $RELEASE_TAG"
+          # `latest` follows the newest *stable* tag — prerelease tags
+          # (vX.Y.Z-…) are excluded so they never move it
+          newest="$(git tag --list 'v*' --sort=-version:refname | grep -v -- '-' | head -1)"
+          echo "newest stable tag: $newest — releasing: $RELEASE_TAG"
           {
             echo "ghcr.io/${{ github.repository }}:${RELEASE_TAG}"
             if [ "$newest" = "$RELEASE_TAG" ]; then
               echo "ghcr.io/${{ github.repository }}:latest"
-            else
-              echo "::warning::${RELEASE_TAG} is not the newest tag ($newest); 'latest' is left pointing at it"
             fi
           } > tags.txt
           cat tags.txt
+          if [ "$newest" != "$RELEASE_TAG" ]; then
+            echo "::warning::$RELEASE_TAG is not the newest stable tag ($newest); 'latest' is unchanged"
+          fi
           {
             echo 'list<<EOF'
             cat tags.txt
