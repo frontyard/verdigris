@@ -11,6 +11,20 @@ workflow publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
+### Build & CI
+
+- **ClusterFuzzLite continuous fuzzing** — the OSS-Fuzz submission
+  ([google/oss-fuzz#16349](https://github.com/google/oss-fuzz/pull/16349))
+  was declined (project not mature enough yet), so the same build
+  contract now runs in-repo via `.clusterfuzzlite/` +
+  `google/clusterfuzzlite` actions: PR fuzzing, daily batch fuzzing
+  with a persistent corpus (`corpus` branch), weekly corpus prune +
+  coverage report (`coverage` branch), and main-push builds for
+  novel-crash detection. This supersedes the old `cargo fuzz` smoke
+  job; the files in `.clusterfuzzlite/` stay copy-paste ready for a
+  future OSS-Fuzz resubmission (`COPY` ↔ `git clone` swap is noted in
+  the Dockerfile header).
+
 ## [0.3.1] - 2026-10-26
 
 ### Added
