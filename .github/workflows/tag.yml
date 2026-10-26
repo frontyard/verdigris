@@ -1,0 +1,36 @@
+name: Tag
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  tag:
+    name: tag version bumps on main
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the v* tag onto the merge commit
+      actions: write # dispatch release.yml (token pushes don't trigger it)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # zizmor: ignore[artipacked] this job's purpose is pushing the tag
+          fetch-depth: 0 # compare Cargo.toml at HEAD vs first parent
+      - name: tag version bump
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cur=$(git show 'HEAD^1:Cargo.toml' | grep -m1 '^version = ' | cut -d'"' -f2)
+          new=$(git show 'HEAD:Cargo.toml'   | grep -m1 '^version = ' | cut -d'"' -f2)
+          [ "$cur" = "$new" ] && { echo "no version change ($new)"; exit 0; }
+          git ls-remote --exit-code --tags origin "v$new" >/dev/null \
+            && { echo "tag v$new already exists"; exit 0; }
+          grep -q "^## \[$new\]" CHANGELOG.md \
+            || { echo "::error::Cargo.toml bumped to $new but no [$new] changelog section"; exit 1; }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$new" -m "verd v$new" HEAD
+          git push origin "v$new"
+          gh workflow run release.yml -f "tag=v$new"

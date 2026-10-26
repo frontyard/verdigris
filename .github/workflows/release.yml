@@ -3,6 +3,11 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: existing vX.Y.Z tag to release
+        required: true
 
 permissions: {}
 
@@ -19,7 +24,9 @@ jobs:
           - aarch64-unknown-linux-musl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
         with:
+          ref: ${{ inputs.tag || github.ref }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
@@ -31,7 +38,7 @@ jobs:
         run: cross build --release --locked --target ${{ matrix.target }}
         env:
           # baked into the binary: /version and --version report it
-          VERD_GIT_SHA: ${{ github.sha }}
+          VERD_GIT_SHA: ${{ steps.checkout.outputs.commit }}
       - name: package artifact
         run: |
           t=${{ matrix.target }}
@@ -56,6 +63,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.tag || github.ref }}
           persist-credentials: false
       - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2
         with:
@@ -75,9 +83,12 @@ jobs:
       id-token: write # cosign keyless signing + attestation OIDC
       actions: read # download-artifact
       attestations: write # upload SLSA provenance
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.tag || github.ref }}
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -101,7 +112,7 @@ jobs:
       # tag; generated "What's Changed" is appended below it
       - name: release notes from CHANGELOG.md
         run: |
-          v="${GITHUB_REF_NAME#v}"
+          v="${RELEASE_TAG#v}"
           {
             awk -v head="## [${v}]" '
               index($0, head) == 1 { on = 1; next }
@@ -117,6 +128,7 @@ jobs:
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           # zizmor: ignore[superfluous-actions] curated body_path notes are deliberate
+          tag_name: ${{ inputs.tag || github.ref_name }}
           files: |
             verd-*.tar.gz
             checksums.txt
@@ -135,9 +147,12 @@ jobs:
       contents: read # checkout + artifact metadata
       actions: read # download-artifact
       packages: write # push to GHCR
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.tag || github.ref }}
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -165,5 +180,5 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            ghcr.io/${{ github.repository }}:${{ env.RELEASE_TAG }}
             ghcr.io/${{ github.repository }}:latest

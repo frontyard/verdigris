@@ -11,10 +11,13 @@ publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-10-26
-
 ### Added
 
+- **Fully CI-driven releases** — dispatch `bump.yml` with a version: it
+  bumps `dev` via `release.sh --no-tag`, auto-merges dev→main, then
+  `tag.yml` tags the merge commit and dispatches `release.yml` (which
+  also gained a manual `tag` input for re-releasing). Tags now always
+  anchor in `main` history; no local release steps remain.
 - **Top-level `LICENSE` file** — dual-license pointer (MIT OR
   Apache-2.0, SPDX) alongside `LICENSE-MIT`/`LICENSE-APACHE` so the
   CII "license in a standard location" criterion is met literally.

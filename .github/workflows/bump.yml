@@ -1,0 +1,53 @@
+name: Bump
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: patch, minor, major, or exact x.y.z
+        required: true
+      regen_docs:
+        description: regenerate config reference docs (src/config/ changed)
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  bump:
+    name: release commit on dev → auto-merge to main
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the Release commit to dev
+      pull-requests: write # open + auto-merge the dev→main PR
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # zizmor: ignore[artipacked] this job's purpose is pushing the release commit
+          ref: dev
+          fetch-depth: 0 # release.sh guardrails read the working tree
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - name: release.sh bump (commit only, no tag)
+        env:
+          VERSION: ${{ inputs.version }}
+          REGEN: ${{ inputs.regen_docs }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          extra=""
+          [ "$REGEN" = "true" ] && extra="--regen-docs"
+          ./release.sh "$VERSION" -y --no-tag $extra
+      - name: push dev
+        run: git push origin HEAD:dev
+      - name: open or reuse dev→main PR, enable auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          v="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+          if ! gh pr view dev --json number >/dev/null 2>&1; then
+            gh pr create --base main --head dev \
+              --title "Release v$v" \
+              --body "dev→main merge: releases v$v once checks pass. tag.yml tags the merge commit, release.yml publishes."
+          fi
+          gh pr merge --auto --merge dev || \
+            echo "::warning::auto-merge unavailable — merge the PR manually when checks pass"
