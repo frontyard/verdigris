@@ -216,7 +216,7 @@ jobs:
           fi
           echo "baseline: $base"
           set +e
-          cargo semver-checks check-release --baseline-rev "$base" | tee /tmp/semver.txt
+          cargo semver-checks check-release --baseline-rev "$base" 2>&1 | tee /tmp/semver.txt
           rc=${PIPESTATUS[0]}
           set -e
           if [ "$rc" -eq 100 ]; then
