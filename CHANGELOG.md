@@ -4,7 +4,9 @@ All notable changes to verd are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
-How releases work: changes accumulate under `## [Unreleased]`. At tag
+How releases work: changes accumulate under `## [Unreleased]
+
+## [0.3.0] - 2026-10-26`. At tag
 time the maintainer renames it to `## [x.y.z] - YYYY-MM-DD`, bumps
 `Cargo.toml`, commits, and pushes `vX.Y.Z` — the release workflow
 publishes the matching section as the GitHub release notes.
@@ -250,7 +252,8 @@ reverse proxy with load balancing and retries, response caching
 (RAM/disk/hybrid), compression, rate limiting, CORS, security headers,
 admin API with atomic reloads, Prometheus metrics.
 
-[Unreleased]: https://github.com/frontyard/verdigris/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/frontyard/verdigris/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/frontyard/verdigris/compare/v0.2.4...v0.3.0
 [0.2.4]: https://github.com/frontyard/verdigris/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/frontyard/verdigris/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/frontyard/verdigris/compare/v0.2.1...v0.2.2
