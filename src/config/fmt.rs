@@ -42,8 +42,10 @@ fn normalize_table(table: &mut toml_edit::Table) {
                 gap_to_one_space(key.leaf_decor_mut(), true);
                 gap_to_one_space(v.decor_mut(), false);
                 clean_trailing(v.decor_mut());
-                if let toml_edit::Value::InlineTable(it) = v {
-                    normalize_inline_table(it);
+                match v {
+                    toml_edit::Value::InlineTable(it) => normalize_inline_table(it),
+                    toml_edit::Value::Array(a) => normalize_array(a),
+                    _ => {}
                 }
             }
             toml_edit::Item::Table(t) => {
@@ -69,8 +71,22 @@ fn normalize_inline_table(table: &mut toml_edit::InlineTable) {
     for (mut key, item) in table.iter_mut() {
         gap_to_one_space(key.leaf_decor_mut(), true);
         gap_to_one_space(item.decor_mut(), false);
-        if let toml_edit::Value::InlineTable(it) = item {
-            normalize_inline_table(it);
+        match item {
+            toml_edit::Value::InlineTable(it) => normalize_inline_table(it),
+            toml_edit::Value::Array(a) => normalize_array(a),
+            _ => {}
+        }
+    }
+}
+
+/// Recurse into an array's elements — inline tables inside arrays
+/// (`listen = [{ addr = "..." }]`) carry `=` gaps like any table.
+fn normalize_array(array: &mut toml_edit::Array) {
+    for v in array.iter_mut() {
+        match v {
+            toml_edit::Value::InlineTable(it) => normalize_inline_table(it),
+            toml_edit::Value::Array(a) => normalize_array(a),
+            _ => {}
         }
     }
 }
@@ -225,6 +241,19 @@ mod tests {
         let input = "a=1 # note\nb=2# also a comment\n";
         let out = format_str(input).unwrap();
         assert_eq!(out, "a = 1 # note\nb = 2 # also a comment\n");
+    }
+
+    #[test]
+    fn inline_tables_inside_arrays_normalized() {
+        let input = "[server]\nlisten = [{addr=\"127.0.0.1:8080\", tls=true}, \"0.0.0.0:80\"]\n";
+        let out = format_str(input).unwrap();
+        assert!(out.contains("listen = ["), "{out}");
+        assert!(out.contains("addr = \"127.0.0.1:8080\""), "{out}");
+        assert!(out.contains("tls = true"), "{out}");
+        // nested arrays inside inline tables too
+        let nested = "x = { tags  =  [{a=1}] }\n";
+        let out = format_str(nested).unwrap();
+        assert!(out.contains("a = 1"), "{out}");
     }
 
     #[test]

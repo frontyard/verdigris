@@ -6,10 +6,9 @@ on:
 
 permissions: {}
 
-concurrency:
-  # serialize — a second merge to main queues instead of racing tag pushes
-  group: tag
-  cancel-in-progress: false
+# no concurrency group: each run pushes a distinct tag computed from its
+# own commit — no shared ref to race — and GitHub groups can hold only one
+# pending run, so a queued tag could be dropped by a later merge.
 
 jobs:
   tag:

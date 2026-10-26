@@ -91,6 +91,42 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --no-deps
 
+  generated:
+    name: generated docs in sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions: {contents: read} # checkout
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      # same checks as docs.yml, but on every PR — schema/docs drift
+      # doesn't only come from docs/** paths
+      - run: |
+          cargo run --quiet -- schema | python3 docs/gen-reference.py > docs/book/src/reference.md
+          python3 docs/gen-llms-full.py
+          git diff --exit-code docs/book/src/reference.md llms-full.txt || {
+            echo "::error::generated docs are stale — run:"
+            echo "  cargo run -- schema | python3 docs/gen-reference.py > docs/book/src/reference.md"
+            echo "  python3 docs/gen-llms-full.py"
+            exit 1
+          }
+
+  package:
+    name: cargo publish dry-run
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions: {contents: read} # checkout
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo publish --dry-run --locked
+
   deny:
     name: deny
     runs-on: ubuntu-latest
@@ -129,6 +165,12 @@ jobs:
         with:
           name: lcov
           path: lcov.info
+      # advisory — a codecov outage must never gate a PR; public-repo
+      # uploads are tokenless (add CODECOV_TOKEN if they flake)
+      - uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
 
   machete:
     name: cargo-machete (unused deps)

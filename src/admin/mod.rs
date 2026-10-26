@@ -178,10 +178,7 @@ fn redact(v: &mut Value) {
     match v {
         Value::Object(m) => {
             for (k, val) in m.iter_mut() {
-                if crate::config::SECRET_KEYS
-                    .iter()
-                    .any(|s| k.to_ascii_lowercase().contains(s))
-                {
+                if crate::config::key_is_secret(k) {
                     // blank the whole value — an array of api keys or a map
                     // of secrets under a secret-named key is still secret
                     *val = json!("***");
