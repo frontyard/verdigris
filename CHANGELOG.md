@@ -11,6 +11,8 @@ publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-26
+
 ### Added
 
 - **Top-level `LICENSE` file** — dual-license pointer (MIT OR
@@ -22,6 +24,12 @@ publishes the matching section as the GitHub release notes.
   also emits detached `*.sig` + `*.pem` files alongside the
   `*.cosign.bundle` bundles; OpenSSF Signed-Releases scans release
   assets for these suffixes.
+
+### Changed
+
+- **Dependency refresh** — lockfile updates including tokio 1.54.1,
+  memmap2 0.9.12, base64 0.23 (fuzz), brotli 9.1, icu 2.4, notify
+  8.2.1; all within existing semver ranges, test suite green.
 
 ## [0.2.7] - 2026-10-25
 
