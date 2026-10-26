@@ -1,0 +1,50 @@
+name: Docker
+
+on:
+  push:
+    branches: [main]
+    paths: ["src/**", "Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile", "Dockerfile.release", ".dockerignore", "rust-toolchain.toml", ".github/workflows/docker.yml"]
+  pull_request:
+    paths: ["src/**", "Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile", "Dockerfile.release", ".dockerignore", "rust-toolchain.toml", ".github/workflows/docker.yml"]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  image:
+    name: docker build + trivy scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read # checkout
+      security-events: write # SARIF upload to code scanning
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # full source build on musl — the same path release.yml's image
+      # packages; catches Dockerfile/musl breakage before tagging
+      - run: docker build -t verd:ci .
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        with:
+          tool: trivy
+      - name: image scan → SARIF (all severities)
+        run: trivy image --format sarif -o trivy-image.sarif verd:ci
+      - name: upload SARIF to code scanning
+        # fork PRs can't write security-events; upload runs anyway on push
+        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: trivy-image.sarif
+      - name: gate on fixable HIGH/CRITICAL
+        run: trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 verd:ci
+      # shipped images only; bench/ and .clusterfuzzlite/ Dockerfiles are
+      # build containers where root is required — not release artifacts
+      - name: trivy config (Dockerfile, Dockerfile.release)
+        run: |
+          for f in Dockerfile Dockerfile.release; do
+            trivy config --exit-code 0 "$f"
+          done

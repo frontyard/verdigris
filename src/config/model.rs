@@ -175,6 +175,7 @@ impl<'de> Deserialize<'de> for ListenAddr {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Table {
+            #[serde(default = "default_addr")]
             addr: SocketAddr,
             #[serde(default)]
             tls: bool,
@@ -195,18 +196,22 @@ impl<'de> Deserialize<'de> for ListenAddr {
     }
 }
 
+fn default_addr() -> SocketAddr {
+    ListenAddr::default().addr
+}
+
 /// Schema shape for a `server.listen` entry (`"ip:port"` or `{addr, tls}`).
 #[derive(JsonSchema)]
 #[schemars(untagged)]
 pub enum ListenAddrSchema {
     /// `"ip:port"` — a plaintext listener.
     Addr(String),
-    /// `{ addr = "ip:port", tls = true }`.
+    /// `{ addr = "ip:port", tls = true }` — both optional.
     Full {
-        /// `IP:port` to bind.
-        addr: String,
-        /// Terminate TLS on this listener.
-        tls: bool,
+        /// `IP:port` to bind (default `0.0.0.0:80`).
+        addr: Option<String>,
+        /// Terminate TLS on this listener (default `false`).
+        tls: Option<bool>,
     },
 }
 
@@ -1418,6 +1423,19 @@ mod tests {
         t2.apply_overrides(&TimeoutOverrides::default());
         assert_eq!(t2.send, base.send);
         assert_eq!(t2.idle, base.idle);
+    }
+
+    #[test]
+    fn listen_table_defaults_addr() {
+        // `{ tls = true }` alone selects TLS on the default listener —
+        // addr defaults like the pre-untagged-table shape did
+        let l: ListenAddr = toml::from_str("tls = true\n").unwrap();
+        assert_eq!(l.addr, SocketAddr::from(([0, 0, 0, 0], 80)));
+        assert!(l.tls);
+
+        let l: ListenAddr = toml::from_str("addr = \"127.0.0.1:8080\"\n").unwrap();
+        assert_eq!(l.addr, SocketAddr::from(([127, 0, 0, 1], 8080)));
+        assert!(!l.tls);
     }
 
     #[test]

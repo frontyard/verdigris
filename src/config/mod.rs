@@ -94,6 +94,18 @@ pub fn load(path: &Path) -> Result<Loaded, LoadError> {
 pub(crate) const SECRET_KEYS: [&str; 6] =
     ["password", "token", "secret", "key", "key_file", "api_key"];
 
+/// Header-style key suffixes that carry credentials — matched as
+/// *suffixes* so `Authorization`/`Set-Cookie`/`X-Token-Cookie` are caught
+/// while `cookies` (a list of cookie *names* for cache bypass) is not.
+const SECRET_SUFFIXES: [&str; 2] = ["authorization", "cookie"];
+
+/// Does a config key name suggest the value beneath it is a secret?
+/// Shared by `verd config` dumps and the admin `/config` endpoint.
+pub(crate) fn key_is_secret(key: &str) -> bool {
+    let k = key.to_ascii_lowercase();
+    SECRET_KEYS.iter().any(|s| k.contains(s)) || SECRET_SUFFIXES.iter().any(|s| k.ends_with(s))
+}
+
 /// Serialize the effective configuration as TOML with secrets redacted —
 /// the merged, interpolated, fully-defaulted view (`verd config`).
 pub fn dump(cfg: &Config) -> Result<String, String> {
@@ -108,10 +120,7 @@ fn redact_toml(v: &mut toml::Value) {
     match v {
         toml::Value::Table(m) => {
             for (k, val) in m.iter_mut() {
-                if SECRET_KEYS
-                    .iter()
-                    .any(|s| k.to_ascii_lowercase().contains(s))
-                {
+                if key_is_secret(k) {
                     *val = toml::Value::String("***".into());
                 } else {
                     redact_toml(val);
@@ -666,6 +675,44 @@ root = "/tmp"
         let out = dump(&loaded.config).unwrap();
         assert!(!out.contains("hunter2"), "{out}");
         assert!(out.contains("***"), "{out}");
+    }
+
+    #[test]
+    fn key_is_secret_suffix_vs_substring() {
+        for key in [
+            "Authorization",
+            "Proxy-Authorization",
+            "Cookie",
+            "Set-Cookie",
+            "api_key",
+        ] {
+            assert!(key_is_secret(key), "{key}");
+        }
+        // a list of cookie *names* is not a secret — suffix match only
+        for key in ["cookies", "headers", "x-trace-id"] {
+            assert!(!key_is_secret(key), "{key}");
+        }
+    }
+
+    #[test]
+    fn dump_redacts_secret_header_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(
+            dir.path(),
+            "verd.toml",
+            r#"[[site]]
+hosts = ["x"]
+
+[[site.route]]
+path = "/"
+respond = { status = 200, body = "ok" }
+response_headers = { set = { Authorization = "hunter2", X-Plain = "shown" } }
+"#,
+        );
+        let loaded = load(&path).unwrap();
+        let out = dump(&loaded.config).unwrap();
+        assert!(!out.contains("hunter2"), "{out}");
+        assert!(out.contains("X-Plain = \"shown\""), "{out}");
     }
 
     #[test]

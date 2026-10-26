@@ -58,8 +58,24 @@ workflow publishes the matching section as the GitHub release notes.
   one space and trailing whitespace is stripped; comments, key order,
   and brace/comma spacing are preserved.
 
+### Security
+
+- **Wider dump redaction** — `verd config` and the admin `/config`
+  endpoint now also blank values under `Authorization`- and
+  `Cookie`-suffixed keys (e.g. `response_headers.set.Authorization =
+  "${TOKEN}"` no longer prints the resolved credential). Matching is
+  suffix-based, so `route.cache.bypass.cookies` — a list of cookie
+  *names*, not secrets — stays visible.
+
 ### Fixed
 
+- **`listen = [{ tls = true }]` parses again** — a `{ addr, tls }`
+  listener table without `addr` once more binds the default
+  `0.0.0.0:80` listener, matching pre-0.3 behavior instead of failing
+  schema validation.
+- **`verd fmt` reaches arrays** — `=` gaps inside inline tables nested
+  in arrays (`listen = [{addr="127.0.0.1:8080"}]`) are now normalized,
+  and `--check` flags the same input.
 - **Spurious `redirect_https` warning** — `tls = "off"` sites no longer
   warn unless `redirect_https` is explicitly set.
 - **Merge-conflict path** no longer ends with a trailing dot
@@ -89,9 +105,33 @@ workflow publishes the matching section as the GitHub release notes.
 - **Weekly dead-link sweep** — `links.yml` runs lychee over all
   tracked `.md`/`.txt` files; doc-example URLs and private IPs are
   excluded via `lychee.toml`.
-- **Workflow hygiene** — every workflow now declares a `concurrency`
-  group (cancel on PR updates; serialize releases/tagging/corpus
-  writes) and per-job `timeout-minutes`.
+- **AI code review** — `devin-review.yml` posts the `/devin review`
+  trigger comment when a non-draft, non-fork PR is opened or marked
+  ready; requires the Devin GitHub App connection on the org.
+- **Workflow hygiene** — workflows now declare `concurrency` groups
+  (cancel on PR updates; releases serialize per tag and corpus writes
+  serialize globally, since a shared group can only hold one queued
+  run and would silently drop pending tags) and per-job
+  `timeout-minutes`. `ghcr.io/…:latest` is only pushed by the run
+  whose tag is the newest `v*`, so a concurrent or re-run release of
+  an older tag can't regress the image users pull.
+- **Generated-docs gate on every PR** — `ci.yml` regenerates
+  `docs/book/src/reference.md` and `llms-full.txt` and fails on
+  drift; previously only enforced on `docs/**` paths via `docs.yml`.
+- **Container build + scan on PRs** — `docker.yml` builds the musl
+  `Dockerfile` and trivy-scans the image (SARIF to code scanning,
+  fails on fixable HIGH/CRITICAL), closing the gap where the image
+  only built at release time.
+- **crates.io packaging gate** — `cargo publish --dry-run --locked`
+  runs in CI so packaging breakage is caught before release.
+- **CodeQL `security-and-quality`** — wider query suite than the
+  default for the Rust analysis.
+- **Codecov upload** — the existing `lcov.info` now also uploads to
+  Codecov for PR diff-coverage comments; `fail_ci_if_error: false`
+  keeps it advisory.
+- **Weekly `cargo-mutants` sweep** — `mutants.yml` runs mutation
+  testing (shuffled, ~100min cap) and archives `mutants.out/`; it
+  reports surviving mutants without gating.
 
 ## [0.3.1] - 2026-10-26
 

@@ -12,8 +12,10 @@ on:
 permissions: {}
 
 concurrency:
-  # serialize releases — never cancel or race an in-flight release
-  group: release
+  # per-tag groups: same-tag releases serialize; different tags run in
+  # parallel. A shared "release" group would let a third run silently drop
+  # the one pending tag (GitHub holds at most one queued run per group).
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -182,12 +184,36 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # `latest` is shared mutable state across tags — only the run whose
+      # tag is the newest may move it, so a concurrent (or re-run) release
+      # of an older tag can't regress the image users pull
+      - name: resolve image tags
+        id: tags
+        run: |
+          git fetch --tags --force --quiet
+          # `latest` follows the newest *stable* tag — prerelease tags
+          # (vX.Y.Z-…) are excluded so they never move it
+          newest="$(git tag --list 'v*' --sort=-version:refname | grep -v -- '-' | head -1)"
+          echo "newest stable tag: $newest — releasing: $RELEASE_TAG"
+          {
+            echo "ghcr.io/${{ github.repository }}:${RELEASE_TAG}"
+            if [ "$newest" = "$RELEASE_TAG" ]; then
+              echo "ghcr.io/${{ github.repository }}:latest"
+            fi
+          } > tags.txt
+          cat tags.txt
+          if [ "$newest" != "$RELEASE_TAG" ]; then
+            echo "::warning::$RELEASE_TAG is not the newest stable tag ($newest); 'latest' is unchanged"
+          fi
+          {
+            echo 'list<<EOF'
+            cat tags.txt
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: dist
           file: dist/Dockerfile.release
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/${{ github.repository }}:${{ env.RELEASE_TAG }}
-            ghcr.io/${{ github.repository }}:latest
+          tags: ${{ steps.tags.outputs.list }}

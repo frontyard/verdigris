@@ -1,0 +1,36 @@
+name: Devin Review
+
+# Post the `/devin review` trigger comment when a PR becomes reviewable.
+# Requires the Devin GitHub App connection installed on the org
+# (app.devin.ai → Settings → Connections → GitHub → Add Connection,
+# select this repo) — without it the comment is inert. Auto-review
+# cadence (every push, ready-only, etc.) is configured Devin-side in
+# Settings → Review; this job only covers the initial trigger.
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened]
+
+permissions: {}
+
+concurrency:
+  group: devin-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  trigger:
+    # skip drafts and forks — forked PRs get a read-only token and the
+    # comment would fail (the Devin-side auto-review rule covers forks)
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.fork == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      pull-requests: write # post the trigger comment
+    steps:
+      - name: Request review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr comment "$PR_URL" --body "/devin review"
