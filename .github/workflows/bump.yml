@@ -44,10 +44,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           v="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
-          if ! gh pr view dev --json number >/dev/null 2>&1; then
+          # must filter to open PRs: `gh pr view dev` resolves merged/closed PRs too
+          pr="$(gh pr list --head dev --state open --json number --jq '.[0].number')"
+          if [ -z "$pr" ]; then
             gh pr create --base main --head dev \
               --title "Release v$v" \
               --body "dev→main merge: releases v$v once checks pass. tag.yml tags the merge commit, release.yml publishes."
+            pr="$(gh pr list --head dev --state open --json number --jq '.[0].number')"
           fi
-          gh pr merge --auto --merge dev || \
-            echo "::warning::auto-merge unavailable — merge the PR manually when checks pass"
+          gh pr merge "$pr" --auto --merge || \
+            echo "::warning::auto-merge unavailable — merge PR #$pr manually when checks pass"

@@ -4,12 +4,21 @@ All notable changes to verd are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
-How releases work: changes accumulate under `## [Unreleased]`. At tag
-time the maintainer renames it to `## [x.y.z] - YYYY-MM-DD`, bumps
-`Cargo.toml`, commits, and pushes `vX.Y.Z` — the release workflow
-publishes the matching section as the GitHub release notes.
+How releases work: changes accumulate under the `[Unreleased]`
+section. At release time the Bump workflow promotes it to
+`## [x.y.z] - YYYY-MM-DD`, bumps `Cargo.toml`, and the release
+workflow publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
+
+### Fixed
+
+- **Release machinery bootstrap** — `bump.yml` now only reuses an
+  *open* dev→main PR (a merged one previously blocked creation), and
+  `release.sh` anchors its `[Unreleased]` heading match so inline
+  mentions can no longer absorb the promoted section.
+
+## [0.3.0] - 2026-10-26
 
 ### Added
 
@@ -250,7 +259,11 @@ reverse proxy with load balancing and retries, response caching
 (RAM/disk/hybrid), compression, rate limiting, CORS, security headers,
 admin API with atomic reloads, Prometheus metrics.
 
-[Unreleased]: https://github.com/frontyard/verdigris/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/frontyard/verdigris/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/frontyard/verdigris/compare/v0.2.7...v0.3.0
+[0.2.7]: https://github.com/frontyard/verdigris/compare/v0.2.6...v0.2.7
+[0.2.6]: https://github.com/frontyard/verdigris/compare/v0.2.5...v0.2.6
+[0.2.5]: https://github.com/frontyard/verdigris/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/frontyard/verdigris/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/frontyard/verdigris/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/frontyard/verdigris/compare/v0.2.1...v0.2.2
