@@ -132,9 +132,9 @@ workflow publishes the matching section as the GitHub release notes.
 - **Codecov thresholds** — `codecov.yml` makes the uploaded coverage
   actionable: project auto-baseline (±1%) and 80% patch targets as
   informational (non-gating) status checks.
-- **AI code review** — `devin-review.yml` posts the `/devin review`
-  trigger comment when a non-draft, non-fork PR is opened or marked
-  ready; requires the Devin GitHub App connection on the org.
+- **AI code review** — Devin Review runs server-side via the Devin
+  GitHub App (Settings → Review; a comment-posting workflow can't
+  trigger it — bot-authored `/devin review` comments are filtered).
 - **Workflow hygiene** — workflows now declare `concurrency` groups
   (cancel on PR updates; releases serialize per tag and corpus writes
   serialize globally, since a shared group can only hold one queued

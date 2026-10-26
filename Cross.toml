@@ -25,4 +25,4 @@ pre-build = [
 ]
 
 [build.env]
-passthrough = ["RUSTC_WORKSPACE_WRAPPER"]
+passthrough = ["RUSTC_WORKSPACE_WRAPPER", "CARGO_AUDITABLE_ORIG_ARGS"]

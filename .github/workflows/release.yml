@@ -48,9 +48,13 @@ jobs:
           # baked into the binary: /version and --version report it
           VERD_GIT_SHA: ${{ steps.checkout.outputs.commit }}
           # Cross.toml pre-build installs cargo-auditable in the
-          # container; this makes cargo wrap rustc so dependency
-          # metadata (.dep-v0) is embedded in the shipped binary
+          # container; the wrapper embeds dependency metadata
+          # (.dep-v0) into the shipped binary. Both vars are required:
+          # the wrapper refuses to run unless CARGO_AUDITABLE_ORIG_ARGS
+          # is set — `cargo auditable` normally provides it as JSON; we
+          # replicate the same serialized CargoArgs for this invocation.
           RUSTC_WORKSPACE_WRAPPER: cargo-auditable
+          CARGO_AUDITABLE_ORIG_ARGS: '{"offline":false,"locked":true,"frozen":false,"config":[]}'
       - name: package artifact
         run: |
           t=${{ matrix.target }}

@@ -77,12 +77,14 @@ fuzz build is caught before the PR smoke or batch run finds it.
 Builds the book on PRs (catches broken docs); deploys to GitHub Pages
 on pushes to `main`.
 
-### `devin-review.yml` — AI review trigger
+### Devin Review — AI review
 
-Posts `/devin review` on non-draft, non-fork PRs (`opened` /
-`ready_for_review` / `reopened`). The comment is inert until the Devin
-GitHub App connection is installed; server-side auto-review
-(Settings → Review) covers forks and makes this optional.
+Not a workflow — Devin's GitHub App ignores `/devin review` comments
+from `github-actions[bot]` (bot senders are filtered to prevent
+trigger loops), so a comment-posting workflow can't drive it.
+Auto-review is configured server-side instead: **Devin → Settings →
+Review → add repo + trigger rules** (on-create / on-ready /
+every-push). Manual `/devin review` comments from a human also work.
 
 ## Scheduled
 

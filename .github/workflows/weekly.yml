@@ -41,6 +41,10 @@ jobs:
     timeout-minutes: 30
     # rustc bugs/regressions upstream are not our PRs to fix — advisory
     continue-on-error: true
+    env:
+      # rust-toolchain.toml pins channel = "stable" — override it or
+      # this job silently runs the stable toolchain it means to test
+      RUSTUP_TOOLCHAIN: nightly
     permissions: {contents: read} # checkout
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
