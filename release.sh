@@ -13,17 +13,21 @@
 #   changelog section), and the multi-arch GHCR image.
 #
 # -y           skip the confirmation prompt
+# --no-tag     bump + changelog + commit only — no tag, no push. For the
+#              CI flow (commit on dev → PR → tag lands on main's merge
+#              commit via .github/workflows/tag.yml).
 # --regen-docs regenerate docs/book/src/reference.md + llms-full.txt
 #              (needed when src/config/ changed this cycle)
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-bump=patch assume_yes=0 regen=0
+bump=patch assume_yes=0 regen=0 no_tag=0
 for a in "$@"; do
     case "$a" in
         patch|minor|major) bump=$a ;;
         -y|--yes) assume_yes=1 ;;
         --regen-docs) regen=1 ;;
+        --no-tag) no_tag=1 ;;
         [0-9]*.[0-9]*.[0-9]*) bump="$a" ;;
         *) echo "unknown arg: $a" >&2; exit 2 ;;
     esac
@@ -85,6 +89,10 @@ fi
 git add Cargo.toml Cargo.lock CHANGELOG.md
 [ $regen -eq 1 ] && git add docs/book/src/reference.md llms-full.txt || true
 git diff --cached --quiet || git commit -m "Release v$new"
+if [ $no_tag -eq 1 ]; then
+    echo "release commit for v$new created — caller pushes, PRs, and tags post-merge."
+    exit 0
+fi
 git tag -a "v$new" -m "verd v$new"
 git push
 git push origin "v$new"

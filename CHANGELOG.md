@@ -13,6 +13,11 @@ publishes the matching section as the GitHub release notes.
 
 ### Added
 
+- **Fully CI-driven releases** — dispatch `bump.yml` with a version: it
+  bumps `dev` via `release.sh --no-tag`, auto-merges dev→main, then
+  `tag.yml` tags the merge commit and dispatches `release.yml` (which
+  also gained a manual `tag` input for re-releasing). Tags now always
+  anchor in `main` history; no local release steps remain.
 - **Top-level `LICENSE` file** — dual-license pointer (MIT OR
   Apache-2.0, SPDX) alongside `LICENSE-MIT`/`LICENSE-APACHE` so the
   CII "license in a standard location" criterion is met literally.
@@ -22,6 +27,12 @@ publishes the matching section as the GitHub release notes.
   also emits detached `*.sig` + `*.pem` files alongside the
   `*.cosign.bundle` bundles; OpenSSF Signed-Releases scans release
   assets for these suffixes.
+
+### Changed
+
+- **Dependency refresh** — lockfile updates including tokio 1.54.1,
+  memmap2 0.9.12, base64 0.23 (fuzz), brotli 9.1, icu 2.4, notify
+  8.2.1; all within existing semver ranges, test suite green.
 
 ## [0.2.7] - 2026-10-25
 
