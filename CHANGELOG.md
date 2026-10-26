@@ -11,14 +11,7 @@ workflow publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
-### Fixed
-
-- **Release machinery bootstrap** — `bump.yml` now only reuses an
-  *open* dev→main PR (a merged one previously blocked creation), and
-  `release.sh` anchors its `[Unreleased]` heading match so inline
-  mentions can no longer absorb the promoted section.
-
-## [0.3.0] - 2026-10-26
+## [0.3.1] - 2026-10-26
 
 ### Added
 
@@ -42,6 +35,15 @@ workflow publishes the matching section as the GitHub release notes.
 - **Dependency refresh** — lockfile updates including tokio 1.54.1,
   memmap2 0.9.12, base64 0.23 (fuzz), brotli 9.1, icu 2.4, notify
   8.2.1; all within existing semver ranges, test suite green.
+
+### Fixed
+
+- **Release machinery bootstrap** — `bump.yml` now only reuses an
+  *open* dev→main PR (a merged one previously blocked creation), and
+  `release.sh` anchors its `[Unreleased]` heading match so inline
+  mentions can no longer absorb the promoted section.
+- **Cache e2e flake** — non-expiry test paths now get `max-age=60` so
+  HIT assertions don't race a 1s freshness window on loaded runners.
 
 ## [0.2.7] - 2026-10-25
 
@@ -259,8 +261,8 @@ reverse proxy with load balancing and retries, response caching
 (RAM/disk/hybrid), compression, rate limiting, CORS, security headers,
 admin API with atomic reloads, Prometheus metrics.
 
-[Unreleased]: https://github.com/frontyard/verdigris/compare/v0.3.0...HEAD
-[0.3.0]: https://github.com/frontyard/verdigris/compare/v0.2.7...v0.3.0
+[Unreleased]: https://github.com/frontyard/verdigris/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/frontyard/verdigris/compare/v0.2.7...v0.3.1
 [0.2.7]: https://github.com/frontyard/verdigris/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/frontyard/verdigris/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/frontyard/verdigris/compare/v0.2.4...v0.2.5

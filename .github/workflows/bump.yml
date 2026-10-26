@@ -41,8 +41,12 @@ jobs:
         run: git push origin HEAD:dev
       - name: open or reuse dev→main PR, enable auto-merge
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Must be a fine-grained PAT (Contents+PRs rw on this repo): PRs
+          # created via GITHUB_TOKEN never trigger pull_request checks, so
+          # required checks would never report and auto-merge would stall.
+          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
         run: |
+          [ -n "$GH_TOKEN" ] || { echo "::error::RELEASE_PAT secret is not set — see RELEASING.md" >&2; exit 1; }
           v="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
           # must filter to open PRs: `gh pr view dev` resolves merged/closed PRs too
           pr="$(gh pr list --head dev --state open --json number --jq '.[0].number')"
