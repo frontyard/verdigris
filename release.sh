@@ -45,7 +45,7 @@ esac
 git diff --quiet || { echo "uncommitted changes — commit or stash first" >&2; exit 1; }
 git diff --cached --quiet || { echo "staged changes — commit or unstage first" >&2; exit 1; }
 git rev-parse --verify "refs/tags/v$new" >/dev/null 2>&1 && { echo "tag v$new already exists" >&2; exit 1; }
-grep -q "^## \[$new\]" CHANGELOG.md || grep -A6 '## \[Unreleased\]' CHANGELOG.md | grep -q '^- \*\*' \
+grep -q "^## \[$new\]" CHANGELOG.md || grep -A6 '^## \[Unreleased\]' CHANGELOG.md | grep -q '^- \*\*' \
     || { echo "warning: [Unreleased] is empty and no [$new] section exists" >&2; }
 
 echo "current: $cur  →  new: $new"
@@ -67,10 +67,13 @@ import re, sys, datetime
 v = sys.argv[1]
 s = open('CHANGELOG.md').read()
 date = datetime.date.today().isoformat()
-s = s.replace('## [Unreleased]', f'## [Unreleased]\n\n## [{v}] - {date}', 1)
-# link refs: Unreleased compares from the new tag; add the new version's
-# compare link against the previous tag.
-prev = re.search(r'^\[Unreleased\]: .*/v([0-9.]+)\.\.\.HEAD', s, re.M).group(1)
+# previous release = first existing semver section (before we insert ours)
+prev = re.search(r'(?m)^## \[(\d+\.\d+\.\d+)\] - ', s).group(1)
+# anchored to a whole heading line — inline `## [Unreleased]` mentions in
+# prose must not absorb the promoted section
+s, n = re.subn(r'(?m)^## \[Unreleased\][ \t]*$',
+               f'## [Unreleased]\n\n## [{v}] - {date}', s, count=1)
+assert n == 1, 'no standalone "## [Unreleased]" heading found'
 s = re.sub(r'^\[Unreleased\]: .*HEAD',
            f'[Unreleased]: https://github.com/frontyard/verdigris/compare/v{v}...HEAD', s, flags=re.M)
 anchor = f'[Unreleased]: https://github.com/frontyard/verdigris/compare/v{v}...HEAD'
