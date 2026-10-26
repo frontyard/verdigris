@@ -1581,8 +1581,16 @@ async fn start_cache_upstream() -> CacheUp {
                                     b.status(304)
                                         .body(http_body_util::Full::new(bytes::Bytes::new()))
                                 } else {
+                                    // /r/a is the expiry/SWR path; everything else
+                                    // gets a generous TTL so HIT assertions don't
+                                    // race a 1s freshness window on loaded runners.
+                                    let max_age = if req.uri().path().ends_with("/a") {
+                                        1
+                                    } else {
+                                        60
+                                    };
                                     b.header("etag", etag)
-                                        .header("cache-control", "max-age=1")
+                                        .header("cache-control", format!("max-age={max_age}"))
                                         .body(http_body_util::Full::new(bytes::Bytes::from(
                                             format!("body-v{ver}"),
                                         )))
