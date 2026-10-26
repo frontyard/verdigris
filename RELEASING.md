@@ -22,9 +22,16 @@ Actions → **Bump** → Run workflow → enter `patch`/`minor`/`major` or an
 exact `x.y.z` (check *regen docs* if `src/config/` changed). Everything
 else follows automatically once the dev→main merge lands.
 
-Requirements: auto-merge must be enabled on the repo (Settings →
-General → Allow auto-merge); if it isn't, the Bump run leaves the PR
-open for a manual merge and the rest of the chain still fires.
+Requirements:
+
+- A **`RELEASE_PAT` secret**: fine-grained PAT scoped to this repo with
+  *Contents: read/write* + *Pull requests: read/write*. It is required
+  because PRs created by `GITHUB_TOKEN` never trigger `pull_request`
+  checks — the required checks would never report and auto-merge could
+  not fire. (Settings → Secrets and variables → Actions.)
+- **Auto-merge enabled** on the repo (Settings → General → Allow
+  auto-merge); if it isn't, the Bump run leaves the PR open for a
+  manual merge and the rest of the chain still fires.
 
 ## release.sh
 
