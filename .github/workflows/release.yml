@@ -201,10 +201,12 @@ jobs:
               echo "::warning::${RELEASE_TAG} is not the newest tag ($newest); 'latest' is left pointing at it"
             fi
           } > tags.txt
-          echo 'list<<EOF' >> "$GITHUB_OUTPUT"
-          cat tags.txt >> "$GITHUB_OUTPUT"
-          echo 'EOF' >> "$GITHUB_OUTPUT"
           cat tags.txt
+          {
+            echo 'list<<EOF'
+            cat tags.txt
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: dist
