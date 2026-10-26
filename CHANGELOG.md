@@ -112,7 +112,9 @@ workflow publishes the matching section as the GitHub release notes.
   (cancel on PR updates; releases serialize per tag and corpus writes
   serialize globally, since a shared group can only hold one queued
   run and would silently drop pending tags) and per-job
-  `timeout-minutes`.
+  `timeout-minutes`. `ghcr.io/…:latest` is only pushed by the run
+  whose tag is the newest `v*`, so a concurrent or re-run release of
+  an older tag can't regress the image users pull.
 - **Generated-docs gate on every PR** — `ci.yml` regenerates
   `docs/book/src/reference.md` and `llms-full.txt` and fails on
   drift; previously only enforced on `docs/**` paths via `docs.yml`.

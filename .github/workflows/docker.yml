@@ -44,4 +44,7 @@ jobs:
       # shipped images only; bench/ and .clusterfuzzlite/ Dockerfiles are
       # build containers where root is required — not release artifacts
       - name: trivy config (Dockerfile, Dockerfile.release)
-        run: trivy config --exit-code 0 Dockerfile Dockerfile.release
+        run: |
+          for f in Dockerfile Dockerfile.release; do
+            trivy config --exit-code 0 "$f"
+          done
