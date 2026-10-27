@@ -84,9 +84,12 @@ impl RateLimiter {
                 )
             }
         };
-        let rate = c.rate.per_second();
+        let spec = c
+            .rate
+            .ok_or_else(|| "rate_limit.rate is required when enabled".to_string())?;
+        let rate = spec.per_second();
         if !(rate.is_finite() && rate > 0.0) {
-            return Err(format!("rate_limit rate must be positive, got {}", c.rate));
+            return Err(format!("rate_limit rate must be positive, got {spec}"));
         }
         let burst = c.burst.unwrap_or_else(|| {
             // default burst = one second of rate, at least 1
@@ -96,8 +99,8 @@ impl RateLimiter {
             kind,
             rate,
             burst,
-            permits: c.rate.permits,
-            period: c.rate.period,
+            permits: spec.permits,
+            period: spec.period,
             exempt: c.exempt.clone(),
             dry_run: c.dry_run,
             buckets: DashMap::new(),
@@ -259,8 +262,9 @@ mod tests {
 
     fn cfg_key(key: &str, rate: &str) -> cfg::RateLimitConfig {
         cfg::RateLimitConfig {
+            enabled: true,
             key: key.into(),
-            rate: crate::config::RateSpec::parse(rate).unwrap(),
+            rate: Some(crate::config::RateSpec::parse(rate).unwrap()),
             burst: None,
             exempt: Vec::new(),
             dry_run: false,

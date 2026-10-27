@@ -62,7 +62,7 @@ impl Clusters {
                 Entry::Occupied(e) => Ok(e.get().clone()),
                 Entry::Vacant(e) => {
                     let c = cfg::UpstreamConfig {
-                        servers: urls.clone(),
+                        servers: urls.iter().cloned().map(Into::into).collect(),
                         ..Default::default()
                     };
                     Ok(e.insert(Arc::new(Cluster::build(key, &c)?)).clone())
@@ -163,7 +163,7 @@ impl Proxy {
             rewrite,
             headers,
             retries: p.retries.clone(),
-            host_header: p.host_header,
+            host_header: p.host_header.clone(),
         })
     }
 
@@ -341,9 +341,10 @@ impl Proxy {
             // first; the upstream must see that same value, not both),
             // and it synthesizes Host for h2-inbound requests (whose
             // authority lives in :authority) heading to h1 upstreams.
-            let host_out = match self.host_header {
+            let host_out = match &self.host_header {
                 cfg::HostHeader::Upstream => member.url.authority(),
                 cfg::HostHeader::Original => orig_host.clone(),
+                cfg::HostHeader::Custom(v) => v.clone(),
             };
             if let Ok(v) = HeaderValue::from_str(&host_out) {
                 headers.insert(HOST, v);
@@ -935,7 +936,7 @@ mod handle_tests {
     async fn unavailable_custom_response() {
         let (addr, _) = fake(200, "hi").await;
         let mut c = cfg::UpstreamConfig {
-            servers: vec![format!("http://{addr}")],
+            servers: vec![format!("http://{addr}").into()],
             unavailable: cfg::UnavailableResponse {
                 status: 503,
                 body: Some("try later".into()),

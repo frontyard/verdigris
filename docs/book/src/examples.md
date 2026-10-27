@@ -268,6 +268,27 @@ or `htpasswd -B`; an `htpasswd` file path works instead of inline
 `users`. For machine clients use `bearer` or `api_key` with `${VAR}`
 interpolation. See [Middleware](middleware.md).
 
+When several routes share the same guard, move the middleware onto the
+site instead of repeating it per route — routes inherit it and can opt
+out with `enabled = false`:
+
+```toml
+[[site]]
+hosts = ["grafana.internal.example"]
+ip_allow = ["10.0.0.0/8", "192.168.0.0/16"]   # applies to every route
+auth = { basic = { realm = "ops",
+                   users = { oncall = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$3nGf8u5Z2p2mJx0yq9Rk3g" } } }
+
+[[site.route]]
+prefix = "/"
+proxy = { upstream = "http://10.0.0.5:3000" }
+
+[[site.route]]
+prefix = "/healthz"
+respond = { status = 200, body = "ok" }
+auth = { enabled = false }                    # no auth on this route
+```
+
 ## Public API: rate limiting and CORS
 
 ```toml

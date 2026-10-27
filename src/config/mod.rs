@@ -163,18 +163,21 @@ impl WatchPlan {
 pub fn load(path: &Path) -> Result<Loaded, LoadError> {
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let mut report = LoadReport::default();
-    let value = load_document(&path, 0, &mut report)?;
+    let (value, origins) = load_document(&path, 0, &mut report)?;
     let config: Config = serde_path_to_error::deserialize(value)
         .map_err(|e| LoadError::Schema(path.clone(), format!("{}: {}", e.path(), e.inner())))?;
     let mut diagnostics = validate(&config);
-    diagnostics.extend(config_file_perm_diag(&path, &config, &report.interpolated));
+    for d in &mut diagnostics {
+        d.source = origin_for(&config, &origins, &d.path);
+    }
+    diagnostics.extend(config_file_perm_diag(&report));
     Ok(Loaded {
         config,
         diagnostics,
         sources: report.sources,
         watch_dirs: report.watch_dirs,
         interpolated: report.interpolated,
-        file_refs: report.file_refs,
+        file_refs: report.file_refs.into_iter().map(|(_, p)| p).collect(),
     })
 }
 
@@ -279,66 +282,335 @@ fn redact_toml(v: &mut toml::Value, path: &mut Vec<String>, under_secret: bool) 
     }
 }
 
-/// Warn when the config file itself is unsafe: group/other-writable is
-/// always flagged; group/other-*readable* is flagged only when the
-/// config embeds literal secrets (a field whose value came from a
-/// `${file:}`/`${VAR}` reference — recorded in `interpolated` — is not
-/// a literal secret).
+/// Config fields holding filesystem paths, as dotted patterns where `*`
+/// matches one segment (an array index or map key). Values under these
+/// keys are rewritten at load to anchor on their document's directory —
+/// the same anchor `include` uses — so a config tree relocates as a
+/// unit. `error_pages`/`try_files` are excluded by design: they resolve
+/// against `static.root`, not any file-system base. `include` and
+/// `${file:}` are already file-anchored. Built-in defaults are not
+/// document values and keep their documented CWD-relative meaning.
+const PATH_FIELDS: &[&str] = &[
+    "site.*.root",
+    "site.*.route.*.static.root",
+    "site.*.tls.cert",
+    "site.*.tls.key",
+    "admin.tls.cert",
+    "admin.tls.key",
+    "site.*.route.*.auth.basic.htpasswd",
+    "cache.*.disk_path",
+    "acme.storage",
+    "acme.ca_roots",
+    "upstream.*.tls.ca",
+    "log.output",
+    "log.access.output",
+];
+
+/// `log.*.output` destinations that are not paths.
+fn is_output_sentinel(v: &str) -> bool {
+    v == "stdout" || v == "stderr"
+}
+
+/// Does `path` match `pattern` (`*` = any single segment)?
+fn path_pattern_matches(pattern: &str, path: &[String]) -> bool {
+    let mut pat = pattern.split('.');
+    let mut seg = path.iter();
+    loop {
+        match (pat.next(), seg.next()) {
+            (None, None) => return true,
+            (Some(p), Some(s)) if p == "*" || p == s => continue,
+            _ => return false,
+        }
+    }
+}
+
+/// Rewrite relative paths under [`PATH_FIELDS`] onto `base_dir` — the
+/// anchor `include` already uses — so a fragment's relative paths stay
+/// next to the fragment, not the process CWD. Absolute paths and the
+/// `log.*.output` sentinels pass through.
+fn rebase_paths(v: &mut toml::Value, base_dir: &Path, path: &mut Vec<String>) {
+    match v {
+        toml::Value::Table(m) => {
+            for (k, val) in m.iter_mut() {
+                path.push(k.clone());
+                rebase_paths(val, base_dir, path);
+                path.pop();
+            }
+        }
+        toml::Value::Array(a) => {
+            for (i, val) in a.iter_mut().enumerate() {
+                path.push(i.to_string());
+                rebase_paths(val, base_dir, path);
+                path.pop();
+            }
+        }
+        toml::Value::String(s) => {
+            if is_output_sentinel(s) {
+                return;
+            }
+            let p = Path::new(s.as_str());
+            if p.is_relative()
+                && PATH_FIELDS
+                    .iter()
+                    .any(|pat| path_pattern_matches(pat, path))
+            {
+                *s = base_dir.join(p).to_string_lossy().into_owned();
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Whether a dotted config path is secret-bearing — every ancestor key
+/// is checked, so `…auth.bearer.tokens.0` counts even though its leaf
+/// segment is an array index.
 #[cfg(unix)]
-fn config_file_perm_diag(
-    path: &Path,
-    config: &Config,
-    interpolated: &std::collections::HashSet<String>,
-) -> Option<Diagnostic> {
+fn path_is_secret(at: &str) -> bool {
+    let segs: Vec<&str> = at.split('.').collect();
+    (0..segs.len()).any(|i| {
+        secret_at(
+            &segs[..i].iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            segs[i],
+            false,
+        )
+    })
+}
+
+/// Does a document contain literal (non-interpolated) secret material?
+/// Walks like `redact_toml`: a leaf counts as secret when its key — or
+/// any ancestor's — matches `secret_at`, unless the value held a `${…}`
+/// marker (tracked in `substituted`).
+fn has_inline_secret(v: &toml::Value, substituted: &std::collections::HashSet<String>) -> bool {
+    fn walk(
+        v: &toml::Value,
+        path: &mut Vec<String>,
+        under_secret: bool,
+        sub: &std::collections::HashSet<String>,
+    ) -> bool {
+        match v {
+            toml::Value::Table(m) => m.iter().any(|(k, val)| {
+                let secret = under_secret || secret_at(path, k, val.is_table());
+                path.push(k.clone());
+                let r = walk(val, path, secret, sub);
+                path.pop();
+                r
+            }),
+            toml::Value::Array(a) => a.iter().enumerate().any(|(i, val)| {
+                path.push(i.to_string());
+                let r = walk(val, path, under_secret, sub);
+                path.pop();
+                r
+            }),
+            _ => under_secret && !sub.contains(&path.join(".")),
+        }
+    }
+    walk(v, &mut Vec::new(), false, substituted)
+}
+
+/// Warn when config sources are unsafe: group/other-writable is always
+/// flagged; group/other-*readable* is flagged only for files that embed
+/// literal secrets, detected per document before merging so `include`d
+/// fragments are checked with their own index space. `${file:}` targets
+/// feeding secret-bearing paths are flagged when group/other-writable
+/// (group/other-*readable* is not flagged: mounted secrets in k8s and
+/// Docker are platform-managed `0444` by design and would warn on every
+/// deployment).
+#[cfg(unix)]
+fn config_file_perm_diag(report: &LoadReport) -> Vec<Diagnostic> {
     use std::os::unix::fs::PermissionsExt;
-    let mode = std::fs::metadata(path).ok()?.permissions().mode() & 0o777;
-    if mode & 0o022 != 0 {
-        return Some(Diagnostic {
-            severity: Severity::Warning,
-            path: path.display().to_string(),
-            message: format!(
-                "config file is group/other-writable (mode {mode:o}) — chmod 640 or 600"
-            ),
-        });
+    let mode = |p: &Path| {
+        std::fs::metadata(p)
+            .ok()
+            .map(|m| m.permissions().mode() & 0o777)
+    };
+    let mut out = Vec::new();
+    for src in &report.sources {
+        let Some(m) = mode(src) else { continue };
+        if m & 0o022 != 0 {
+            out.push(Diagnostic {
+                severity: Severity::Warning,
+                path: src.display().to_string(),
+                message: format!(
+                    "config file is group/other-writable (mode {m:o}) — chmod 640 or 600"
+                ),
+                source: None,
+            });
+        } else if report.files_with_secrets.contains(src) && m & 0o044 != 0 {
+            out.push(Diagnostic {
+                severity: Severity::Warning,
+                path: src.display().to_string(),
+                message: format!(
+                    "config file is group/other-readable (mode {m:o}) and contains inline credentials — chmod 640 or move secrets to ${{file:}} references"
+                ),
+                source: None,
+            });
+        }
     }
-    let literal = |at: &str| !interpolated.contains(at);
-    let has_inline_secrets = (config.admin.token.is_some() && literal("admin.token"))
-        || matches!(&config.acme.dns, Some(crate::config::model::AcmeDns::Cloudflare(cf)) if !cf.api_token.trim().is_empty() && literal("acme.dns.cloudflare.api_token"))
-        || config.site.iter().enumerate().any(|(si, s)| {
-            s.route.iter().enumerate().any(|(ri, r)| {
-                r.auth.as_ref().is_some_and(|a| {
-                    a.bearer.as_ref().is_some_and(|b| {
-                        b.tokens.iter().enumerate().any(|(ti, _)| {
-                            literal(&format!("site.{si}.route.{ri}.auth.bearer.tokens.{ti}"))
-                        })
-                    }) || a.api_key.as_ref().is_some_and(|k| {
-                        k.keys.iter().enumerate().any(|(ki, _)| {
-                            literal(&format!("site.{si}.route.{ri}.auth.api_key.keys.{ki}"))
-                        })
-                    })
-                })
-            })
-        });
-    if has_inline_secrets && mode & 0o044 != 0 {
-        return Some(Diagnostic {
-            severity: Severity::Warning,
-            path: path.display().to_string(),
-            message: format!(
-                "config file is group/other-readable (mode {mode:o}) and contains inline credentials — chmod 640 or move secrets to ${{file:}} references"
-            ),
-        });
+    for (at, f) in &report.file_refs {
+        if !path_is_secret(at) {
+            continue;
+        }
+        let Some(m) = mode(f) else { continue };
+        if m & 0o022 != 0 {
+            out.push(Diagnostic {
+                severity: Severity::Warning,
+                path: f.display().to_string(),
+                message: format!(
+                    "secret file for {at} is group/other-writable (mode {m:o}) — chmod 640 or 600"
+                ),
+                source: None,
+            });
+        }
     }
-    None
+    out
 }
 
 /// Config permission checks only exist on unix.
 #[cfg(not(unix))]
-fn config_file_perm_diag(
-    _: &Path,
-    _: &Config,
-    _: &std::collections::HashSet<String>,
-) -> Option<Diagnostic> {
-    None
+fn config_file_perm_diag(_: &LoadReport) -> Vec<Diagnostic> {
+    Vec::new()
+}
+
+/// Split a diagnostic display path on dots at bracket depth 0 — host
+/// names inside `site["a.b.com"]` contain dots and must not split.
+fn split_top(display: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth = 0u32;
+    let mut start = 0;
+    for (i, c) in display.char_indices() {
+        match c {
+            '[' => depth += 1,
+            ']' => depth = depth.saturating_sub(1),
+            '.' if depth == 0 => {
+                out.push(&display[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&display[start..]);
+    out
+}
+
+/// Map a diagnostic display path (`site["x"].route[0].auth`) back to the
+/// merged dotted form used by `origins` (`site.0.route.0.auth`). `site`
+/// labels resolve through `name` first, then `hosts[0]` — mirroring
+/// `site_label`'s own precedence.
+fn display_to_dotted(cfg: &Config, display: &str) -> Option<String> {
+    let mut out = Vec::new();
+    for seg in split_top(display) {
+        if let Some(rest) = seg.strip_prefix("site[") {
+            let token = rest.strip_suffix(']')?;
+            // last match wins on ambiguous labels — duplicate-host
+            // style errors always fire on the later site
+            let idx = if token == "default" {
+                cfg.site.iter().rposition(|s| s.default)
+            } else if let Some(name) = token.strip_prefix('"').and_then(|t| t.strip_suffix('"')) {
+                cfg.site
+                    .iter()
+                    .rposition(|s| s.name.as_deref() == Some(name))
+                    .or_else(|| {
+                        cfg.site
+                            .iter()
+                            .rposition(|s| s.hosts.first().map(String::as_str) == Some(name))
+                    })
+            } else {
+                token.parse::<usize>().ok()
+            }?;
+            out.push(format!("site.{idx}"));
+        } else if let Some(pos) = seg.rfind('[') {
+            let (key, rest) = seg.split_at(pos);
+            let idx: usize = rest.strip_prefix('[')?.strip_suffix(']')?.parse().ok()?;
+            out.push(format!("{key}.{idx}"));
+        } else {
+            out.push(seg.to_string());
+        }
+    }
+    Some(out.join("."))
+}
+
+/// Which file set the value a diagnostic points at — via merged dotted
+/// leaf paths in `origins`. An exact leaf hit wins; otherwise the file
+/// owning the most descendant leaves represents "who set this subtree".
+fn origin_for(
+    cfg: &Config,
+    origins: &std::collections::HashMap<String, PathBuf>,
+    display: &str,
+) -> Option<PathBuf> {
+    let dotted = display_to_dotted(cfg, display)?;
+    if let Some(p) = origins.get(&dotted) {
+        return Some(p.clone());
+    }
+    let prefix = format!("{dotted}.");
+    let mut counts: std::collections::BTreeMap<&PathBuf, usize> = std::collections::BTreeMap::new();
+    for (k, file) in origins {
+        if k.starts_with(&prefix) {
+            *counts.entry(file).or_default() += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .max_by_key(|(_, n)| *n)
+        .map(|(p, _)| p.clone())
+}
+
+/// Paths of every array node in a document → its element count. Used to
+/// rebase fragment leaf paths onto merged positions: when an array
+/// exists in both documents, concatenation shifts the fragment's
+/// indices by the base length.
+fn array_lens(v: &toml::Value) -> std::collections::HashMap<String, usize> {
+    fn walk(
+        v: &toml::Value,
+        path: &mut Vec<String>,
+        out: &mut std::collections::HashMap<String, usize>,
+    ) {
+        match v {
+            toml::Value::Table(m) => {
+                for (k, val) in m {
+                    path.push(k.clone());
+                    walk(val, path, out);
+                    path.pop();
+                }
+            }
+            toml::Value::Array(a) => {
+                out.insert(path.join("."), a.len());
+                for (i, val) in a.iter().enumerate() {
+                    path.push(i.to_string());
+                    walk(val, path, out);
+                    path.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = std::collections::HashMap::new();
+    walk(v, &mut Vec::new(), &mut out);
+    out
+}
+
+/// Translate a fragment-local leaf path to its merged position: each
+/// array-index segment shifts by the base array's length when that
+/// array exists in both documents. Array nodes inside a *newly
+/// appended* element never exist in base and don't shift — the rebased
+/// prefix lookup misses for them by construction.
+fn rebased_leaf(
+    leaf: &[String],
+    base_arrays: &std::collections::HashMap<String, usize>,
+    frag_arrays: &std::collections::HashMap<String, usize>,
+) -> String {
+    let mut segs: Vec<String> = leaf.to_vec();
+    for i in 1..segs.len() {
+        if !frag_arrays.contains_key(&leaf[..i].join(".")) {
+            continue;
+        }
+        if let (Some(&len), Ok(idx)) = (
+            base_arrays.get(&segs[..i].join(".")),
+            segs[i].parse::<usize>(),
+        ) {
+            segs[i] = (len + idx).to_string();
+        }
+    }
+    segs.join(".")
 }
 
 /// Load-time bookkeeping accumulated while a document and its `include`
@@ -351,8 +623,12 @@ struct LoadReport {
     watch_dirs: Vec<PathBuf>,
     /// Config paths that held a `${…}` marker before substitution.
     interpolated: std::collections::HashSet<String>,
-    /// `${file:…}` targets.
-    file_refs: Vec<PathBuf>,
+    /// `${file:…}` targets paired with the document-local config path
+    /// that referenced each.
+    file_refs: Vec<(String, PathBuf)>,
+    /// Source files containing literal (non-interpolated) secret
+    /// values — per-file input to the permission diagnostics.
+    files_with_secrets: std::collections::HashSet<PathBuf>,
     /// Canonical paths already fully merged — diamond includes merge once.
     done: std::collections::HashSet<PathBuf>,
     /// The active include chain — revisiting a file on it is a cycle.
@@ -368,7 +644,7 @@ fn load_document(
     path: &Path,
     depth: usize,
     report: &mut LoadReport,
-) -> Result<toml::Value, LoadError> {
+) -> Result<(toml::Value, std::collections::HashMap<String, PathBuf>), LoadError> {
     let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     report.stack.push(canon.clone());
     let out = load_document_impl(&canon, depth, report);
@@ -383,7 +659,7 @@ fn load_document_impl(
     path: &Path,
     depth: usize,
     report: &mut LoadReport,
-) -> Result<toml::Value, LoadError> {
+) -> Result<(toml::Value, std::collections::HashMap<String, PathBuf>), LoadError> {
     if depth > MAX_INCLUDE_DEPTH {
         return Err(LoadError::IncludeDepth(
             path.to_path_buf(),
@@ -398,8 +674,12 @@ fn load_document_impl(
     let base_dir = path.parent().unwrap_or(Path::new("."));
     let interp = interpolate::interpolate(&mut value, base_dir)
         .map_err(|e| LoadError::Interpolate(path.to_path_buf(), e))?;
+    if has_inline_secret(&value, &interp.substituted) {
+        report.files_with_secrets.insert(path.to_path_buf());
+    }
     report.interpolated.extend(interp.substituted);
     report.file_refs.extend(interp.file_refs);
+    rebase_paths(&mut value, base_dir, &mut Vec::new());
 
     let includes: Vec<String> = match value.get("include") {
         None => Vec::new(),
@@ -458,8 +738,12 @@ fn load_document_impl(
             if report.done.contains(&fcanon) {
                 continue;
             }
-            let frag = load_document(&fcanon, depth + 1, report)?;
-            let frag_leaves = leaf_paths(&frag);
+            let (frag, frag_origins) = load_document(&fcanon, depth + 1, report)?;
+            // array positions shift on merge — rebase fragment leaf
+            // paths onto merged indices so `origins` names the right
+            // file for merged-config diagnostics
+            let base_arrays = array_lens(&value);
+            let frag_arrays = array_lens(&frag);
             merge(&mut value, frag).map_err(|key| {
                 let origin = origins
                     .get(&key)
@@ -467,24 +751,26 @@ fn load_document_impl(
                     .unwrap_or_else(|| path.to_path_buf());
                 LoadError::MergeConflict(fragment.clone(), key, origin.display().to_string())
             })?;
-            for leaf in frag_leaves {
-                origins.insert(leaf, fragment.clone());
+            for (leaf, file) in frag_origins {
+                let segs: Vec<String> = leaf.split('.').map(String::from).collect();
+                origins.insert(rebased_leaf(&segs, &base_arrays, &frag_arrays), file);
             }
         }
     }
-    Ok(value)
+    Ok((value, origins))
 }
 
 /// Dotted paths of every non-table leaf in a TOML document —
 /// `log.level`, `site.0.hosts.0`, …
-/// Append `did you mean \`x\`?` to a serde "unknown field" error when a
-/// close spelling exists among the expected names — catches typos like
-/// `host`→`hosts` or `sttic`→`static` in every `deny_unknown_fields`
-/// table uniformly.
+/// Append `did you mean \`x\`?` to a serde "unknown field/variant" error
+/// when a close spelling exists among the expected names — catches typos
+/// like `host`→`hosts`, `sttic`→`static`, or `dns_01`→`dns-01` in every
+/// `deny_unknown_fields` table and enum uniformly.
 fn did_you_mean(msg: &str) -> String {
-    let re =
-        regex::Regex::new(r"unknown field `([^`]+)`.*expected (?:one of )?(`[^`]+`(?:, `[^`]+`)*)")
-            .expect("static regex");
+    let re = regex::Regex::new(
+        r"unknown (?:field|variant) `([^`]+)`.*expected (?:one of )?(`[^`]+`(?:(?:, | or )`[^`]+`)*)",
+    )
+    .expect("static regex");
     let Some(cap) = re.captures(msg) else {
         return msg.to_string();
     };
@@ -1015,12 +1301,7 @@ proxy = { upstream = "api" }
     #[cfg(not(unix))]
     #[test]
     fn config_file_permissions_noop() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = write(dir.path(), "verd.toml", "");
-        assert!(
-            config_file_perm_diag(&path, &Config::default(), &std::collections::HashSet::new())
-                .is_none()
-        );
+        assert!(config_file_perm_diag(&LoadReport::default()).is_empty());
     }
 
     #[cfg(unix)]
@@ -1050,6 +1331,187 @@ proxy = { upstream = "api" }
             "{:?}",
             loaded.diagnostics
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fragment_inline_secret_warns_on_fragment() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        // the readable file holding a literal secret is the *fragment*,
+        // so the warning names frag.toml — not the 0600 main file
+        let main = write(
+            dir.path(),
+            "verd.toml",
+            "include = [\"frag.toml\"]\n[[site]]\nhosts = [\"a.com\"]\nroot = \"/tmp\"\n",
+        );
+        let frag = write(
+            dir.path(),
+            "frag.toml",
+            "[[site]]\nhosts = [\"b.com\"]\nroot = \"/tmp\"\n[[site.route]]\nrespond = { status = 200, body = \"x\" }\n[site.route.auth]\n[site.route.auth.bearer]\ntokens = [\"s3cr3t\"]\n",
+        );
+        std::fs::set_permissions(&main, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::set_permissions(&frag, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let loaded = load(&main).unwrap();
+        let d = loaded
+            .diagnostics
+            .iter()
+            .find(|d| d.message.contains("group/other-readable"))
+            .unwrap_or_else(|| panic!("readable warning missing: {:?}", loaded.diagnostics));
+        assert!(d.path.ends_with("frag.toml"), "{d}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn interpolated_fragment_secret_not_flagged_on_main() {
+        use std::os::unix::fs::PermissionsExt;
+        // regression: secret detection used to run on merged indices
+        // while interpolation paths were document-local — a fragment's
+        // interpolated token read as a literal secret on the main file
+        let dir = tempfile::tempdir().unwrap();
+        let secret = dir.path().join("tok");
+        std::fs::File::create(&secret)
+            .unwrap()
+            .write_all(b"t\n")
+            .unwrap();
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let main = write(
+            dir.path(),
+            "verd.toml",
+            // main defines a site, so the fragment's site lands at index 1
+            "include = [\"frag.toml\"]\n[[site]]\nhosts = [\"a.com\"]\nroot = \"/tmp\"\n",
+        );
+        write(
+            dir.path(),
+            "frag.toml",
+            &format!(
+                "[[site]]\nhosts = [\"b.com\"]\nroot = \"/tmp\"\n[[site.route]]\nrespond = {{ status = 200, body = \"x\" }}\n[site.route.auth]\n[site.route.auth.bearer]\ntokens = [\"${{file:{}}}\"]\n",
+                secret.display()
+            ),
+        );
+        std::fs::set_permissions(&main, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let loaded = load(&main).unwrap();
+        assert!(
+            loaded
+                .diagnostics
+                .iter()
+                .all(|d| !d.message.contains("readable")),
+            "{:?}",
+            loaded.diagnostics
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secret_file_writable_warned() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let secret = dir.path().join("tok");
+        std::fs::File::create(&secret)
+            .unwrap()
+            .write_all(b"t\n")
+            .unwrap();
+        let main = write(
+            dir.path(),
+            "verd.toml",
+            &format!(
+                "[admin]\ntoken = \"${{file:{}}}\"\n[[site]]\nhosts = [\"a.com\"]\nroot = \"/tmp\"\n",
+                secret.display()
+            ),
+        );
+        std::fs::set_permissions(&main, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        // writable file feeding a secret path is flagged
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o666)).unwrap();
+        let loaded = load(&main).unwrap();
+        assert!(
+            loaded
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("secret file")),
+            "{:?}",
+            loaded.diagnostics
+        );
+
+        // platform-mounted read-only secrets (0444) are not flagged
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let loaded = load(&main).unwrap();
+        assert!(
+            loaded
+                .diagnostics
+                .iter()
+                .all(|d| !d.message.contains("secret file")),
+            "{:?}",
+            loaded.diagnostics
+        );
+
+        // a ${file:} feeding a non-secret path is not a secret file
+        let lvl = write(dir.path(), "lvl", "info\n");
+        std::fs::set_permissions(&lvl, std::fs::Permissions::from_mode(0o666)).unwrap();
+        let main2 = write(
+            dir.path(),
+            "v2.toml",
+            &format!("[log]\nlevel = \"${{file:{}}}\"\n", lvl.display()),
+        );
+        std::fs::set_permissions(&main2, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let loaded = load(&main2).unwrap();
+        assert!(
+            loaded
+                .diagnostics
+                .iter()
+                .all(|d| !d.message.contains("secret file")),
+            "{:?}",
+            loaded.diagnostics
+        );
+    }
+
+    #[test]
+    fn diagnostics_carry_source_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = write(
+            dir.path(),
+            "verd.toml",
+            "include = [\"frag.toml\"]\n[[site]]\nhosts = [\"a.com\"]\nroot = \"/tmp\"\n",
+        );
+        write(
+            dir.path(),
+            "frag.toml",
+            "[[site]]\nhosts = [\"a.com\"]\nroot = \"/tmp\"\n",
+        );
+        let loaded = load(&main).unwrap();
+        let d = loaded
+            .diagnostics
+            .iter()
+            .find(|d| d.message.contains("duplicate host"))
+            .expect("duplicate host diagnostic");
+        let src = d.source.as_ref().expect("source file recorded");
+        assert!(src.ends_with("frag.toml"), "{src:?} → {d}");
+        assert!(d.to_string().contains("(in "), "{d}");
+    }
+
+    #[test]
+    fn diagnostic_source_reaches_transitive_includes() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = write(
+            dir.path(),
+            "verd.toml",
+            "include = [\"mid.toml\"]\n[[site]]\nhosts = [\"a.com\"]\nroot = \"/tmp\"\n",
+        );
+        write(dir.path(), "mid.toml", "include = [\"leaf.toml\"]\n");
+        write(
+            dir.path(),
+            "leaf.toml",
+            "[[site]]\nhosts = [\"a.com\"]\nroot = \"/tmp\"\n",
+        );
+        let loaded = load(&main).unwrap();
+        let d = loaded
+            .diagnostics
+            .iter()
+            .find(|d| d.message.contains("duplicate host"))
+            .expect("duplicate host diagnostic");
+        let src = d.source.as_ref().expect("source file recorded");
+        // attributed to the file that set the leaf, not the includer
+        assert!(src.ends_with("leaf.toml"), "{src:?} → {d}");
     }
 
     #[test]
@@ -1641,9 +2103,284 @@ proxy = "app"
                     "[[site]]\nroot = \"/tmp\"\n[[site.route]]\n[site.route.auth]\n[site.route.auth.bearer]\ntokens = \"t\"",
                 ),
                 ("server.listen", "[server]\nlisten = \"127.0.0.1:18080\""),
+                (
+                    "cache.bypass.cookies",
+                    "[cache.c]\n[[site]]\nroot = \"/tmp\"\n[[site.route]]\n[site.route.cache]\nstore = \"c\"\n[site.route.cache.bypass]\ncookies = \"sess\"",
+                ),
+                (
+                    "cache.bypass.paths",
+                    "[cache.c]\n[[site]]\nroot = \"/tmp\"\n[[site.route]]\n[site.route.cache]\nstore = \"c\"\n[site.route.cache.bypass]\npaths = \"/admin/*\"",
+                ),
+                (
+                    "static.index",
+                    "[[site]]\nroot = \"/tmp\"\n[[site.route]]\n[site.route.static]\nroot = \"/tmp\"\nindex = \"idx.html\"",
+                ),
+                (
+                    "static.try_files",
+                    "[[site]]\nroot = \"/tmp\"\n[[site.route]]\n[site.route.static]\nroot = \"/tmp\"\ntry_files = \"f.html\"",
+                ),
+                (
+                    "response_headers.remove",
+                    "[[site]]\nroot = \"/tmp\"\n[[site.route]]\nrespond = { status = 200, body = \"x\" }\n[site.route.response_headers]\nremove = \"x-powered-by\"",
+                ),
+                (
+                    "proxy.request_headers.remove",
+                    "[[site]]\n[[site.route]]\n[site.route.proxy]\nupstream = \"http://x:1\"\n[site.route.proxy.request_headers]\nremove = \"x-a\"",
+                ),
             ] {
                 load_str(body).unwrap_or_else(|e| panic!("{field} should take a scalar: {e}"));
             }
+        }
+
+        #[test]
+        fn off_switches_and_scalar_table_shorthands() {
+            // retries = false → no retries; retries = true → defaults
+            let l = load_str(
+                "[[site]]\n[[site.route]]\n[site.route.proxy]\nupstream = \"http://x:1\"\nretries = false",
+            )
+            .unwrap();
+            assert_eq!(
+                l.config.site[0].route[0]
+                    .proxy
+                    .as_ref()
+                    .unwrap()
+                    .retries
+                    .max_per_request,
+                0
+            );
+            let l = load_str(
+                "[[site]]\n[[site.route]]\n[site.route.proxy]\nupstream = \"http://x:1\"\nretries = true",
+            )
+            .unwrap();
+            assert_eq!(
+                l.config.site[0].route[0]
+                    .proxy
+                    .as_ref()
+                    .unwrap()
+                    .retries
+                    .max_per_request,
+                2
+            );
+
+            // log.access = false disables access logging
+            let l = load_str("[log]\naccess = false").unwrap();
+            assert!(!l.config.log.access.enabled);
+
+            // upstream.dns = "dur" → { grace }; health.active = "path" → { path }
+            let l = load_str("[upstream.u]\nservers = \"x:1\"\ndns = \"90s\"").unwrap();
+            assert_eq!(
+                l.config.upstream["u"].dns.grace,
+                std::time::Duration::from_secs(90)
+            );
+            let l =
+                load_str("[upstream.u]\nservers = \"x:1\"\n[upstream.u.health]\nactive = \"/up\"")
+                    .unwrap();
+            assert_eq!(
+                l.config.upstream["u"].health.active.as_ref().unwrap().path,
+                "/up"
+            );
+
+            // acme.challenge snake spellings are aliases of the kebab canon
+            let l = load_str("[acme]\nchallenge = \"dns_01\"").unwrap();
+            assert_eq!(l.config.acme.challenge, model::AcmeChallenge::Dns01);
+            let l = load_str("[acme]\nchallenge = \"tls_alpn_01\"").unwrap();
+            assert_eq!(l.config.acme.challenge, model::AcmeChallenge::TlsAlpn01);
+
+            // upstream.servers entries: bare URL or { url, weight, backup }
+            let l = load_str(
+                "[upstream.u]\nservers = [\"http://a:1\", { url = \"http://b:2\", weight = 3 }, { url = \"http://c:3\", backup = true }]",
+            )
+            .unwrap();
+            let srv = &l.config.upstream["u"].servers;
+            assert_eq!(srv[0].url, "http://a:1");
+            assert_eq!((srv[0].weight, srv[0].backup), (1, false));
+            assert_eq!((srv[1].weight, srv[1].backup), (3, false));
+            assert!((srv[2].backup && srv[2].weight == 1));
+
+            // host_header: keywords still work; anything else is verbatim
+            for (v, want) in [
+                ("upstream", model::HostHeader::Upstream),
+                ("original", model::HostHeader::Original),
+                (
+                    "api.internal",
+                    model::HostHeader::Custom("api.internal".into()),
+                ),
+            ] {
+                let l = load_str(&format!(
+                    "[[site]]\n[[site.route]]\n[site.route.proxy]\nupstream = \"http://x:1\"\nhost_header = \"{v}\""
+                ))
+                .unwrap();
+                assert_eq!(
+                    l.config.site[0].route[0]
+                        .proxy
+                        .as_ref()
+                        .unwrap()
+                        .host_header,
+                    want,
+                    "{v}"
+                );
+            }
+        }
+
+        #[test]
+        fn handler_scalar_shorthands() {
+            // each handler's dominant field has a scalar form; the full
+            // table form still parses
+            let l = load_str("[[site]]\n[[site.route]]\nprefix = \"/\"\nstatic = \"/srv/www\"\n")
+                .unwrap();
+            assert_eq!(
+                l.config.site[0].route[0]
+                    .static_files
+                    .as_ref()
+                    .unwrap()
+                    .root,
+                std::path::PathBuf::from("/srv/www")
+            );
+
+            let l = load_str(
+                "[[site]]\n[[site.route]]\nprefix = \"/\"\nredirect = \"https://new.example{path}\"\n",
+            )
+            .unwrap();
+            assert_eq!(
+                l.config.site[0].route[0]
+                    .redirect
+                    .as_ref()
+                    .unwrap()
+                    .to
+                    .as_deref(),
+                Some("https://new.example{path}")
+            );
+
+            let l =
+                load_str("[[site]]\n[[site.route]]\nprefix = \"/\"\nrespond = \"pong\"\n").unwrap();
+            let r = l.config.site[0].route[0].respond.as_ref().unwrap();
+            assert_eq!((r.status, r.body.as_str()), (200, "pong"));
+
+            let l = load_str("[[site]]\n[[site.route]]\nprefix = \"/\"\nrate_limit = \"100/s\"\n")
+                .unwrap();
+            let r = l.config.site[0].route[0].rate_limit.as_ref().unwrap();
+            assert_eq!(r.key, "ip");
+
+            // bad rate strings are schema errors, not silent passes
+            match load_str("[[site]]\n[[site.route]]\nprefix = \"/\"\nrate_limit = \"fast\"") {
+                Err(LoadError::Schema(_, _)) => {}
+                Err(e) => panic!("expected Schema, got {e}"),
+                Ok(_) => panic!("rate_limit = \"fast\" should fail"),
+            }
+        }
+
+        #[test]
+        fn site_level_middleware_defaults() {
+            // every site-level middleware block accepts the same forms
+            // as its route-level counterpart
+            let l = load_str(
+                r#"
+[cache.c]
+[[site]]
+hosts = ["x"]
+auth = { bearer = { tokens = ["t"] } }
+cors = { origins = ["https://a.example"] }
+rate_limit = "50/s"
+cache = "c"
+compress = true
+response_headers = { set = { x-a = "1" } }
+ip_allow = "10.0.0.0/8"
+ip_deny = "10.0.0.9/32"
+[site.timeouts]
+idle = "5s"
+[site.limits]
+body_bytes = "1mb"
+[site.security]
+hsts = true
+[[site.route]]
+prefix = "/"
+respond = { status = 200 }
+"#,
+            )
+            .unwrap();
+            let s = &l.config.site[0];
+            assert!(s.auth.is_some() && s.cors.is_some());
+            assert_eq!(s.rate_limit.as_ref().unwrap().key, "ip");
+            assert!(s.cache.is_some() && s.compress.is_some());
+            assert!(s.response_headers.is_some());
+            assert_eq!(s.ip_allow.len(), 1);
+            assert_eq!(s.ip_deny.len(), 1);
+            assert!(s.timeouts.is_some() && s.limits.is_some() && s.security.is_some());
+
+            // a route-level `enabled = false` marker parses for every
+            // inheritable block
+            let l = load_str(
+                r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+prefix = "/"
+respond = { status = 200 }
+auth = { enabled = false }
+cors = { enabled = false }
+rate_limit = { enabled = false }
+cache = false
+compress = false
+response_headers = { enabled = false }
+"#,
+            )
+            .unwrap();
+            let r = &l.config.site[0].route[0];
+            for (name, disabled) in [
+                ("auth", !r.auth.as_ref().unwrap().enabled),
+                ("cors", !r.cors.as_ref().unwrap().enabled),
+                ("rate_limit", !r.rate_limit.as_ref().unwrap().enabled),
+                ("cache", !r.cache.as_ref().unwrap().enabled),
+                ("compress", !r.compress.as_ref().unwrap().enabled),
+                (
+                    "response_headers",
+                    !r.response_headers.as_ref().unwrap().enabled,
+                ),
+            ] {
+                assert!(disabled, "{name} opt-out did not parse");
+            }
+        }
+
+        #[test]
+        fn relative_paths_anchor_to_their_document() {
+            // a fragment's relative paths resolve against the fragment's
+            // directory — the same anchor `include` uses — not the CWD
+            let dir = tempfile::tempdir().unwrap();
+            let sub = dir.path().join("frag.d");
+            std::fs::create_dir(&sub).unwrap();
+            let main = write(
+                dir.path(),
+                "verd.toml",
+                "include = [\"frag.d/one.toml\"]\n[[site]]\nhosts = [\"a\"]\nroot = \"./pub\"\n",
+            );
+            write(
+                &sub,
+                "one.toml",
+                "[[site]]\nhosts = [\"b\"]\nroot = \"./pub\"\n",
+            );
+            let loaded = load(&main).unwrap();
+            assert_eq!(
+                loaded.config.site[0].root.as_deref(),
+                Some(dir.path().join("pub").as_path())
+            );
+            assert_eq!(
+                loaded.config.site[1].root.as_deref(),
+                Some(sub.join("pub").as_path())
+            );
+
+            // absolute paths and output sentinels pass through untouched
+            let main2 = write(
+                dir.path(),
+                "v2.toml",
+                "[log]\noutput = \"stdout\"\n[log.access]\noutput = \"stderr\"\n[[site]]\nhosts = [\"c\"]\nroot = \"/srv/www\"\n",
+            );
+            let loaded = load(&main2).unwrap();
+            assert_eq!(loaded.config.log.output, "stdout");
+            assert_eq!(loaded.config.log.access.output, "stderr");
+            assert_eq!(
+                loaded.config.site[0].root.as_deref(),
+                Some(Path::new("/srv/www"))
+            );
         }
 
         #[test]
@@ -1701,6 +2438,30 @@ proxy = "app"
                 }
                 Err(e) => panic!("expected Schema, got {e}"),
                 Ok(_) => panic!("expected Schema, load succeeded"),
+            }
+        }
+
+        #[test]
+        fn unknown_enum_variants_suggest_close_spellings() {
+            for (body, want) in [
+                // `dns_01` parses — it is an accepted alias now
+                ("[acme]\nchallenge = \"dns-0\"", "dns-01"),
+                ("[acme]\nchallenge = \"htt-01\"", "http-01"),
+                (
+                    "[upstream.u]\nservers = \"127.0.0.1:1\"\nlb = \"least_conn_\"",
+                    "least_conn",
+                ),
+            ] {
+                match load_str(body) {
+                    Err(LoadError::Schema(_, msg)) => {
+                        assert!(
+                            msg.contains(&format!("did you mean `{want}`?")),
+                            "{body} → {msg}"
+                        );
+                    }
+                    Err(e) => panic!("{body} should be a schema error, got {e}"),
+                    Ok(_) => panic!("{body} should be a schema error"),
+                }
             }
         }
     }

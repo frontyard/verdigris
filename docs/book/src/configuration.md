@@ -34,6 +34,24 @@ paths (a "diamond") merges only once; an actual include cycle is an
 error. Paths are always resolved relative to the file that writes the
 `include` line.
 
+## Paths
+
+Filesystem paths in config are relative to **the directory of the file
+that contains them** — never the process working directory. That holds
+for `site.root`, `route.static.root`, `tls.cert`/`key`,
+`auth.basic.htpasswd`, `cache.*.disk_path`, `acme.storage`,
+`upstream.*.tls.ca`, and the log outputs, and each `include`d fragment
+anchors to its own directory, so a config tree moves as a unit.
+Absolute paths are untouched either way.
+
+Two fields are exceptions by design: `static.error_pages` and
+`static.try_files` name files *inside* `root`, so they stay
+root-relative.
+
+> **Breaking change:** these fields used to resolve against the
+> process working directory. If you relied on that, prefix the
+> affected values with the config directory (or make them absolute).
+
 ## Secrets and environment interpolation
 
 Secrets never live in the file itself:

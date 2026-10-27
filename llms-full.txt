@@ -653,6 +653,27 @@ or `htpasswd -B`; an `htpasswd` file path works instead of inline
 `users`. For machine clients use `bearer` or `api_key` with `${VAR}`
 interpolation. See [Middleware](middleware.md).
 
+When several routes share the same guard, move the middleware onto the
+site instead of repeating it per route — routes inherit it and can opt
+out with `enabled = false`:
+
+```toml
+[[site]]
+hosts = ["grafana.internal.example"]
+ip_allow = ["10.0.0.0/8", "192.168.0.0/16"]   # applies to every route
+auth = { basic = { realm = "ops",
+                   users = { oncall = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$3nGf8u5Z2p2mJx0yq9Rk3g" } } }
+
+[[site.route]]
+prefix = "/"
+proxy = { upstream = "http://10.0.0.5:3000" }
+
+[[site.route]]
+prefix = "/healthz"
+respond = { status = 200, body = "ok" }
+auth = { enabled = false }                    # no auth on this route
+```
+
 ## Public API: rate limiting and CORS
 
 ```toml
@@ -836,6 +857,24 @@ paths (a "diamond") merges only once; an actual include cycle is an
 error. Paths are always resolved relative to the file that writes the
 `include` line.
 
+## Paths
+
+Filesystem paths in config are relative to **the directory of the file
+that contains them** — never the process working directory. That holds
+for `site.root`, `route.static.root`, `tls.cert`/`key`,
+`auth.basic.htpasswd`, `cache.*.disk_path`, `acme.storage`,
+`upstream.*.tls.ca`, and the log outputs, and each `include`d fragment
+anchors to its own directory, so a config tree moves as a unit.
+Absolute paths are untouched either way.
+
+Two fields are exceptions by design: `static.error_pages` and
+`static.try_files` name files *inside* `root`, so they stay
+root-relative.
+
+> **Breaking change:** these fields used to resolve against the
+> process working directory. If you relied on that, prefix the
+> affected values with the config directory (or make them absolute).
+
 ## Secrets and environment interpolation
 
 Secrets never live in the file itself:
@@ -941,7 +980,20 @@ proxy = { upstream = "app", rewrite = { strip_prefix = "/api" } }
 - **Protocols**: `http://`, `https://`, `h2c://` (cleartext HTTP/2 with
   prior knowledge). ALPN on `https://` picks h2 automatically; a shared
   h2 connection multiplexes requests per member.
-- **Balancing**: `round_robin` (default), `least_conn`, `ip_hash`.
+- **Balancing**: `round_robin` (smooth weighted), `least_conn`
+  (`inflight / weight`), `ip_hash` (weight-proportional ring). Entries
+  can carry `weight` and `backup`:
+
+  ```toml
+  [upstream.app]
+  servers = [
+    "http://app1:9000",                        # weight 1, primary
+    { url = "http://app2:9000", weight = 3 },  # ~3/4 of requests
+    { url = "http://app3:9000", backup = true },# standby only
+  ]
+  ```
+
+  `backup` members serve only while no primary is healthy.
 - **Health**: passive (kick members out after N consecutive failures for
   a cooldown) and/or active (periodic HTTP probes on `path`, honours h1/h2).
 - **Retries**: `retries.max_per_request` replays idempotent requests on
@@ -972,7 +1024,10 @@ Request headers can be set/cleared per route under
 `proxy.request_headers`; response headers under `route.response_headers`.
 `Host` is rewritten to the member authority by default
 (`host_header = "upstream"`); set `host_header = "original"` to pass the
-client's `Host` through. Hop-by-hop headers are
+client's `Host` through, or any hostname (`host_header =
+"api.internal"`) to force a value. Setting `Host` via
+`proxy.request_headers` overrides `host_header` (the validator warns).
+Hop-by-hop headers are
 stripped; `X-Forwarded-For` is appended when the peer is trusted
 (otherwise replaced) and `X-Forwarded-Proto` reflects the inbound scheme.
 
@@ -1069,6 +1124,41 @@ permanent redirect once a certificate exists for the host;
 
 Per-route, in order: `ip acl → CORS preflight → auth → rate limit →
 cache → handler → security/cors/ratelimit headers → compression`.
+
+## Site defaults
+
+Every middleware block also exists at site level and is inherited by
+all of the site's routes — including the implicit `site.root` /
+`site.proxy` catch-alls:
+
+```toml
+[[site]]
+hosts = ["app.example.com"]
+auth = { bearer = { tokens = ["${API_TOKEN}"] } }   # every route below
+rate_limit = { rate = "100/s", key = "ip" }     # one shared bucket
+ip_deny = ["203.0.113.0/24"]
+
+[[site.route]]
+prefix = "/public"
+respond = { status = 200, body = "open" }
+auth = { enabled = false }        # opt out of the site default
+
+[[site.route]]
+prefix = "/api"
+proxy = "http://127.0.0.1:9000"
+rate_limit = { rate = "10/s", key = "route" }   # replaces, doesn't merge
+```
+
+- A route block **replaces** the site block wholesale — except
+  `response_headers` (`set`/`add` union, route keys win; `remove`
+  concatenates) and `security`, which merge field-wise.
+- `enabled = false` opts a route out of an inherited block.
+- A site-level `rate_limit` builds **one shared limiter** across all
+  routes that inherit it — `key = "ip"` limits each client site-wide.
+- IP ACLs **tighten only**: denies union, and a request must pass both
+  non-empty allow lists — a route can't widen a site ACL.
+- `timeouts`, `limits`, and `security` also layer global → site →
+  route.
 
 ## IP ACLs
 

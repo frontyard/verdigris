@@ -71,6 +71,34 @@ workflow publishes the matching section as the GitHub release notes.
 - **Unknown-field errors suggest close spellings** — a typo like
   `host = "a"` now fails with `did you mean \`hosts\`?` appended,
   across every `deny_unknown_fields` table uniformly.
+- **Site-level middleware defaults** — `auth`, `cors`, `rate_limit`,
+  `cache`, `compress`, `response_headers`, `ip_allow`/`ip_deny`,
+  `timeouts`, `limits`, and `security` can be set on `[[site]]` and are
+  inherited by every route (including the implicit `site.root`/
+  `site.proxy` catch-alls). A route's own block replaces the site
+  block (`response_headers` unions, `security` merges field-wise),
+  `enabled = false` opts a route out, a site `rate_limit` shares one
+  limiter across all inheriting routes, and IP ACLs tighten only —
+  denies union, allow-lists must both admit.
+- **Weighted and backup upstream servers** — `upstream.*.servers`
+  entries accept `{ url, weight, backup }` alongside bare URLs.
+  `round_robin` becomes smooth weighted round-robin, `least_conn`
+  compares `inflight / weight`, `ip_hash` hashes onto a
+  weight-proportional ring, and `backup = true` members serve only
+  while no primary is healthy.
+- **Handler and middleware shorthands** — `route.static = "/srv/www"`,
+  `redirect = "https://…{path}"`, `respond = "pong"`, and
+  `rate_limit = "100/s"` (per-IP) expand to their table forms.
+- **More off-switches and scalar sugar** — `proxy.retries = false`,
+  `log.access = false`, route `cache = false`, `upstream.dns = "60s"`,
+  `upstream.health.active = "/healthz"`, snake-case `acme.challenge`
+  aliases (`dns_01`, `tls_alpn_01`, `http_01`), custom
+  `host_header = "api.internal"` values, and bare scalars for
+  `static.index`, `static.try_files`, `cache.bypass.cookies`/`paths`,
+  and `*.remove` header lists.
+- **Unified template placeholders** — `redirect` targets and
+  `respond.body` share `{path}`, `{host}`, `{query}`, `{method}`,
+  `{scheme}` (`{method}` is new on redirect, `{query}` on respond).
 
 ### Changed
 
@@ -150,6 +178,25 @@ workflow publishes the matching section as the GitHub release notes.
   outside 400–599, `rate_limit key = "identity"` on routes with no
   auth, and `tls = "auto"` on non-public names (IPs, `localhost`,
   `.internal`, …) or on a hostless site without on-demand issuance.
+- **BREAKING: config paths anchor to their file** — `site.root`,
+  `route.static.root`, `tls.cert`/`key`, `auth.basic.htpasswd`,
+  `cache.*.disk_path`, `acme.storage`/`ca_roots`,
+  `upstream.*.tls.ca`, and the log outputs now resolve relative to the
+  directory of the file (or `include`d fragment) that contains them
+  instead of the process working directory, so a config tree moves as
+  a unit. `static.error_pages` and `static.try_files` stay
+  root-relative by design — they name paths *inside* `root`.
+- **Diagnostics name sites and fragments** — site errors label
+  `site["name-or-first-host"]` (`site.name` preferred), and semantic
+  errors from `include`d fragments report the fragment file rather
+  than only `verd.toml`.
+- **`did you mean` covers enum variants** — a near-miss like
+  `challenge = "dns01"` suggests the accepted spellings the same way
+  unknown fields do.
+- **`Host` set via `request_headers` warns** —
+  `proxy.request_headers.set`/`add` carrying `host` overrides
+  `host_header`; the validator now says so instead of letting it win
+  silently.
 
 ### Fixed
 
@@ -180,6 +227,15 @@ workflow publishes the matching section as the GitHub release notes.
   bump invalidated it and broke the `generated docs in sync` CI check
   on release PRs. `release.sh` now regenerates it unconditionally
   (`--regen-docs` still gates the schema-driven `reference.md`).
+- **Secret permission checks now cover every source file** —
+  `include`d fragments containing inline secrets and `${file:…}`
+  secret targets are checked for world-readable/writable permissions;
+  previously only the main config file was checked, and a secret
+  reference in a later fragment could attach the warning to the wrong
+  file.
+- **`cache.bypass.cookies`/`paths` scalar parity** — both accept a
+  single string as a one-element list, matching the other bypass
+  lists and the grammar doc.
 
 ## [0.4.1] - 2026-10-27
 

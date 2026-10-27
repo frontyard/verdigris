@@ -3,6 +3,41 @@
 Per-route, in order: `ip acl → CORS preflight → auth → rate limit →
 cache → handler → security/cors/ratelimit headers → compression`.
 
+## Site defaults
+
+Every middleware block also exists at site level and is inherited by
+all of the site's routes — including the implicit `site.root` /
+`site.proxy` catch-alls:
+
+```toml
+[[site]]
+hosts = ["app.example.com"]
+auth = { bearer = { tokens = ["${API_TOKEN}"] } }   # every route below
+rate_limit = { rate = "100/s", key = "ip" }     # one shared bucket
+ip_deny = ["203.0.113.0/24"]
+
+[[site.route]]
+prefix = "/public"
+respond = { status = 200, body = "open" }
+auth = { enabled = false }        # opt out of the site default
+
+[[site.route]]
+prefix = "/api"
+proxy = "http://127.0.0.1:9000"
+rate_limit = { rate = "10/s", key = "route" }   # replaces, doesn't merge
+```
+
+- A route block **replaces** the site block wholesale — except
+  `response_headers` (`set`/`add` union, route keys win; `remove`
+  concatenates) and `security`, which merge field-wise.
+- `enabled = false` opts a route out of an inherited block.
+- A site-level `rate_limit` builds **one shared limiter** across all
+  routes that inherit it — `key = "ip"` limits each client site-wide.
+- IP ACLs **tighten only**: denies union, and a request must pass both
+  non-empty allow lists — a route can't widen a site ACL.
+- `timeouts`, `limits`, and `security` also layer global → site →
+  route.
+
 ## IP ACLs
 
 ```toml

@@ -29,6 +29,10 @@ pub struct Diagnostic {
     pub path: String,
     /// What is wrong.
     pub message: String,
+    /// Config file that set the offending value, when known — filled by
+    /// the loader for configs assembled from `include`d fragments.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<std::path::PathBuf>,
 }
 
 impl fmt::Display for Diagnostic {
@@ -37,7 +41,11 @@ impl fmt::Display for Diagnostic {
             Severity::Error => "error",
             Severity::Warning => "warning",
         };
-        write!(f, "{sev}: {}: {}", self.path, self.message)
+        write!(f, "{sev}: {}: {}", self.path, self.message)?;
+        if let Some(src) = &self.source {
+            write!(f, " (in {})", src.display())?;
+        }
+        Ok(())
     }
 }
 
@@ -51,6 +59,7 @@ impl Ctx {
             severity: Severity::Error,
             path: path.into(),
             message: msg.into(),
+            source: None,
         });
     }
     fn warn(&mut self, path: impl Into<String>, msg: impl Into<String>) {
@@ -58,6 +67,7 @@ impl Ctx {
             severity: Severity::Warning,
             path: path.into(),
             message: msg.into(),
+            source: None,
         });
     }
 }
@@ -112,11 +122,13 @@ fn check_listeners(ctx: &mut Ctx, cfg: &Config) {
     }
 }
 
-/// Label a site by its first host (or `default`), falling back to the
-/// index — `site["example.com"]` reads better than `site[0]` after
+/// Label a site by `name`, else its first host (or `default`), falling
+/// back to the index — `site["api"]` reads better than `site[2]` after
 /// includes have merged fragments from several files.
 fn site_label(i: usize, site: &SiteConfig) -> String {
-    if let Some(h) = site.hosts.first() {
+    if let Some(n) = &site.name {
+        format!("site[{n:?}]")
+    } else if let Some(h) = site.hosts.first() {
         format!("site[{h:?}]")
     } else if site.default {
         "site[default]".to_string()
@@ -238,8 +250,9 @@ fn check_sites(ctx: &mut Ctx, cfg: &Config) {
             check_upstream_ref(ctx, cfg, &format!("{site_path}.proxy"), up);
         }
         for (j, route) in site.route.iter().enumerate() {
-            check_route(ctx, cfg, &site_path, j, route);
+            check_route(ctx, cfg, &site_path, j, site, route);
         }
+        check_site_defaults(ctx, cfg, &site_path, site);
         check_trusted_proxies(ctx, cfg, i, site);
     }
 
@@ -349,6 +362,34 @@ fn looks_public_dns(host: &str) -> bool {
         .any(|t| h == *t || h.ends_with(&format!(".{t}")))
 }
 
+/// Site-level middleware defaults — same checks as the route forms.
+fn check_site_defaults(ctx: &mut Ctx, cfg: &Config, site_path: &str, site: &SiteConfig) {
+    if let Some(auth) = &site.auth {
+        check_auth(ctx, site_path, auth);
+    }
+    if let Some(rl) = &site.rate_limit {
+        check_rate_limit(ctx, site_path, rl);
+        if rl.enabled && rl.key == "identity" && !site.auth.as_ref().is_some_and(|a| a.enabled) {
+            ctx.warn(
+                format!("{site_path}.rate_limit.key"),
+                "key \"identity\" but the site has no auth — requests are keyed by client IP",
+            );
+        }
+    }
+    if let Some(cors) = &site.cors {
+        check_cors(ctx, site_path, cors);
+    }
+    if let Some(cache) = &site.cache {
+        check_route_cache(ctx, cfg, site_path, cache);
+    }
+    if let Some(comp) = &site.compress {
+        check_compress(ctx, site_path, comp);
+    }
+    if let Some(ops) = &site.response_headers {
+        check_header_ops(ctx, site_path, ops);
+    }
+}
+
 fn check_trusted_proxies(ctx: &mut Ctx, _cfg: &Config, i: usize, site: &SiteConfig) {
     if let Some(proxies) = &site.trusted_proxies
         && proxies.is_empty()
@@ -365,6 +406,7 @@ fn check_route(
     cfg: &Config,
     site_label: &str,
     route_idx: usize,
+    site: &SiteConfig,
     route: &RouteConfig,
 ) {
     let path = format!("{site_label}.route[{route_idx}]");
@@ -520,7 +562,7 @@ fn check_route(
             k.eq_ignore_ascii_case("content-type") && v.to_ascii_lowercase().contains("text/html")
         });
         if htmlish
-            && ["{path}", "{host}", "{method}"]
+            && ["{path}", "{host}", "{query}", "{method}"]
                 .iter()
                 .any(|p| resp.body.contains(p))
         {
@@ -531,24 +573,85 @@ fn check_route(
         }
     }
 
+    let eff_auth = route
+        .auth
+        .as_ref()
+        .or(site.auth.as_ref())
+        .filter(|a| a.enabled);
     if let Some(auth) = &route.auth {
         check_auth(ctx, &path, auth);
     }
     if let Some(rl) = &route.rate_limit {
         check_rate_limit(ctx, &path, rl);
-        if rl.key == "identity" && route.auth.is_none() {
+        if rl.enabled && rl.key == "identity" && eff_auth.is_none() {
             ctx.warn(
                 format!("{path}.rate_limit.key"),
-                "key \"identity\" but the route has no auth — requests are keyed by client IP",
+                "key \"identity\" but neither the route nor its site has auth — requests are keyed by client IP",
             );
         }
     }
     if let Some(cors) = &route.cors {
         check_cors(ctx, &path, cors);
     }
-    if let Some(cache) = &route.cache
-        && !cfg.cache.contains_key(&cache.store)
-    {
+    if let Some(cache) = &route.cache {
+        check_route_cache(ctx, cfg, &path, cache);
+        if cache.enabled
+            && let Some(key) = eff_auth.and_then(|a| a.api_key.as_ref())
+            && key.location == ApiKeyLocation::Query
+        {
+            // the cache layer strips the param from keys (see
+            // key::strip_query_param) — this warns it ever existed
+            ctx.warn(
+                format!("{path}.auth.api_key"),
+                "query-parameter api keys on a cached route put credentials in URLs; the param is stripped from cache keys, but header-based keys are safer",
+            );
+        }
+    }
+    if let Some(comp) = &route.compress {
+        check_compress(ctx, &path, comp);
+    }
+    if let Some(ops) = &route.response_headers {
+        check_header_ops(ctx, &path, ops);
+    }
+}
+
+/// Dead-config check for a disabled `response_headers` block — field
+/// syntax itself is enforced when the ops compile at build.
+fn check_header_ops(ctx: &mut Ctx, path: &str, ops: &HeaderOps) {
+    if !ops.enabled && (!ops.set.is_empty() || !ops.add.is_empty() || !ops.remove.is_empty()) {
+        ctx.warn(
+            format!("{path}.response_headers"),
+            "settings are ignored — response_headers.enabled = false",
+        );
+    }
+}
+
+/// Cache checks shared by site defaults and routes.
+fn check_route_cache(ctx: &mut Ctx, cfg: &Config, path: &str, cache: &RouteCache) {
+    if !cache.enabled {
+        let d = RouteCache::default();
+        let nondefault_bypass = !cache.bypass.authenticated
+            || !cache.bypass.methods.is_empty()
+            || !cache.bypass.cookies.is_empty()
+            || !cache.bypass.headers.is_empty()
+            || !cache.bypass.paths.is_empty();
+        if !cache.store.is_empty()
+            || cache.ttl.is_some()
+            || cache.stale_while_revalidate.is_some()
+            || cache.stale_if_error.is_some()
+            || cache.negative_ttl != d.negative_ttl
+            || !cache.vary_headers.is_empty()
+            || !cache.x_cache
+            || nondefault_bypass
+        {
+            ctx.warn(
+                format!("{path}.cache"),
+                "settings are ignored — cache.enabled = false",
+            );
+        }
+        return;
+    }
+    if !cfg.cache.contains_key(&cache.store) {
         ctx.error(
             format!("{path}.cache.store"),
             format!(
@@ -557,40 +660,42 @@ fn check_route(
             ),
         );
     }
-    if route.cache.is_some()
-        && let Some(key) = route.auth.as_ref().and_then(|a| a.api_key.as_ref())
-        && key.location == ApiKeyLocation::Query
-    {
-        // the cache layer strips the param from keys (see
-        // key::strip_query_param) — this warns it ever existed
-        ctx.warn(
-            format!("{path}.auth.api_key"),
-            "query-parameter api keys on a cached route put credentials in URLs; the param is stripped from cache keys, but header-based keys are safer",
-        );
-    }
-    if let Some(comp) = &route.compress {
-        for alg in &comp.algorithms {
-            if !["br", "zstd", "gzip"].contains(&alg.as_str()) {
-                ctx.error(
-                    format!("{path}.compress.algorithms"),
-                    format!("unknown algorithm {alg:?}; use br, zstd, or gzip"),
-                );
-            }
+}
+
+/// Compression checks shared by site defaults and routes.
+fn check_compress(ctx: &mut Ctx, path: &str, comp: &CompressConfig) {
+    if !comp.enabled {
+        // `compress = false` always carries the default algorithm list,
+        // so only non-default extras are flagged.
+        if comp.level.is_some() || comp.algorithms != CompressConfig::default().algorithms {
+            ctx.warn(
+                format!("{path}.compress"),
+                "settings are ignored — compress.enabled = false",
+            );
         }
-        if let Some(level) = comp.level {
-            for alg in &comp.algorithms {
-                let max = match alg.as_str() {
-                    "gzip" => 9,
-                    "br" => 11,
-                    "zstd" => 19,
-                    _ => continue, // unknown names error above
-                };
-                if level > max {
-                    ctx.error(
-                        format!("{path}.compress.level"),
-                        format!("level {level} exceeds {alg}'s maximum ({max})"),
-                    );
-                }
+        return;
+    }
+    for alg in &comp.algorithms {
+        if !["br", "zstd", "gzip"].contains(&alg.as_str()) {
+            ctx.error(
+                format!("{path}.compress.algorithms"),
+                format!("unknown algorithm {alg:?}; use br, zstd, or gzip"),
+            );
+        }
+    }
+    if let Some(level) = comp.level {
+        for alg in &comp.algorithms {
+            let max = match alg.as_str() {
+                "gzip" => 9,
+                "br" => 11,
+                "zstd" => 19,
+                _ => continue, // unknown names error above
+            };
+            if level > max {
+                ctx.error(
+                    format!("{path}.compress.level"),
+                    format!("level {level} exceeds {alg}'s maximum ({max})"),
+                );
             }
         }
     }
@@ -637,6 +742,34 @@ fn check_upstream_ref(ctx: &mut Ctx, cfg: &Config, path: &str, upstream: &Upstre
 
 fn check_proxy(ctx: &mut Ctx, cfg: &Config, path: &str, proxy: &ProxyHandler) {
     check_proxy_retries(ctx, path, &proxy.retries);
+    if let HostHeader::Custom(v) = &proxy.host_header {
+        // must read like a host[:port] and survive as a header value
+        if v.is_empty()
+            || v.contains("://")
+            || v.contains('/')
+            || v.chars().any(char::is_whitespace)
+            || http::HeaderValue::from_str(v).is_err()
+        {
+            ctx.error(
+                format!("{path}.proxy.host_header"),
+                format!(
+                    "{v:?} is not a valid Host value — use a hostname (optionally host:port), \"upstream\", or \"original\""
+                ),
+            );
+        }
+    }
+    if let Some(ops) = &proxy.request_headers
+        && ops
+            .set
+            .keys()
+            .chain(ops.add.keys())
+            .any(|k| k.eq_ignore_ascii_case("host"))
+    {
+        ctx.warn(
+            format!("{path}.proxy.request_headers"),
+            "a `host` op here is applied after `host_header` and overrides it — prefer `proxy.host_header`",
+        );
+    }
     check_upstream_ref(ctx, cfg, &format!("{path}.proxy.upstream"), &proxy.upstream);
     if let Some(rw) = &proxy.rewrite {
         let kinds = [
@@ -672,7 +805,18 @@ fn check_proxy(ctx: &mut Ctx, cfg: &Config, path: &str, proxy: &ProxyHandler) {
     }
 }
 
+/// `enabled = false` opt-outs flag leftover settings that silently do
+/// nothing — same contract as `admin.enabled = false`.
 fn check_auth(ctx: &mut Ctx, path: &str, auth: &AuthConfig) {
+    if !auth.enabled {
+        if auth.basic.is_some() || auth.bearer.is_some() || auth.api_key.is_some() {
+            ctx.warn(
+                format!("{path}.auth"),
+                "settings are ignored — auth.enabled = false",
+            );
+        }
+        return;
+    }
     let methods = [
         auth.basic.is_some(),
         auth.bearer.is_some(),
@@ -757,29 +901,71 @@ fn looks_like_bcrypt(s: &str) -> bool {
 }
 
 fn check_rate_limit(ctx: &mut Ctx, path: &str, rl: &RateLimitConfig) {
-    let valid = matches!(rl.key.as_str(), "ip" | "identity" | "route")
-        || rl
-            .key
-            .strip_prefix("header:")
-            .is_some_and(|h| !h.is_empty());
-    if !valid {
+    if !rl.enabled {
+        // opt-out marker: flag settings that silently do nothing
+        if !rl.key.is_empty()
+            || rl.rate.is_some()
+            || rl.burst.is_some()
+            || !rl.exempt.is_empty()
+            || rl.dry_run
+        {
+            ctx.warn(
+                format!("{path}.rate_limit"),
+                "settings are ignored — rate_limit.enabled = false",
+            );
+        }
+        return;
+    }
+    if rl.key.is_empty() {
         ctx.error(
             format!("{path}.rate_limit.key"),
-            format!(
-                "invalid key {:?}; use ip, identity, route, or header:<Name>",
-                rl.key
-            ),
+            "key is required — use ip, identity, route, or header:<Name>",
         );
+    } else {
+        let valid = matches!(rl.key.as_str(), "ip" | "identity" | "route")
+            || rl
+                .key
+                .strip_prefix("header:")
+                .is_some_and(|h| !h.is_empty());
+        if !valid {
+            ctx.error(
+                format!("{path}.rate_limit.key"),
+                format!(
+                    "invalid key {:?}; use ip, identity, route, or header:<Name>",
+                    rl.key
+                ),
+            );
+        }
     }
-    if rl.rate.permits == 0 {
-        ctx.error(
+    match rl.rate {
+        None => ctx.error(
+            format!("{path}.rate_limit.rate"),
+            "rate is required when rate limiting is enabled",
+        ),
+        Some(spec) if spec.permits == 0 => ctx.error(
             format!("{path}.rate_limit.rate"),
             "rate must be greater than zero",
-        );
+        ),
+        Some(_) => {}
     }
 }
 
 fn check_cors(ctx: &mut Ctx, path: &str, cors: &CorsConfig) {
+    if !cors.enabled {
+        if !cors.origins.is_empty()
+            || !cors.methods.is_empty()
+            || !cors.headers.is_empty()
+            || !cors.expose.is_empty()
+            || cors.credentials
+            || cors.max_age.is_some()
+        {
+            ctx.warn(
+                format!("{path}.cors"),
+                "settings are ignored — cors.enabled = false",
+            );
+        }
+        return;
+    }
     if cors.origins.is_empty() {
         ctx.warn(
             format!("{path}.cors"),
@@ -843,16 +1029,25 @@ fn check_upstreams(ctx: &mut Ctx, cfg: &Config) {
             );
         }
         let mut seen_urls = HashSet::new();
-        for url in &up.servers {
-            if !seen_urls.insert(url) {
+        for srv in &up.servers {
+            if !seen_urls.insert(&srv.url) {
                 ctx.warn(
                     format!("{path}.servers"),
-                    format!("duplicate server URL {url:?}"),
+                    format!("duplicate server URL {:?}", srv.url),
                 );
             }
-            check_upstream_url(ctx, &path, url);
+            if srv.weight == 0 {
+                ctx.error(format!("{path}.servers"), "server weight must be >= 1");
+            }
+            check_upstream_url(ctx, &path, &srv.url);
         }
-        if !up.tls.verify && up.servers.iter().any(|u| u.starts_with("https://")) {
+        if up.servers.iter().all(|s| s.backup) && !up.servers.is_empty() {
+            ctx.warn(
+                format!("{path}.servers"),
+                "every server is a backup — no primary receives traffic while any backup is healthy",
+            );
+        }
+        if !up.tls.verify && up.servers.iter().any(|u| u.url.starts_with("https://")) {
             ctx.warn(
                 format!("{path}.tls.verify"),
                 "tls.verify = false disables upstream certificate verification — traffic to this upstream is MITM-able; prefer a custom ca or sni override",
@@ -1294,6 +1489,62 @@ tier = "disk"
     }
 
     #[test]
+    fn host_header_custom_validated() {
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+prefix = "/"
+[site.route.proxy]
+upstream = "http://u:1"
+host_header = "http://bad/host"
+"#,
+        );
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].route[0].proxy.host_header",
+            "not a valid Host"
+        ));
+
+        // a plain host[:port] is fine
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+prefix = "/"
+[site.route.proxy]
+upstream = "http://u:1"
+host_header = "api.internal:8443"
+"#,
+        );
+        assert!(!has_err(&cfg, "site[\"x\"].route[0].proxy.host_header", ""));
+    }
+
+    #[test]
+    fn request_headers_host_op_warns() {
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+prefix = "/"
+[site.route.proxy]
+upstream = "http://u:1"
+host_header = "api.internal"
+[site.route.proxy.request_headers]
+set = { host = "other.internal" }
+"#,
+        );
+        assert!(has_warn(
+            &cfg,
+            "site[\"x\"].route[0].proxy.request_headers",
+            "overrides"
+        ));
+    }
+
+    #[test]
     fn redirect_status_checked() {
         let cfg = parse_test_config(
             r#"
@@ -1336,14 +1587,16 @@ redirect = { scheme = "https", status = 303 }
             severity: Severity::Error,
             path: "site[0]".into(),
             message: "boom".into(),
+            source: None,
         };
         assert_eq!(d.to_string(), "error: site[0]: boom");
         let w = Diagnostic {
             severity: Severity::Warning,
             path: "x".into(),
             message: "y".into(),
+            source: Some(std::path::PathBuf::from("/tmp/frag.toml")),
         };
-        assert!(w.to_string().starts_with("warning:"));
+        assert_eq!(w.to_string(), "warning: x: y (in /tmp/frag.toml)");
     }
 
     #[test]
@@ -1580,6 +1833,116 @@ static = { root = "/tmp", error_pages = { 200 = "/ok.html", 404 = "/nf.html" } }
     }
 
     #[test]
+    fn site_defaults_validate_with_site_paths() {
+        // site-level blocks get the same checks as routes, labelled at
+        // the site path
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+cors = { origins = ["*"], credentials = true }
+rate_limit = { key = "bogus", rate = "10/s" }
+cache = { store = "nope" }
+[[site.route]]
+prefix = "/"
+respond = { status = 200 }
+"#,
+        );
+        assert!(has_warn(&cfg, "site[\"x\"].cors", "wildcard origin"));
+        assert!(
+            errors(&cfg)
+                .iter()
+                .any(|d| d.path == "site[\"x\"].rate_limit.key" && d.message.contains("bogus"))
+        );
+        assert!(
+            errors(&cfg)
+                .iter()
+                .any(|d| d.path == "site[\"x\"].cache.store"
+                    && d.message.contains("unknown cache store"))
+        );
+
+        // identity keying at site level without site auth warns once
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+rate_limit = { key = "identity", rate = "10/s" }
+[[site.route]]
+prefix = "/"
+respond = { status = 200 }
+"#,
+        );
+        assert!(has_warn(&cfg, "site[\"x\"].rate_limit.key", "no auth"));
+        assert!(!has_warn(&cfg, "site[\"x\"].route[0].rate_limit.key", ""));
+    }
+
+    #[test]
+    fn disabled_middleware_warns_on_dead_settings() {
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+prefix = "/"
+respond = { status = 200 }
+auth = { enabled = false, bearer = { tokens = ["t"] } }
+cors = { enabled = false, origins = ["*"] }
+rate_limit = { enabled = false, rate = "10/s" }
+response_headers = { enabled = false, set = { x-a = "1" } }
+"#,
+        );
+        for (field, present) in [
+            ("auth", "bearer"),
+            ("cors", "origins"),
+            ("rate_limit", "rate"),
+            ("response_headers", "set"),
+        ] {
+            assert!(
+                has_warn(
+                    &cfg,
+                    &format!("site[\"x\"].route[0].{field}"),
+                    "enabled = false"
+                ),
+                "expected dead-config warning for {field} ({present} set)"
+            );
+        }
+        // pure opt-outs stay quiet
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+prefix = "/"
+respond = { status = 200 }
+auth = { enabled = false }
+compress = false
+cache = false
+"#,
+        );
+        assert!(
+            warnings(&cfg)
+                .iter()
+                .all(|d| !d.message.contains("enabled = false"))
+        );
+    }
+
+    #[test]
+    fn site_auth_satisfies_route_identity_key() {
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+auth = { bearer = { tokens = ["t"] } }
+[[site.route]]
+prefix = "/"
+respond = { status = 200 }
+rate_limit = { key = "identity", rate = "10/s" }
+"#,
+        );
+        assert!(!has_warn(&cfg, "site[\"x\"].route[0].rate_limit.key", ""));
+    }
+
+    #[test]
     fn identity_key_without_auth_warns() {
         let cfg = parse_test_config(
             r#"
@@ -1594,7 +1957,7 @@ rate_limit = { key = "identity", rate = "10/s" }
         assert!(has_warn(
             &cfg,
             "site[\"x\"].route[0].rate_limit.key",
-            "no auth"
+            "neither the route nor its site has auth"
         ));
 
         // auth present → identity keying is meaningful, stays quiet
@@ -2096,6 +2459,22 @@ unavailable = { status = 42 }
             &cfg,
             "upstream.health.health.passive.failures",
             "single failure"
+        ));
+
+        // weight 0 rejected; all-backup cluster warned
+        let cfg = parse_test_config(
+            r#"
+[upstream.w]
+servers = [{ url = "http://x", weight = 0 }]
+[upstream.b]
+servers = [{ url = "http://x", backup = true }]
+"#,
+        );
+        assert!(has_err(&cfg, "upstream.w.servers", "weight must be >= 1"));
+        assert!(has_warn(
+            &cfg,
+            "upstream.b.servers",
+            "every server is a backup"
         ));
     }
 

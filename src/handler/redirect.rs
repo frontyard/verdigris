@@ -10,7 +10,8 @@ use crate::config::model as cfg;
 /// Where a redirect points.
 #[derive(Debug)]
 enum Target {
-    /// Full URL template with `{host}`, `{path}`, `{query}` substitution.
+    /// Full URL template — `{host}`, `{path}`, `{query}`, `{method}`,
+    /// `{scheme}` substitute from the request.
     To(String),
     /// Same path on a different host.
     Host(String),
@@ -58,11 +59,7 @@ impl Redirect {
         // never land in a Location value
         let path = crate::proxy::headers::encode_path(&ctx.path);
         let location = match &self.target {
-            Target::To(tpl) => tpl
-                .replace("{host}", &ctx.host)
-                .replace("{path}", &path)
-                .replace("{query}", &query)
-                .replace("{scheme}", ctx.scheme),
+            Target::To(tpl) => super::substitute(tpl, &path, req, ctx),
             Target::Host(host) => format!("{}://{}{}{}", ctx.scheme, host, path, query),
             Target::Scheme(scheme) => {
                 format!("{scheme}://{}{}{}", ctx.host, path, query)

@@ -236,14 +236,20 @@ pub fn build(config: &cfg::Config, mw: &middleware::Factory) -> Result<HostIndex
             let handler = handler::build(route_cfg, &site_name, &mut clusters, &route_id)
                 .map_err(|e| BuildError::Route(format!("{}: {e}", ctx())))?;
             let middleware = mw
-                .build(site_cfg, route_cfg)
+                .build(si, site_cfg, route_cfg)
                 .map_err(|e| BuildError::Route(format!("{}: {e}", ctx())))?;
 
             let mut timeouts = config.timeouts.clone();
+            if let Some(over) = &site_cfg.timeouts {
+                timeouts.apply_overrides(over);
+            }
             if let Some(over) = &route_cfg.timeouts {
                 timeouts.apply_overrides(over);
             }
             let mut limits = config.limits.clone();
+            if let Some(over) = &site_cfg.limits {
+                limits.apply_overrides(over);
+            }
             if let Some(over) = &route_cfg.limits {
                 limits.apply_overrides(over);
             }

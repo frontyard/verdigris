@@ -8,7 +8,7 @@
 use std::collections::VecDeque;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -184,6 +184,12 @@ pub struct Member {
     pub id: usize,
     /// The parsed server URL.
     pub url: UpstreamUrl,
+    /// Selection weight relative to the other primaries.
+    pub weight: u32,
+    /// Standby member — only picked when no primary is healthy.
+    pub backup: bool,
+    /// Smooth-weighted-round-robin running weight.
+    pub(crate) ew: AtomicI64,
     /// Instant the member was built — epoch for `sick_until` millis.
     epoch: Instant,
     /// Millis since `epoch` until which the member is out of rotation.
@@ -213,6 +219,8 @@ impl Member {
     fn build(
         id: usize,
         url: UpstreamUrl,
+        weight: u32,
+        backup: bool,
         max_connections: usize,
         cluster: metrics::SharedString,
     ) -> Arc<Self> {
@@ -221,6 +229,9 @@ impl Member {
         Arc::new(Self {
             id,
             url,
+            weight,
+            backup,
+            ew: AtomicI64::new(0),
             epoch: Instant::now(),
             sick_until: AtomicU64::new(0),
             fails: AtomicU32::new(0),
@@ -709,8 +720,22 @@ impl Cluster {
             .iter()
             .enumerate()
             .map(|(i, raw)| {
-                UpstreamUrl::parse(raw)
-                    .map(|url| Member::build(i, url, c.max_connections, cluster_lbl.clone()))
+                if raw.weight == 0 {
+                    return Err(format!(
+                        "upstream.{name}.servers[{i}]: weight must be at least 1"
+                    ));
+                }
+                UpstreamUrl::parse(&raw.url)
+                    .map(|url| {
+                        Member::build(
+                            i,
+                            url,
+                            raw.weight,
+                            raw.backup,
+                            c.max_connections,
+                            cluster_lbl.clone(),
+                        )
+                    })
                     .map_err(|e| format!("upstream.{name}.servers[{i}]: {e}"))
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -965,7 +990,14 @@ mod tests {
 
     #[test]
     fn member_health_cycle() {
-        let m = Member::build(0, UpstreamUrl::parse("http://x").unwrap(), 4, "test".into());
+        let m = Member::build(
+            0,
+            UpstreamUrl::parse("http://x").unwrap(),
+            1,
+            false,
+            4,
+            "test".into(),
+        );
         assert!(m.healthy());
         let p = cfg::PassiveHealth {
             failures: 2,
@@ -987,7 +1019,7 @@ mod tests {
         Cluster::build(
             "t",
             &cfg::UpstreamConfig {
-                servers,
+                servers: servers.into_iter().map(Into::into).collect(),
                 lb: cfg::LoadBalancing::default(),
                 health: cfg::HealthCheck::default(),
                 timeouts: cfg::UpstreamTimeouts {
@@ -1374,7 +1406,7 @@ mod tests {
         };
         let rebuild = |servers: Vec<String>| {
             let mut c = cfg::UpstreamConfig {
-                servers,
+                servers: servers.into_iter().map(Into::into).collect(),
                 health: hc.clone(),
                 ..Default::default()
             };

@@ -380,6 +380,7 @@ fn security_headers(bencher: Bencher) {
             cross_domain_policy: "none".into(),
         },
         None,
+        None,
     )
     .unwrap();
     bencher

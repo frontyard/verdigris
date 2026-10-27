@@ -36,26 +36,40 @@ where one field dominates the table — they are a closed set:
 | `site.proxy` | name \| URL \| `[urls]` | `UpstreamRef` |
 | `route.proxy` | `upstream` shapes \| table | `ProxyHandler{upstream,…}` |
 | `route.proxy.upstream` | name \| URL \| `[urls]` | `UpstreamRef` |
-| `route.cache` | `"store"` \| table | `RouteCache{store,…}` |
-| `route.compress` | `true`/`false` \| table | `CompressConfig`/`None` |
+| `route.static` | `"root"` \| table | `StaticHandler{root,…}` |
+| `route.redirect` | `"url"` \| table | `RedirectHandler{to,…}` |
+| `route.respond` | `"text"` \| table | `RespondHandler{body,…}` |
+| `route.rate_limit` | `"100/s"` \| table | `RateLimitConfig{key:"ip",…}` |
+| `route.cache` | `false` \| `"store"` \| table | `RouteCache{store,…}` |
+| `route.compress` | `true`/`false` \| table | `CompressConfig` |
+| `proxy.retries` | `false`/`true` \| table | `RetryPolicy` |
+| `upstream.dns` | `"60s"` \| table | `UpstreamDns{grace}` |
+| `upstream.health.active` | `"/path"` \| table | `ActiveHealth{path,…}` |
+| `upstream.servers` entry | `"url"` \| `{url,weight,backup}` | `UpstreamServer` |
 | `rewrite.replace_prefix` | `{ from, to }` | `PrefixPair` (map only) |
 | `site.tls` | `"off"∣"auto"∣"self_signed"` \| `{cert,key}` | `SiteTls` |
+| `log.access` | `false` \| table | `AccessLog{enabled,…}` |
 
 Every shorthand has an `*Schema`/`repr` untagged wrapper for schemars
 and a `deserialize_with` adapter — the `opt_route_cache`/`opt_compress`
 pattern. No fourth spelling per field, ever: two forms is the cap.
 
 **Parity.** Where site-level and route-level fields share semantics,
-the route accepts at least the site shorthand: `route.proxy` accepts
-every `site.proxy`/`upstream` shape; `route.cache`/`route.compress`
-accept their terse forms.
+each accepts the same forms: `route.proxy` accepts every
+`site.proxy`/`upstream` shape; the site-level middleware defaults
+(`site.auth`, `site.cors`, `site.rate_limit`, `site.cache`,
+`site.compress`, `site.response_headers`) accept exactly the route
+forms — `site.rate_limit = "100/s"` works just like the route's.
 
 ## Scalar-vs-list
 
 Simple string/scalar lists accept a single value as `["v"]` via the
-`values::one_or_many` adapter: `hosts`, `listen`, `upstream.servers`,
-`ip_allow`, `ip_deny`, `match.methods`, `auth.*` token/key lists,
-`acme.on_demand.allowed_hosts`, `cache` bypass lists,
+`values::one_or_many` adapter: `hosts`, `listen`, `upstream.servers`
+(a URL counts as one entry), `ip_allow`, `ip_deny`, `match.methods`,
+`auth.*` token/key lists, `acme.on_demand.allowed_hosts`, all
+`cache.bypass` lists (`methods`, `cookies`, `headers`, `paths`),
+`static.index`, `static.try_files`, `*.remove` header lists
+(`response_headers.remove`, `proxy.request_headers.remove`),
 `trusted_proxies`, `vary_headers`.
 
 Exceptions (deliberate, strict):
@@ -68,25 +82,77 @@ Exceptions (deliberate, strict):
 ## Off-switches
 
 Every optional subsystem exposes `enabled = false` or is documented
-here why not: `log.access.enabled`, `acme.on_demand.enabled`,
-`admin.enabled`, `route.compress` (`false` also removes a table).
+here why not: `log.access` (`false` or `{ enabled = false }`),
+`acme.on_demand.enabled`, `admin.enabled`, `proxy.retries`
+(`false` ⇒ `max_per_request = 0`), `route.compress`/`route.cache`
+(`false` ⇒ disabled table).
+
+Route middleware blocks (`auth`, `cors`, `rate_limit`, `cache`,
+`compress`, `response_headers`) carry `enabled = true` by default;
+`enabled = false` is the opt-out that suppresses an inherited
+site-level default. Settings left inside a disabled block are dead
+config and `verd validate` warns.
 
 `server.listen` has no `enabled` — an empty list already means "no
 sockets" and the validator requires at least one listener anyway.
-Per-route middleware needs no switch — `Option<Table>` presence *is*
-the switch.
+
+## Site-level defaults
+
+A site may carry the same middleware blocks as a route — `auth`,
+`cors`, `rate_limit`, `cache`, `compress`, `response_headers`,
+`ip_allow`, `ip_deny`, `timeouts`, `limits`, `security` — and every
+route inherits them, including the implicit `site.root`/`site.proxy`
+catch-alls. Resolution:
+
+- A route's own block wins whole-block (no field merge) — except
+  `response_headers`, whose `set`/`add` maps union with route keys
+  winning and whose `remove` concatenates, and `security`, which
+  merges field-wise global → site → route.
+- `enabled = false` at route scope opts out of the inherited block.
+- A site `rate_limit` builds **one shared limiter** — every route that
+  inherits it draws from the same buckets. A route's own `rate_limit`
+  always gets a fresh limiter.
+- ACLs tighten only: `ip_deny` unions site+route; both non-empty
+  `ip_allow` lists must admit the client. A route can never widen a
+  site ACL.
+
+## Path anchoring
+
+Filesystem paths in config are relative to **the file that contains
+them** — the main file or an `include`d fragment — so a config tree
+moves as a unit. This covers `site.*.root`, `route.*.static.root`,
+`*.tls.cert`/`key`, `auth.basic.htpasswd`, `cache.*.disk_path`,
+`acme.storage`/`ca_roots`, `upstream.*.tls.ca`, `log.output`,
+`log.access.output`.
+
+Deliberately *not* rebased: `static.error_pages` and
+`static.try_files` — they name paths inside `root`, not on the
+filesystem.
+
+## Placeholders
+
+`redirect.to`/`host`/`scheme` and `respond.body` share one closed set:
+`{path}`, `{host}`, `{query}`, `{method}`, `{scheme}`. No others;
+unknown `{...}` text passes through literally.
 
 ## Diagnostics
 
 - Load errors name the file (fragment, not just the main file), the
   field path (`site.0.route.2`), and file:line when the failure isn't
   an interpolation artifact.
-- Unknown-field errors append `did you mean \`x\`?` from the expected
-  set when a close spelling exists.
+- Semantic diagnostics carry the same fragment provenance — a bad
+  field in `tls.toml` says `tls.toml`, not `verd.toml`.
+- Site diagnostics label `site["name-or-first-host"]` — `site.name`
+  is preferred, then the first host, then the index.
+- Unknown-field *and* unknown-variant errors append `did you mean
+  \`x\`?` from the expected set when a close spelling exists.
 - `verd validate` diagnostics always carry a config path; errors are
   fatal, warnings never are (`--strict` promotes warnings for CI).
 - Semantic rules prefer *errors* for "will not work" and *warnings*
   for "works but almost certainly not what you meant".
+- Enum spellings are snake_case canonical with kebab-case aliases —
+  `dns_01` and `dns-01` both parse; docs and errors show the snake
+  form.
 
 ## Secrets
 
@@ -94,6 +160,20 @@ No secret material inline by design: `token`, `key`, `password`,
 `*_tokens`, `Authorization`-style header values take `${VAR}`/
 `${file:}`; `verd config`/admin `/config` redact by *path* (path-aware
 `secret_at`), never by substring match.
+
+The permission check runs per file: any fragment containing an inline
+secret (not a `${file:}` reference) must be owner-only (`0600`-ish),
+and every `${file:}` target is checked — a world-readable secret file
+warns on the field that references it.
+
+## Load balancing
+
+`upstream.*.servers` entries are `"url"` or `{ url, weight, backup }`.
+All three algorithms are weight-aware: `round_robin` uses smooth
+weighted round-robin, `least_conn` compares `inflight / weight`, and
+`ip_hash` places the client hash on a weight-proportional ring.
+`backup = true` members serve only when no primary is healthy; the
+`tried`-member retry exclusion applies within each tier.
 
 ## Auditing
 

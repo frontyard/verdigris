@@ -52,8 +52,11 @@ pub struct Report {
     /// Dotted key paths of values that contained a `${…}` marker —
     /// interpolated secrets are not literals for permission diagnostics.
     pub substituted: HashSet<String>,
-    /// Files referenced by `${file:…}` markers (for `--watch`).
-    pub file_refs: Vec<PathBuf>,
+    /// Files referenced by `${file:…}` markers, paired with the dotted
+    /// config path that held each marker (watch needs the files;
+    /// permission diagnostics need to know whether the receiving field
+    /// is secret-bearing).
+    pub file_refs: Vec<(String, PathBuf)>,
 }
 
 /// Apply interpolation to every string value in a parsed TOML document.
@@ -171,7 +174,7 @@ fn resolve(
             path
         };
         let path = path.canonicalize().unwrap_or(path);
-        report.file_refs.push(path.clone());
+        report.file_refs.push((at.to_string(), path.clone()));
         return match std::fs::read_to_string(&path) {
             Ok(content) => Ok(content.trim_end_matches(['\n', '\r']).to_string()),
             Err(e) => match default {
@@ -263,6 +266,7 @@ mod tests {
         let r = interp(&mut v).unwrap();
         assert_eq!(v.as_str().unwrap(), "hunter2");
         assert_eq!(r.file_refs.len(), 1);
+        assert_eq!(r.file_refs[0].1, f.path().canonicalize().unwrap());
     }
 
     #[test]

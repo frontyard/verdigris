@@ -138,11 +138,25 @@ fn compile_status(status: u16) -> Result<StatusCode, BuildError> {
         .map_err(|_| BuildError::Invalid(format!("invalid status {status}")))
 }
 
-/// Substitute `{path}`, `{host}`, `{method}`, `{scheme}` in a template.
-fn substitute(template: &str, req: &http::Request<BoxBody>, ctx: &RequestCtx) -> String {
+/// Substitute `{path}`, `{host}`, `{query}`, `{method}`, `{scheme}` in
+/// a template. `path` lets callers pass an encoded path — redirect
+/// targets must stay header-safe. `{query}` carries its leading `?`
+/// and is empty when the request has no query string.
+fn substitute(
+    template: &str,
+    path: &str,
+    req: &http::Request<BoxBody>,
+    ctx: &RequestCtx,
+) -> String {
+    let query = req
+        .uri()
+        .query()
+        .map(|q| format!("?{q}"))
+        .unwrap_or_default();
     template
-        .replace("{path}", &ctx.path)
+        .replace("{path}", path)
         .replace("{host}", &ctx.host)
+        .replace("{query}", &query)
         .replace("{method}", req.method().as_str())
         .replace("{scheme}", ctx.scheme)
 }
@@ -206,17 +220,37 @@ mod tests {
     }
 
     #[test]
+    fn substitute_covers_all_placeholders() {
+        let out = super::substitute(
+            "{path}|{host}|{query}|{method}|{scheme}",
+            "/a b",
+            &req(Method::POST, "/x?q=1"),
+            &ctx(),
+        );
+        assert_eq!(out, "/a b|h|?q=1|POST|http");
+        // no query → {query} is empty (no stray '?')
+        let out = super::substitute("{query}", "/p", &req(Method::GET, "/x"), &ctx());
+        assert_eq!(out, "");
+    }
+
+    #[test]
     fn redirect_targets() {
-        // To template
+        // To template — all five placeholders
         let c = cfg::RedirectHandler {
-            to: Some("https://x{path}{query}?h={host}&s={scheme}".into()),
+            to: Some("https://x{path}{query}?h={host}&m={method}&s={scheme}".into()),
             ..Default::default()
         };
         let r = redirect::Redirect::build(&c, "s").unwrap();
         let resp = r.handle(&req(Method::GET, "/p?q=1"), &ctx());
         assert_eq!(resp.status(), 308);
         let loc = resp.headers()["location"].to_str().unwrap();
-        assert!(loc.contains("h=h") && loc.contains("s=http") && loc.contains("q=1"));
+        assert!(
+            loc.contains("h=h")
+                && loc.contains("m=GET")
+                && loc.contains("s=http")
+                && loc.contains("q=1"),
+            "{loc}"
+        );
 
         // Host target
         let c = cfg::RedirectHandler {
