@@ -15,13 +15,18 @@ use crate::proxy::cluster::{Cluster, Member, RetryGuard};
 /// upstream where possible; if every healthy member was tried, the
 /// exclusion is ignored (better a retried member than no member).
 pub fn pick(cluster: &Cluster, client_ip: IpAddr, tried: &[usize]) -> Option<Arc<Member>> {
+    let now = std::time::Instant::now();
     let mut healthy: Vec<&Arc<Member>> = cluster
         .members
         .iter()
-        .filter(|m| m.healthy() && !tried.contains(&m.id))
+        .filter(|m| m.healthy_at(now) && !tried.contains(&m.id))
         .collect();
     if healthy.is_empty() {
-        healthy = cluster.members.iter().filter(|m| m.healthy()).collect();
+        healthy = cluster
+            .members
+            .iter()
+            .filter(|m| m.healthy_at(now))
+            .collect();
     }
     if healthy.is_empty() {
         return None;

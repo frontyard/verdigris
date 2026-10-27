@@ -20,6 +20,12 @@ workflow publishes the matching section as the GitHub release notes.
   RAM lookup, forwarded-header rewrite, response decoration, config
   parse as control), posting regression reports on every PR.
 
+### Changed
+
+- **Upstream pick now reads the clock once** — `lb::pick` evaluates all
+  members against a single `Instant` (one `clock_gettime` per selection
+  instead of one per member) and judges them at a consistent instant.
+
 ### Fixed
 
 - **CodSpeed bench broke `nextest` and image builds** — the new

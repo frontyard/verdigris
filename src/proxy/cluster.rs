@@ -242,8 +242,16 @@ impl Member {
     /// Whether the member is eligible for traffic right now. Members that
     /// were marked sick re-enter automatically once the cooldown lapses.
     pub fn healthy(&self) -> bool {
+        self.healthy_at(Instant::now())
+    }
+
+    /// `healthy` judged against a caller-supplied instant — `lb::pick`
+    /// snapshots one clock read so every member is evaluated at the same
+    /// time (and pays one `Instant::now()` per pick instead of per member).
+    pub(crate) fn healthy_at(&self, now: Instant) -> bool {
         !self.draining.load(Ordering::Relaxed)
-            && self.now_ms() >= self.sick_until.load(Ordering::Relaxed)
+            && now.saturating_duration_since(self.epoch).as_millis() as u64
+                >= self.sick_until.load(Ordering::Relaxed)
     }
 
     /// Administrative drain/undrain (admin API). Draining members finish
