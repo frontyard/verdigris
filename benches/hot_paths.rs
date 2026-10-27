@@ -13,6 +13,12 @@
 //! not request hot path), and the streaming body pipeline —
 //! throughput-bound, measured by `bench/` wrk suites, not here.
 //!
+//! Simulation caveat: `upstream_pick` and `cache_lookup_hit` include
+//! clock-reading syscalls (health-check `Instant::elapsed`, moka
+//! timestamps) that CodSpeed's CPU-simulation can't price — their
+//! reported times understate real cost. Regression detection is
+//! unaffected: the instruction-count delta still tracks code changes.
+//!
 //! `divan` here is the CodSpeed compat shim — `cargo bench` runs
 //! these locally exactly like upstream divan.
 
@@ -211,11 +217,17 @@ fn real_ip(bencher: Bencher) {
     });
 }
 
-/// No incoming `X-Request-Id` → UUIDv4 generate + format — the common
-/// path for direct traffic.
+/// Client-supplied `X-Request-Id` present → validate + propagate.
+/// (The absent-header path is `uuid` crate's `getrandom` + format —
+/// dependency internals we can't regress, and syscall-dominated under
+/// simulation, so it's not worth a slot here.)
 #[divan::bench]
 fn request_id(bencher: Bencher) {
-    let headers = http::HeaderMap::new();
+    let mut headers = http::HeaderMap::new();
+    headers.insert(
+        "x-request-id",
+        HeaderValue::from_static("7f8a9b2c-3d4e-5f60-9a8b-7c6d5e4f3a2b"),
+    );
     bencher.bench(|| black_box(RequestId::extract(black_box(&headers))));
 }
 
