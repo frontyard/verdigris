@@ -79,9 +79,10 @@ fn parse_config(bencher: Bencher) {
 #[divan::bench]
 fn normalize_request_path(bencher: Bencher) {
     bencher.bench(|| {
-        black_box(normalize_path(black_box(
-            "/api//v1/./users/../users/42?expand=profile",
-        )))
+        // real callers pass parts.uri.path() — query strings never
+        // reach the normalizer, so including one measures work that
+        // production never performs
+        black_box(normalize_path(black_box("/api//v1/./users/../users/42")))
     });
 }
 
