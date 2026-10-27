@@ -5,7 +5,13 @@ on:
     branches: [main]
     paths: ["src/**", "Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile", "Dockerfile.release", ".dockerignore", "rust-toolchain.toml", ".github/workflows/docker.yml"]
   pull_request:
-    paths: ["src/**", "Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile", "Dockerfile.release", ".dockerignore", "rust-toolchain.toml", ".github/workflows/docker.yml"]
+    # No paths filter: the "Sanity" ruleset requires this check on every
+    # PR, and a path-filtered workflow that doesn't run would leave the
+    # merge blocked forever. The job diffs the PR itself below and skips
+    # the build when nothing Docker-relevant changed — one check run per
+    # push, always the authoritative result. KEEP the gate regex in sync
+    # with the paths list above — adding to paths without updating the
+    # regex would report the check green while never building that change.
 
 permissions: {}
 
@@ -25,25 +31,52 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0 # the gate diffs against the PR base
+      # On PRs the check is required even when nothing Docker-relevant
+      # changed — emit run=false so the heavy steps skip and the check
+      # reports green in seconds. Mirrors the push trigger's paths list.
+      - name: gate on docker-relevant changes
+        id: gate
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          git fetch -q origin "refs/heads/$BASE"
+          if git diff --name-only "origin/$BASE...HEAD" | grep -qE \
+              '^(src/|Cargo\.toml|Cargo\.lock|build\.rs|Dockerfile|Dockerfile\.release|\.dockerignore|rust-toolchain\.toml|\.github/workflows/docker\.yml)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: skip — no docker-relevant changes
+        if: steps.gate.outputs.run == 'false'
+        run: echo "diff touches no Docker-relevant paths; build + scan not required"
       # full source build on musl — the same path release.yml's image
       # packages; catches Dockerfile/musl breakage before tagging
       - run: docker build -t verd:ci .
+        if: steps.gate.outputs.run != 'false'
       - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        if: steps.gate.outputs.run != 'false'
         with:
           tool: trivy
       - name: image scan → SARIF (all severities)
+        if: steps.gate.outputs.run != 'false'
         run: trivy image --format sarif -o trivy-image.sarif verd:ci
       - name: upload SARIF to code scanning
         # fork PRs can't write security-events; upload runs anyway on push
-        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        if: always() && steps.gate.outputs.run != 'false' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
         uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: trivy-image.sarif
       - name: gate on fixable HIGH/CRITICAL
+        if: steps.gate.outputs.run != 'false'
         run: trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 verd:ci
       # shipped images only; bench/ and .clusterfuzzlite/ Dockerfiles are
       # build containers where root is required — not release artifacts
       - name: trivy config (Dockerfile, Dockerfile.release)
+        if: steps.gate.outputs.run != 'false'
         run: |
           for f in Dockerfile Dockerfile.release; do
             trivy config --exit-code 0 "$f"
