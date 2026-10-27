@@ -1,6 +1,6 @@
 # Verdigris
 
-**Documentation for verd 0.4.0.**
+**Documentation for verd 0.4.1.**
 
 Verdigris is a self-hosting web server and reverse proxy in a single static
 binary: nginx-class performance with Caddy-like zero-configuration TLS and
