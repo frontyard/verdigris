@@ -453,7 +453,7 @@ fn content_length(parts: &http::request::Parts) -> Option<u64> {
 
 /// Resolve the client IP: if the direct peer is trusted, walk
 /// `X-Forwarded-For` from the right and take the first untrusted entry.
-fn real_ip(peer: IpAddr, parts: &http::request::Parts, trusted: &[ipnet::IpNet]) -> IpAddr {
+pub fn real_ip(peer: IpAddr, parts: &http::request::Parts, trusted: &[ipnet::IpNet]) -> IpAddr {
     if !trusted.iter().any(|n| n.contains(&peer)) {
         return peer;
     }

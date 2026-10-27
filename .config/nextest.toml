@@ -1,0 +1,4 @@
+# Benchmark targets aren't libtest-compatible — `cargo nextest run
+# --all-targets` enumerates them and divan rejects the --list flags.
+[profile.default]
+default-filter = 'not binary_id(verd::bench/hot_paths)'

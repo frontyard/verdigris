@@ -11,8 +11,22 @@ workflow publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
+### Build & CI
+
+- **CodSpeed perf tracking** — `codspeed.yml` benchmarks the
+  per-request pipeline in simulation mode (`benches/hot_paths.rs`:
+  normalization, host/route matching incl. condition-rejection climbs
+  and regex fallback, client-IP resolution, upstream pick, cache key +
+  RAM lookup, forwarded-header rewrite, response decoration, config
+  parse as control), posting regression reports on every PR.
+
 ### Fixed
 
+- **CodSpeed bench broke `nextest` and image builds** — the new
+  `[[bench]]` target rejected nextest's test-enumeration flags and was
+  missing from the Docker build context. `verd::bench/hot_paths` is now
+  excluded via `.config/nextest.toml` and the `Dockerfile` copies
+  `benches/` so the manifest parses.
 - **Release flow no longer leaves `llms-full.txt` stale** — the file
   embeds the version line from `introduction.md`, so every version
   bump invalidated it and broke the `generated docs in sync` CI check

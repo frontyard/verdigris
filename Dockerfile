@@ -17,6 +17,7 @@ ARG VERD_GIT_SHA=
 ENV VERD_GIT_SHA=${VERD_GIT_SHA}
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY benches ./benches
 RUN cargo build --release --locked \
     && strip target/x86_64-unknown-linux-musl/release/verd
 

@@ -6,7 +6,7 @@
 pub mod cluster;
 /// Header-policy helpers — crate-internal, exposed for fuzz targets.
 pub mod headers;
-mod lb;
+pub mod lb;
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;

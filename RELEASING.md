@@ -111,3 +111,31 @@ cargo publish
 Unrelated to tags: every push to `main` that touches `docs/` rebuilds
 the mdBook and deploys to GitHub Pages via `docs.yml`. Requires Pages
 enabled in repo settings (source: GitHub Actions).
+
+## Future work
+
+**Automatic bump selection.** `bump.yml` currently requires the
+maintainer to choose patch/minor/major. Idea: an `auto` mode (the
+default) that picks the bump from the external contract:
+
+- **Config schema** — commit a `schema.json` snapshot of `verd schema`
+  (same generated-file discipline as `reference.md`) and diff it
+  against the previous tag: removed field/enum variant, narrowed type,
+  new `required`, changed `default` → breaking; additions → additive.
+- **CLI** — snapshot normalized `verd <sub> --help` output; removed
+  flag/subcommand/env var → breaking.
+- **Admin API** — snapshot the route table (`src/admin/mod.rs`) and
+  eventually response shapes.
+- **Changelog categories** — still needed for *semantic* breaks a
+  surface diff can't see (validation tightening, behavior changes):
+  `Changed`/`Security` → breaking-ish, `Added` → additive, `Fixed`/
+  `Build & CI` only → patch.
+- **cargo semver-checks** — already advisory in `ci.yml` for the lib
+  API; a corroborating signal, not the decision-maker.
+
+Result = `max()` across signals. Strict-semver mapping: 0.x → breaking
+and additive both minor, fix-only patch; ≥1.0 → breaking becomes major.
+Known limits: `#[serde(alias)]` doesn't appear in schemars output, so
+renames-with-alias (e.g. `headers` → `request_headers`) look like
+removed fields and need an alias allowlist; behavioral breaks still
+rely on the changelog signal.

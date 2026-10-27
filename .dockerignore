@@ -1,5 +1,7 @@
 # Build context hygiene — the image build only copies
-# Cargo.toml, Cargo.lock, and src/. Keep the context small.
+# Cargo.toml, Cargo.lock, src/, and benches/ (the declared
+# [[bench]] target must exist for the manifest to parse).
+# Keep the context small.
 
 # VCS & editor
 .git
