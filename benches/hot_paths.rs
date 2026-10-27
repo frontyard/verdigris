@@ -261,8 +261,11 @@ fn forwarded_headers(bencher: Bencher) {
         });
 }
 
-/// Re-encode the normalized path for the upstream request-target —
-/// percent-encoding scan over every byte, per proxied request.
+/// Re-encode the path for the upstream request-target — runs per
+/// proxied request on routes with `rewrite` configured (routes
+/// without a rewrite forward the original target verbatim; the
+/// rewrite result is decoded, so it must be re-encoded upstream).
+/// Percent-encoding scan over every byte.
 #[divan::bench]
 fn encode_path(bencher: Bencher) {
     bencher.bench(|| {
