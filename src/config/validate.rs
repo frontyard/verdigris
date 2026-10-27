@@ -221,13 +221,15 @@ fn check_sites(ctx: &mut Ctx, cfg: &Config) {
                 "sites with tls = \"auto\" exist but acme.email is unset; issuance may fail or violate CA terms",
             );
         }
+        let dns01 = matches!(cfg.acme.challenge, AcmeChallenge::Dns01);
         for (i, s) in cfg.site.iter().enumerate() {
             if matches!(s.tls, SiteTls::Mode(TlsMode::Auto))
                 && s.hosts.iter().any(|h| h.starts_with("*."))
+                && !dns01
             {
                 ctx.warn(
                     format!("{}.hosts", site_label(i, s)),
-                    "wildcard hostnames need the dns-01 challenge, which verd does not implement; the cert will cover only non-wildcard hosts",
+                    "wildcard hostnames need the dns-01 challenge (acme.challenge = \"dns-01\" + [acme.dns]); the cert will cover only non-wildcard hosts",
                 );
             }
         }
@@ -862,6 +864,43 @@ fn check_acme(ctx: &mut Ctx, cfg: &Config) {
             "acme.on_demand.rate",
             "on-demand issuance has no rate limit; a hostile client could trigger unbounded CA requests",
         );
+    }
+    match (&acme.challenge, &acme.dns) {
+        (AcmeChallenge::Dns01, None) => ctx.error(
+            "acme.dns",
+            "acme.challenge = \"dns-01\" requires an [acme.dns] provider configuration",
+        ),
+        (challenge, Some(_)) if !matches!(challenge, AcmeChallenge::Dns01) => ctx.warn(
+            "acme.dns",
+            "acme.dns is configured but acme.challenge is not \"dns-01\"; the credentials are unused",
+        ),
+        _ => {}
+    }
+    if let Some(AcmeDns::Cloudflare(cf)) = &acme.dns {
+        if cf.api_token.trim().is_empty() {
+            ctx.error("acme.dns.cloudflare.api_token", "API token is empty");
+        }
+        if cf.zone_id.as_deref().is_some_and(|z| z.trim().is_empty()) {
+            ctx.error("acme.dns.cloudflare.zone_id", "zone id is empty");
+        }
+        if let Some(b) = &cf.api_base
+            && !b.starts_with("https://")
+            && !b.starts_with("http://")
+        {
+            ctx.error(
+                "acme.dns.cloudflare.api_base",
+                format!("{b:?} is not an http(s) URL"),
+            );
+        }
+        if let Some(r) = &cf.resolver
+            && r.parse::<std::net::SocketAddr>().is_err()
+            && r.parse::<std::net::IpAddr>().is_err()
+        {
+            ctx.error(
+                "acme.dns.cloudflare.resolver",
+                format!("{r:?} is not `ip` or `ip:port`"),
+            );
+        }
     }
 }
 
@@ -1841,6 +1880,81 @@ allowed_hosts = ["*.ok.com"]
 "#,
         );
         assert!(has_warn(&cfg, "acme.on_demand.rate", "no rate limit"));
+    }
+
+    #[test]
+    fn acme_dns01_rules() {
+        // dns-01 without [acme.dns] is fatal
+        let cfg = parse_test_config("[acme]\nchallenge = \"dns-01\"");
+        assert!(has_err(&cfg, "acme.dns", "requires an [acme.dns]"));
+
+        // [acme.dns] without challenge = "dns-01" is dead config
+        let cfg = parse_test_config(
+            r#"
+[acme]
+challenge = "auto"
+[acme.dns.cloudflare]
+api_token = "tok"
+"#,
+        );
+        assert!(has_warn(&cfg, "acme.dns", "credentials are unused"));
+
+        // empty token, bad resolver, bad api_base
+        let cfg = parse_test_config(
+            r#"
+[acme]
+challenge = "dns-01"
+[acme.dns.cloudflare]
+api_token = "  "
+zone_id = " "
+api_base = "ftp://x"
+resolver = "not-an-ip"
+"#,
+        );
+        assert!(has_err(&cfg, "acme.dns.cloudflare.api_token", "empty"));
+        assert!(has_err(&cfg, "acme.dns.cloudflare.zone_id", "empty"));
+        assert!(has_err(&cfg, "acme.dns.cloudflare.api_base", "http(s)"));
+        assert!(has_err(&cfg, "acme.dns.cloudflare.resolver", "ip"));
+
+        // well-formed dns-01 config — no dns errors; wildcard warning gone
+        let cfg = parse_test_config(
+            r#"
+[server]
+listen = [{ addr = "127.0.0.1:8443", tls = true }]
+[acme]
+email = "a@b.c"
+challenge = "dns-01"
+[acme.dns.cloudflare]
+api_token = "tok"
+[[site]]
+hosts = ["*.example.com"]
+tls = "auto"
+root = "/tmp"
+"#,
+        );
+        assert!(!has_err(&cfg, "acme.dns", ""));
+        assert!(!has_warn(&cfg, "site[\"*.example.com\"].hosts", "wildcard"));
+    }
+
+    #[test]
+    fn acme_wildcard_needs_dns01() {
+        let cfg = parse_test_config(
+            r#"
+[server]
+listen = [{ addr = "127.0.0.1:8443", tls = true }]
+[acme]
+email = "a@b.c"
+[[site]]
+hosts = ["*.example.com"]
+tls = "auto"
+root = "/tmp"
+"#,
+        );
+        assert!(has_warn(
+            &cfg,
+            "site[\"*.example.com\"].hosts",
+            "need the dns-01 challenge"
+        ));
     }
 
     #[test]

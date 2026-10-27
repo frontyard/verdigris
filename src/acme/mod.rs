@@ -3,13 +3,15 @@
 //! [`AcmeManager`] owns the ACME account (persisted under
 //! `acme.storage`), the `http-01` token store the data plane serves, the
 //! `tls-alpn-01` challenge certs the [`CertResolver`] resolves for
-//! `acme-tls/1` handshakes, and the renewal sweep that keeps managed
-//! certificates fresh. Issued certs are written to disk atomically and
-//! installed into the resolver in place — no restart, no dropped
-//! connections.
+//! `acme-tls/1` handshakes, the `dns-01` provider client that publishes
+//! `_acme-challenge` TXT records, and the renewal sweep that keeps
+//! managed certificates fresh. Issued certs are written to disk
+//! atomically and installed into the resolver in place — no restart, no
+//! dropped connections.
 
 mod alpn;
 pub mod challenge;
+pub mod dns;
 mod storage;
 
 use std::collections::VecDeque;
@@ -52,6 +54,8 @@ pub struct AcmeManager {
     /// Pending `http-01` tokens — the data plane serves these.
     pub http01: Arc<Http01Store>,
     challenge: ChallengeType,
+    /// DNS provider client when `challenge` is `dns-01`.
+    dns: Option<Arc<dns::Solver>>,
     /// Host lists of `tls = "auto"` sites — one cert per site.
     site_hosts: Vec<Vec<String>>,
     account: tokio::sync::OnceCell<Account>,
@@ -76,16 +80,17 @@ pub fn build(
     if !config.server.listen.iter().any(|l| l.tls) {
         return Ok(None);
     }
+    let dns01 = matches!(config.acme.challenge, cfg::AcmeChallenge::Dns01);
     let site_hosts: Vec<Vec<String>> = config
         .site
         .iter()
         .filter(|s| matches!(s.tls, cfg::SiteTls::Mode(cfg::TlsMode::Auto)))
         .map(|s| {
-            // wildcards need DNS-01 (unimplemented) — exclude them; the
+            // wildcards need DNS-01 — without it they're excluded; the
             // cert covers the site's concrete hostnames (validation warns)
             s.hosts
                 .iter()
-                .filter(|h| !h.starts_with("*."))
+                .filter(|h| dns01 || !h.starts_with("*."))
                 .cloned()
                 .collect::<Vec<_>>()
         })
@@ -96,15 +101,22 @@ pub fn build(
     }
 
     let has_plain = config.server.listen.iter().any(|l| !l.tls);
-    let challenge = match config.acme.challenge {
-        cfg::AcmeChallenge::Http01 => ChallengeType::Http01,
-        cfg::AcmeChallenge::TlsAlpn01 => ChallengeType::TlsAlpn01,
-        cfg::AcmeChallenge::Auto => {
+    let (challenge, dns) = match config.acme.challenge {
+        cfg::AcmeChallenge::Http01 => (ChallengeType::Http01, None),
+        cfg::AcmeChallenge::TlsAlpn01 => (ChallengeType::TlsAlpn01, None),
+        cfg::AcmeChallenge::Auto => (
             if has_plain {
                 ChallengeType::Http01
             } else {
                 ChallengeType::TlsAlpn01
-            }
+            },
+            None,
+        ),
+        cfg::AcmeChallenge::Dns01 => {
+            let d = config.acme.dns.as_ref().ok_or(
+                "acme.challenge = \"dns-01\" requires an [acme.dns] provider configuration",
+            )?;
+            (ChallengeType::Dns01, Some(Arc::new(dns::Solver::build(d)?)))
         }
     };
 
@@ -114,6 +126,7 @@ pub fn build(
         storage: Storage::new(config.acme.storage.clone()),
         http01: Arc::new(Http01Store::default()),
         challenge,
+        dns,
         site_hosts,
         account: tokio::sync::OnceCell::new(),
         managed: Arc::new(dashmap::DashMap::new()),
@@ -286,49 +299,101 @@ impl AcmeManager {
             .await
             .map_err(|e| format!("new order: {e}"))?;
 
-        // provision every authorization's challenge, then mark ready
+        // Provision state the retract pass below must undo — everything
+        // lives in one result block so retraction runs on every path,
+        // including mid-provision failures (an orphaned public TXT
+        // record never cleans itself up).
         let mut tokens = Vec::new();
         let mut alpn_hosts = Vec::new();
-        let mut auths = order.authorizations();
-        while let Some(res) = auths.next().await {
-            let mut authz = res.map_err(|e| format!("authorization: {e}"))?;
-            // RFC 8555 lets the CA attach an already-valid authorization
-            // to a new order — nothing to provision or mark ready.
-            if authz.status == instant_acme::AuthorizationStatus::Valid {
-                continue;
-            }
-            match &self.challenge {
-                ChallengeType::Http01 => {
-                    let mut ch = authz
-                        .challenge(ChallengeType::Http01)
-                        .ok_or("CA offered no http-01 challenge")?;
-                    self.http01
-                        .insert(&ch.token, ch.key_authorization().as_str().to_string());
-                    tokens.push(ch.token.clone());
-                    ch.set_ready()
-                        .await
-                        .map_err(|e| format!("challenge ready: {e}"))?;
-                }
-                ChallengeType::TlsAlpn01 => {
-                    let mut ch = authz
-                        .challenge(ChallengeType::TlsAlpn01)
-                        .ok_or("CA offered no tls-alpn-01 challenge")?;
-                    // AuthorizedIdentifier renders wildcards as "*.dom"
-                    let ident = ch.identifier().to_string();
-                    let host = ident.strip_prefix("*.").unwrap_or(&ident);
-                    let cert =
-                        alpn::challenge_cert(host, ch.key_authorization().digest().as_ref())?;
-                    self.resolver.alpn.insert(&host_key(host), cert);
-                    alpn_hosts.push(host_key(host));
-                    ch.set_ready()
-                        .await
-                        .map_err(|e| format!("challenge ready: {e}"))?;
-                }
-                other => return Err(format!("unsupported challenge {other:?}")),
-            }
-        }
-
+        // (record name, expected TXT value) + provider handles to retract
+        let mut dns_want: Vec<(String, String)> = Vec::new();
+        let mut dns_records: Vec<dns::Record> = Vec::new();
         let result = async {
+            // provision every authorization's challenge, then mark ready
+            let mut auths = order.authorizations();
+            while let Some(res) = auths.next().await {
+                let mut authz = res.map_err(|e| format!("authorization: {e}"))?;
+                // RFC 8555 lets the CA attach an already-valid
+                // authorization to a new order — nothing to provision
+                // or mark ready.
+                if authz.status == instant_acme::AuthorizationStatus::Valid {
+                    continue;
+                }
+                match &self.challenge {
+                    ChallengeType::Http01 => {
+                        let mut ch = authz
+                            .challenge(ChallengeType::Http01)
+                            .ok_or("CA offered no http-01 challenge")?;
+                        self.http01
+                            .insert(&ch.token, ch.key_authorization().as_str().to_string());
+                        tokens.push(ch.token.clone());
+                        ch.set_ready()
+                            .await
+                            .map_err(|e| format!("challenge ready: {e}"))?;
+                    }
+                    ChallengeType::TlsAlpn01 => {
+                        let mut ch = authz
+                            .challenge(ChallengeType::TlsAlpn01)
+                            .ok_or("CA offered no tls-alpn-01 challenge")?;
+                        // AuthorizedIdentifier renders wildcards as "*.dom"
+                        let ident = ch.identifier().to_string();
+                        let host = ident.strip_prefix("*.").unwrap_or(&ident);
+                        let cert =
+                            alpn::challenge_cert(host, ch.key_authorization().digest().as_ref())?;
+                        self.resolver.alpn.insert(&host_key(host), cert);
+                        alpn_hosts.push(host_key(host));
+                        ch.set_ready()
+                            .await
+                            .map_err(|e| format!("challenge ready: {e}"))?;
+                    }
+                    ChallengeType::Dns01 => {
+                        let (name, value) = {
+                            let ch = authz
+                                .challenge(ChallengeType::Dns01)
+                                .ok_or("CA offered no dns-01 challenge")?;
+                            // AuthorizedIdentifier renders wildcards as
+                            // "*.dom"; the record lives at the base name.
+                            let ident = ch.identifier().to_string();
+                            let host = ident.strip_prefix("*.").unwrap_or(&ident);
+                            (
+                                format!("_acme-challenge.{host}"),
+                                ch.key_authorization().dns_value(),
+                            )
+                        };
+                        let solver = self.dns.as_ref().ok_or("dns-01 without provider")?;
+                        let record = solver
+                            .present(&name, &value)
+                            .await
+                            .map_err(|e| format!("publish {name}: {e}"))?;
+                        dns_records.push(record);
+                        dns_want.push((name, value));
+                    }
+                    other => return Err(format!("unsupported challenge {other:?}")),
+                }
+            }
+
+            // dns-01: all records published — wait for public
+            // propagation, then mark every challenge ready in a second
+            // pass (handles can't outlive the authorizations stream
+            // they borrow).
+            if !dns_want.is_empty() {
+                let solver = self.dns.as_ref().ok_or("dns-01 without provider")?;
+                solver.await_propagation(&dns_want).await;
+                let mut auths = order.authorizations();
+                while let Some(res) = auths.next().await {
+                    let mut authz = res.map_err(|e| format!("authorization: {e}"))?;
+                    if authz.status == instant_acme::AuthorizationStatus::Valid {
+                        continue;
+                    }
+                    authz
+                        .challenge(ChallengeType::Dns01)
+                        .ok_or("CA offered no dns-01 challenge")?
+                        .set_ready()
+                        .await
+                        .map_err(|e| format!("challenge ready: {e}"))?;
+                }
+            }
+
             let status = order
                 .poll_ready(&ISSUE_POLL)
                 .await
@@ -354,6 +419,11 @@ impl AcmeManager {
         }
         for h in &alpn_hosts {
             self.resolver.alpn.remove(h);
+        }
+        if let Some(solver) = &self.dns {
+            for r in &dns_records {
+                solver.retract(r).await;
+            }
         }
 
         let (key_pem, chain) = result?;

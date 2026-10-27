@@ -445,13 +445,17 @@ pub struct AcmeConfig {
     #[serde(with = "humantime_serde")]
     #[schemars(with = "String")]
     pub renew_before: Duration,
-    /// Preferred challenge type: `http-01`, `tls-alpn-01`, or `auto`
-    /// (HTTP-01 when a plaintext listener exists, else TLS-ALPN-01).
+    /// Preferred challenge type: `http-01`, `tls-alpn-01`, `dns-01`
+    /// (requires `acme.dns`), or `auto` (HTTP-01 when a plaintext
+    /// listener exists, else TLS-ALPN-01).
     pub challenge: AcmeChallenge,
     /// PEM bundle of extra CA roots to trust when talking to the ACME
     /// directory — for private ACME servers (Pebble, step-ca, internal
     /// PKI). The system/WebPKI roots are always included.
     pub ca_roots: Option<PathBuf>,
+    /// DNS provider for the `dns-01` challenge — required when
+    /// `acme.challenge = "dns-01"`.
+    pub dns: Option<AcmeDns>,
     /// On-demand issuance for previously unseen hostnames.
     pub on_demand: OnDemandAcme,
 }
@@ -465,6 +469,11 @@ pub enum AcmeChallenge {
     /// `tls-alpn-01` — answer challenges inside the TLS handshake.
     #[serde(rename = "tls-alpn-01", alias = "tls-alpn01")]
     TlsAlpn01,
+    /// `dns-01` — publish `_acme-challenge` TXT records via a DNS
+    /// provider API (`acme.dns`). Required for wildcard certificates;
+    /// works with no ACME-reachable ports at all.
+    #[serde(rename = "dns-01", alias = "dns01")]
+    Dns01,
     /// `http-01` when a plaintext listener exists, else `tls-alpn-01`.
     #[serde(rename = "auto")]
     #[default]
@@ -481,9 +490,48 @@ impl Default for AcmeConfig {
             renew_before: Duration::from_secs(30 * 24 * 3600),
             challenge: AcmeChallenge::Auto,
             ca_roots: None,
+            dns: None,
             on_demand: OnDemandAcme::default(),
         }
     }
+}
+
+/// DNS provider used to publish `_acme-challenge` TXT records for the
+/// `dns-01` challenge (`[acme.dns]`).
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub enum AcmeDns {
+    /// Cloudflare API v4: `[acme.dns.cloudflare]`.
+    #[serde(rename = "cloudflare")]
+    Cloudflare(CloudflareDns),
+}
+
+/// Cloudflare credentials for `dns-01` (`[acme.dns.cloudflare]`).
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CloudflareDns {
+    /// API token with `Zone.DNS:Edit` on the zones to validate; zone
+    /// discovery also needs `Zone.Zone:Read`. Prefer `${env:…}` or
+    /// `${file:…}` interpolation over a literal token.
+    pub api_token: String,
+    /// Zone ID to pin all records to. When unset the zone is
+    /// discovered per hostname by walking up its labels via the API.
+    pub zone_id: Option<String>,
+    /// API base URL — override only for tests or API gateways
+    /// (default `https://api.cloudflare.com/client/v4`).
+    pub api_base: Option<String>,
+    /// Nameserver (`ip` or `ip:port`) to poll while waiting for TXT
+    /// propagation — e.g. the zone's authoritative NS or a fast public
+    /// resolver. Defaults to the system resolver.
+    pub resolver: Option<String>,
+    /// How long to wait for TXT records to appear in DNS before the CA
+    /// is told to validate (default `2m`).
+    #[serde(default = "default_dns_propagation_timeout", with = "humantime_serde")]
+    #[schemars(with = "String")]
+    pub propagation_timeout: Duration,
+}
+
+fn default_dns_propagation_timeout() -> Duration {
+    Duration::from_secs(120)
 }
 
 /// External Account Binding credentials.

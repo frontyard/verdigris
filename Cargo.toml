@@ -55,6 +55,13 @@ memmap2 = "0.9"
 # TLS & ACME
 rustls = { version = "0.23", features = ["std", "logging", "tls12"] }
 tokio-rustls = "0.26"
+hyper-rustls = { version = "0.27", default-features = false, features = [
+    "http1",
+    "tls12",
+    "webpki-tokio",
+    "aws-lc-rs",
+    "logging",
+] }
 webpki-roots = "1"
 instant-acme = { version = "0.8", features = [
     "hyper-rustls",

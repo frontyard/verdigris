@@ -29,6 +29,8 @@ use verd::server::{self, Runtime};
 
 const HTTP01_PORT: u16 = 5002;
 const TLSALPN_PORT: u16 = 5001;
+const CTS_DNS_PORT: u16 = 8053;
+const CTS_MGMT_PORT: u16 = 8055;
 const PEBBLE_DIR: &str = "https://localhost:14000/dir";
 const PEBBLE_IMG: &str = "ghcr.io/letsencrypt/pebble:latest";
 const CTS_IMG: &str = "ghcr.io/letsencrypt/pebble-challtestsrv:latest";
@@ -122,7 +124,10 @@ impl Stack {
         ])?;
         // challtestsrv: DNS inside the network, answers = gateway IP;
         // empty AAAA or the VA prefers ::1 and fails (pebble's own
-        // compose sets -defaultIPv6 "" for the same reason)
+        // compose sets -defaultIPv6 "" for the same reason). The DNS and
+        // management ports are published for the dns-01 test: verd's
+        // propagation check queries 8053, the mock Cloudflare API pushes
+        // TXT records through 8055.
         docker(&[
             "run",
             "-d",
@@ -130,6 +135,12 @@ impl Stack {
             &cts,
             "--network",
             &self.name,
+            "-p",
+            &format!("127.0.0.1:{CTS_DNS_PORT}:8053"),
+            "-p",
+            &format!("127.0.0.1:{CTS_DNS_PORT}:8053/udp"),
+            "-p",
+            &format!("127.0.0.1:{CTS_MGMT_PORT}:8055"),
             CTS_IMG,
             "-defaultIPv6",
             "",
@@ -208,13 +219,16 @@ impl Drop for Stack {
     }
 }
 
-/// Start a verd Runtime with `site_hosts` on 0.0.0.0:5002 (plain) and
-/// optionally 0.0.0.0:5001 (TLS), ACME pointing at pebble.
+/// Start a verd Runtime with `hosts` on 0.0.0.0:5002 (plain) and
+/// optionally 0.0.0.0:5001 (TLS), ACME pointing at pebble. `extra_acme`
+/// lands inside the `[acme]` table (for `[acme.dns.*]` fragments).
 async fn start_acme(
     challenge: &str,
     ca_pem_path: &std::path::Path,
     http: bool,
     tls: bool,
+    hosts: &str,
+    extra_acme: &str,
 ) -> (Arc<Runtime>, tokio::sync::watch::Sender<bool>) {
     let storage = tempfile::tempdir().expect("storage dir");
     let config = format!(
@@ -225,9 +239,10 @@ directory = "{dir}"
 ca_roots = "{ca}"
 challenge = "{challenge}"
 storage = "{storage}"
+{extra_acme}
 
 [[site]]
-hosts = ["verd.test"]
+hosts = [{hosts}]
 default = true
 tls = "auto"
 
@@ -239,6 +254,8 @@ respond = {{ body = "acme-ok\n" }}
         ca = ca_pem_path.display(),
         challenge = challenge,
         storage = storage.path().display(),
+        extra_acme = extra_acme,
+        hosts = hosts,
     );
     let mut config: cfg::Config = toml::from_str(&config).unwrap();
     config.server.listen.clear();
@@ -324,7 +341,14 @@ async fn acme_issuance_against_pebble() {
         eprintln!("SKIP: docker or pebble images unavailable");
         return;
     }
-    for p in [HTTP01_PORT, TLSALPN_PORT, 14000, 15000] {
+    for p in [
+        HTTP01_PORT,
+        TLSALPN_PORT,
+        14000,
+        15000,
+        CTS_DNS_PORT,
+        CTS_MGMT_PORT,
+    ] {
         if !port_free(p) {
             eprintln!("SKIP: port {p} is in use");
             return;
@@ -345,7 +369,7 @@ async fn acme_issuance_against_pebble() {
 
     // ---- http-01 ----
     {
-        let (rt, sd) = start_acme("http-01", &ca_path, true, true).await;
+        let (rt, sd) = start_acme("http-01", &ca_path, true, true, "\"verd.test\"", "").await;
         let ck = cert_for(&rt, "verd.test")
             .await
             .expect("cert issued via http-01 within 90s");
@@ -374,13 +398,165 @@ async fn acme_issuance_against_pebble() {
 
     // ---- tls-alpn-01 ----
     {
-        let (rt, sd) = start_acme("tls-alpn-01", &ca_path, false, true).await;
+        let (rt, sd) = start_acme("tls-alpn-01", &ca_path, false, true, "\"verd.test\"", "").await;
         let ck = cert_for(&rt, "verd.test")
             .await
             .expect("cert issued via tls-alpn-01 within 90s");
         assert_eq!(cert_sans(&ck), vec!["verd.test"]);
         shutdown_and_free(sd, &[TLSALPN_PORT]).await;
     }
+
+    // ---- dns-01 (mock Cloudflare API → challtestsrv TXT records) ----
+    {
+        let cf_base = mock_cloudflare().await;
+        let dns_cfg = format!(
+            r#"
+[acme.dns.cloudflare]
+api_token = "test-token"
+api_base = "{cf_base}/client/v4"
+resolver = "127.0.0.1:{CTS_DNS_PORT}"
+propagation_timeout = "30s"
+"#
+        );
+        let (rt, sd) = start_acme(
+            "dns-01",
+            &ca_path,
+            false,
+            true,
+            "\"verd.test\", \"*.verd.test\"",
+            &dns_cfg,
+        )
+        .await;
+        let ck = cert_for(&rt, "verd.test")
+            .await
+            .expect("cert issued via dns-01 within 90s");
+        let mut sans = cert_sans(&ck);
+        sans.sort();
+        // one order, two authzs — base + wildcard share the same
+        // `_acme-challenge.verd.test` name with distinct TXT values
+        assert_eq!(sans, vec!["*.verd.test", "verd.test"]);
+        let resolver = rt.tls.as_ref().unwrap().resolver.clone();
+        assert!(resolver.lookup("a.verd.test").is_some());
+        shutdown_and_free(sd, &[TLSALPN_PORT]).await;
+    }
+}
+
+/// Mock Cloudflare v4 API on 127.0.0.1: translates DNS record writes
+/// into challtestsrv `set-txt`/`clear-txt` calls, so pebble's VA sees
+/// the TXT records in DNS exactly as it would with real Cloudflare.
+struct MockCf {
+    /// record id → record name (for DELETE → `clear-txt`).
+    records: std::sync::Mutex<std::collections::HashMap<String, String>>,
+    next: std::sync::atomic::AtomicU64,
+    /// challtestsrv management base (`http://127.0.0.1:8055`).
+    cts: String,
+    http: reqwest::Client,
+}
+
+type Json = hyper::Response<http_body_util::Full<bytes::Bytes>>;
+
+fn cf_json(v: serde_json::Value) -> Json {
+    hyper::Response::builder()
+        .header("content-type", "application/json")
+        .body(http_body_util::Full::new(bytes::Bytes::from(v.to_string())))
+        .unwrap()
+}
+
+async fn cf_handle(req: hyper::Request<hyper::body::Incoming>, st: Arc<MockCf>) -> Json {
+    // token plumbing is part of the contract — reject wrong/missing auth
+    if req
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        != Some("Bearer test-token")
+    {
+        return cf_json(serde_json::json!({
+            "success": false,
+            "errors": [{"message": "bad credentials"}],
+        }));
+    }
+    let path = req.uri().path().to_string();
+    match (req.method().clone(), path.as_str()) {
+        (hyper::Method::GET, "/client/v4/zones") => {
+            let name = form_urlencoded::parse(req.uri().query().unwrap_or("").as_bytes())
+                .find(|(k, _)| k == "name")
+                .map(|(_, v)| v.into_owned());
+            let result = match name.as_deref() {
+                Some("verd.test") => serde_json::json!([{ "id": "z1", "name": "verd.test" }]),
+                _ => serde_json::json!([]),
+            };
+            cf_json(serde_json::json!({ "success": true, "result": result }))
+        }
+        (hyper::Method::POST, p) if p.ends_with("/dns_records") => {
+            use http_body_util::BodyExt;
+            let body = req.into_body().collect().await.unwrap().to_bytes();
+            let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let name = v["name"].as_str().unwrap().to_string();
+            st.http
+                .post(format!("{}/set-txt", st.cts))
+                .json(&serde_json::json!({
+                    "host": format!("{name}."),
+                    "value": v["content"].as_str().unwrap(),
+                }))
+                .send()
+                .await
+                .expect("challtestsrv set-txt");
+            let id = format!("r{}", st.next.fetch_add(1, Ordering::Relaxed));
+            st.records.lock().unwrap().insert(id.clone(), name);
+            cf_json(serde_json::json!({ "success": true, "result": { "id": id } }))
+        }
+        (hyper::Method::DELETE, p) if p.contains("/dns_records/") => {
+            let id = p.rsplit('/').next().unwrap_or_default().to_string();
+            let name = st.records.lock().unwrap().remove(&id);
+            if let Some(name) = name {
+                let _ = st
+                    .http
+                    .post(format!("{}/clear-txt", st.cts))
+                    .json(&serde_json::json!({ "host": format!("{name}.") }))
+                    .send()
+                    .await;
+            }
+            cf_json(serde_json::json!({ "success": true, "result": { "id": id } }))
+        }
+        _ => cf_json(serde_json::json!({
+            "success": false,
+            "errors": [{"message": "no route"}],
+        })),
+    }
+}
+
+/// Spawn the mock; returns its `http://127.0.0.1:PORT` base.
+async fn mock_cloudflare() -> String {
+    let st = Arc::new(MockCf {
+        records: std::sync::Mutex::new(std::collections::HashMap::new()),
+        next: std::sync::atomic::AtomicU64::new(1),
+        cts: format!("http://127.0.0.1:{CTS_MGMT_PORT}"),
+        http: reqwest::Client::new(),
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        loop {
+            let Ok((sock, _)) = listener.accept().await else {
+                return;
+            };
+            let st = st.clone();
+            tokio::spawn(async move {
+                let _ = hyper_util::server::conn::auto::Builder::new(
+                    hyper_util::rt::TokioExecutor::new(),
+                )
+                .serve_connection(
+                    hyper_util::rt::TokioIo::new(sock),
+                    hyper::service::service_fn(move |r| {
+                        let st = st.clone();
+                        async move { Ok::<_, std::convert::Infallible>(cf_handle(r, st).await) }
+                    }),
+                )
+                .await;
+            });
+        }
+    });
+    base
 }
 
 /// Signal shutdown and wait until `ports` are re-bindable — graceful

@@ -12,7 +12,8 @@ a readable TOML configuration.
 - Static files with ranges, ETag/Last-Modified validators, precompressed variants
 - Reverse proxy with load balancing, retries, health checks, HTTP upgrades (WebSockets)
 - TLS termination with manual certificates, self-signed, or fully automatic
-  ACME (Let's Encrypt) issuance — http-01 and tls-alpn-01 challenges
+  ACME (Let's Encrypt) issuance — http-01, tls-alpn-01 and dns-01
+  (Cloudflare) challenges, incl. wildcards
 - Authentication (basic, bearer, API key), IP ACLs, CORS, rate limiting,
   compression (br/zstd/gzip), and a full HTTP response cache (RAM/disk/hybrid)
 - Prometheus metrics, structured access logs, and an admin API with

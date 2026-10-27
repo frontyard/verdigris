@@ -11,6 +11,16 @@ workflow publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
+### Added
+
+- **`dns-01` ACME challenge via Cloudflare** — `acme.challenge =
+  "dns-01"` with `[acme.dns.cloudflare]` (`api_token`, optional
+  `zone_id`, `resolver`, `propagation_timeout`) publishes
+  `_acme-challenge` TXT records through the Cloudflare API, waits for
+  public DNS propagation, and retracts them after validation. This
+  enables wildcard certificates (`hosts = ["*.example.com"]`) and
+  issuance on hosts with no ACME-reachable ports at all.
+
 ### Build & CI
 
 - **CodSpeed perf tracking** — `codspeed.yml` benchmarks the

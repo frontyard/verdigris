@@ -13,7 +13,7 @@ Root configuration for a verdigris instance.
 
 | field | type | default | description |
 |---|---|---|---|
-| `acme` | AcmeConfig | `{"ca_roots": null, "challenge": "auto", "directory": "https://acme-v02.api.letsencrypt.org/directory", "eab": null, "email": null, "on_demand": {"allowed_hosts": [], "enabled": false, "rate": null}, "renew_before": "30days", "storage": "./verd-state/acme"}` | ACME account settings used by sites with `tls = "auto"`. |
+| `acme` | AcmeConfig | `{"ca_roots": null, "challenge": "auto", "directory": "https://acme-v02.api.letsencrypt.org/directory", "dns": null, "eab": null, "email": null, "on_demand": {"allowed_hosts": [], "enabled": false, "rate": null}, "renew_before": "30days", "storage": "./verd-state/acme"}` | ACME account settings used by sites with `tls = "auto"`. |
 | `admin` | AdminConfig | `{"listen": "127.0.0.1:2019", "tls": null, "token": null}` | Admin API listener (metrics, health, reload, purge, inspection). |
 | `cache` | object | `{}` | Named cache stores for routes with `cache` enabled. |
 | `include` | [string] | `[]` | Additional files or directories of `*.toml` fragments merged into this configuration, relative to the directory containing this file. Fragment files are loaded in sorted order; scalar conflicts between fragments and the main file are errors. A glob pattern matching no files is a no-op; a missing file or directory is an error. |
@@ -112,8 +112,9 @@ ACME account settings (Let's Encrypt or any RFC 8555 directory).
 | field | type | default | description |
 |---|---|---|---|
 | `ca_roots` | string \| null | `null` | PEM bundle of extra CA roots to trust when talking to the ACME directory — for private ACME servers (Pebble, step-ca, internal PKI). The system/WebPKI roots are always included. |
-| `challenge` | AcmeChallenge | `"auto"` | Preferred challenge type: `http-01`, `tls-alpn-01`, or `auto` (HTTP-01 when a plaintext listener exists, else TLS-ALPN-01). |
+| `challenge` | AcmeChallenge | `"auto"` | Preferred challenge type: `http-01`, `tls-alpn-01`, `dns-01` (requires `acme.dns`), or `auto` (HTTP-01 when a plaintext listener exists, else TLS-ALPN-01). |
 | `directory` | string | `"https://acme-v02.api.letsencrypt.org/directory"` | ACME directory URL. Use the Let's Encrypt staging directory (`https://acme-staging-v02.api.letsencrypt.org/directory`) while testing to avoid production rate limits. |
+| `dns` | AcmeDns \| null | `null` | DNS provider for the `dns-01` challenge — required when `acme.challenge = "dns-01"`. |
 | `eab` | ExternalAccountBinding \| null | `null` | External Account Binding for providers that require it. |
 | `email` | string \| null | `null` | Contact email for the ACME account. |
 | `on_demand` | OnDemandAcme | `{"allowed_hosts": [], "enabled": false, "rate": null}` | On-demand issuance for previously unseen hostnames. |
@@ -466,6 +467,12 @@ A named cache store.
 Which ACME challenge type to solve.
 
 
+## `AcmeDns`
+
+DNS provider used to publish `_acme-challenge` TXT records for the
+`dns-01` challenge (`[acme.dns]`).
+
+
 ## `ApiKeyLocation`
 
 API key location.
@@ -482,6 +489,18 @@ decimal (×1000); `Ki`/`Mi`/`Gi` are binary (×1024).
 
 Cache storage tier.
 
+
+## `CloudflareDns`
+
+Cloudflare credentials for `dns-01` (`[acme.dns.cloudflare]`).
+
+| field | type | default | description |
+|---|---|---|---|
+| `api_base` | string \| null |  | API base URL — override only for tests or API gateways (default `https://api.cloudflare.com/client/v4`). |
+| `api_token` | string **required** |  | API token with `Zone.DNS:Edit` on the zones to validate; zone discovery also needs `Zone.Zone:Read`. Prefer `${env:…}` or `${file:…}` interpolation over a literal token. |
+| `propagation_timeout` | string | `"2m"` | How long to wait for TXT records to appear in DNS before the CA is told to validate (default `2m`). |
+| `resolver` | string \| null |  | Nameserver (`ip` or `ip:port`) to poll while waiting for TXT propagation — e.g. the zone's authoritative NS or a fast public resolver. Defaults to the system resolver. |
+| `zone_id` | string \| null |  | Zone ID to pin all records to. When unset the zone is discovered per hostname by walking up its labels via the API. |
 
 ## `Duration`
 

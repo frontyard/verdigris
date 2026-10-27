@@ -162,6 +162,7 @@ fn config_file_perm_diag(path: &Path, config: &Config) -> Option<Diagnostic> {
         });
     }
     let has_inline_secrets = config.admin.token.is_some()
+        || matches!(&config.acme.dns, Some(crate::config::model::AcmeDns::Cloudflare(cf)) if !cf.api_token.trim().is_empty())
         || config.site.iter().any(|s| {
             s.route.iter().any(|r| {
                 r.auth.as_ref().is_some_and(|a| {
