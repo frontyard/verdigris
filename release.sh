@@ -16,8 +16,10 @@
 # --no-tag     bump + changelog + commit only — no tag, no push. For the
 #              CI flow (commit on dev → PR → tag lands on main's merge
 #              commit via .github/workflows/tag.yml).
-# --regen-docs regenerate docs/book/src/reference.md + llms-full.txt
-#              (needed when src/config/ changed this cycle)
+# --regen-docs regenerate docs/book/src/reference.md from the schema
+#              (needed when src/config/ changed this cycle). llms-full.txt
+#              is always regenerated: it embeds introduction.md's version
+#              line, so every bump invalidates it.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -94,12 +96,12 @@ fi
 
 if [ $regen -eq 1 ]; then
     cargo run --quiet -- schema | python3 docs/gen-reference.py > docs/book/src/reference.md
-    python3 docs/gen-llms-full.py
 fi
+python3 docs/gen-llms-full.py
 
 # --- commit, tag, push -------------------------------------------------------
-git add Cargo.toml Cargo.lock CHANGELOG.md docs/book/book.toml docs/book/src/introduction.md
-[ $regen -eq 1 ] && git add docs/book/src/reference.md llms-full.txt || true
+git add Cargo.toml Cargo.lock CHANGELOG.md docs/book/book.toml docs/book/src/introduction.md llms-full.txt
+[ $regen -eq 1 ] && git add docs/book/src/reference.md || true
 git diff --cached --quiet || git commit -m "Release v$new"
 if [ $no_tag -eq 1 ]; then
     echo "release commit for v$new created — caller pushes, PRs, and tags post-merge."

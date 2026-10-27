@@ -11,6 +11,14 @@ workflow publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Release flow no longer leaves `llms-full.txt` stale** — the file
+  embeds the version line from `introduction.md`, so every version
+  bump invalidated it and broke the `generated docs in sync` CI check
+  on release PRs. `release.sh` now regenerates it unconditionally
+  (`--regen-docs` still gates the schema-driven `reference.md`).
+
 ## [0.4.1] - 2026-10-27
 
 ### Build & CI
