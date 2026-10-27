@@ -32,7 +32,10 @@ A PR is mergeable when it:
 
 Docs: if you touch `src/config`, regenerate the reference —
 `cargo run -- schema | python3 docs/gen-reference.py` — and ensure
-`python3 docs/check-snippets.py` still passes.
+`python3 docs/check-snippets.py` still passes. Config changes must
+also follow `docs/config-grammar.md` (the frozen field shapes,
+shorthand parity, scalar-vs-list policy); new forms amend that doc in
+the same commit.
 
 ## Process
 

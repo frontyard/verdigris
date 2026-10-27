@@ -963,6 +963,19 @@ fn check_caches(ctx: &mut Ctx, cfg: &Config) {
 
 fn check_admin(ctx: &mut Ctx, cfg: &Config) {
     let a = &cfg.admin;
+    if !a.enabled {
+        // The listener is never bound; flag settings that silently do
+        // nothing so the config doesn't read as if it serves.
+        for (field, set) in [("token", a.token.is_some()), ("tls", a.tls.is_some())] {
+            if set {
+                ctx.warn(
+                    format!("admin.{field}"),
+                    format!("admin.{field} is ignored — admin.enabled = false"),
+                );
+            }
+        }
+        return;
+    }
     if !a.listen.ip().is_loopback() {
         if a.token.is_none() {
             ctx.error(

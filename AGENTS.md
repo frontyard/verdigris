@@ -24,3 +24,11 @@ what GitHub shows):
 `cargo fmt --check`, `cargo deny check`. `docs/book/src/reference.md` is
 generated — regenerate with `cargo run -- schema | python3
 docs/gen-reference.py`, never edit by hand.
+
+## Config surface changes
+
+Any change to accepted config shapes must follow
+`docs/config-grammar.md` — the frozen list of field forms, shorthand
+parity rules, the scalar-vs-list policy, off-switches, and diagnostic
+conventions. New forms amend that doc in the same commit, and
+`src/config`'s `surface_audit` tests mirror each invariant.

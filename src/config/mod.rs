@@ -434,7 +434,7 @@ fn load_document_impl(
             }
             _ => format!("{}: {}", e.path(), e.inner()),
         };
-        return Err(LoadError::Schema(path.to_path_buf(), msg));
+        return Err(LoadError::Schema(path.to_path_buf(), did_you_mean(&msg)));
     }
 
     // provenance of every leaf already in `value` — lets a merge
@@ -477,6 +477,52 @@ fn load_document_impl(
 
 /// Dotted paths of every non-table leaf in a TOML document —
 /// `log.level`, `site.0.hosts.0`, …
+/// Append `did you mean \`x\`?` to a serde "unknown field" error when a
+/// close spelling exists among the expected names — catches typos like
+/// `host`→`hosts` or `sttic`→`static` in every `deny_unknown_fields`
+/// table uniformly.
+fn did_you_mean(msg: &str) -> String {
+    let re =
+        regex::Regex::new(r"unknown field `([^`]+)`.*expected (?:one of )?(`[^`]+`(?:, `[^`]+`)*)")
+            .expect("static regex");
+    let Some(cap) = re.captures(msg) else {
+        return msg.to_string();
+    };
+    let typo = cap[1].to_lowercase();
+    let (mut best, mut dist) = ("", usize::MAX);
+    for m in regex::Regex::new(r"`([^`]+)`")
+        .expect("static regex")
+        .captures_iter(&cap[2])
+    {
+        let d = levenshtein(&typo, &m[1].to_lowercase());
+        if d < dist {
+            (best, dist) = (m.get(1).unwrap().as_str(), d);
+        }
+    }
+    if dist > 2 {
+        return msg.to_string();
+    }
+    format!("{msg}; did you mean `{best}`?")
+}
+
+/// Edit distance between two strings (unbounded — inputs are config
+/// keys, tens of bytes at most).
+fn levenshtein(a: &str, b: &str) -> usize {
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut cur = vec![i + 1];
+        for (j, cb) in b.chars().enumerate() {
+            cur.push(
+                (prev[j] + usize::from(ca != cb))
+                    .min(prev[j + 1] + 1)
+                    .min(cur[j] + 1),
+            );
+        }
+        prev = cur;
+    }
+    prev[b.len()]
+}
+
 fn leaf_paths(v: &toml::Value) -> Vec<String> {
     fn walk(v: &toml::Value, path: &mut Vec<String>, out: &mut Vec<String>) {
         match v {
@@ -1533,5 +1579,129 @@ proxy = "app"
             loaded.config.site[0].tls,
             model::SiteTls::Mode(model::TlsMode::SelfSigned)
         ));
+    }
+
+    /// Behavioral mirror of `docs/config-grammar.md` — each accepted
+    /// config shape and its parity/strictness policy has a row. When the
+    /// grammar doc gains an invariant, this test gains a case; the
+    /// ergonomics audit is the diff between the two.
+    mod surface_audit {
+        use super::*;
+
+        fn load_str(body: &str) -> Result<Loaded, LoadError> {
+            let dir = tempfile::tempdir().unwrap();
+            let path = write(dir.path(), "verd.toml", body);
+            let r = load(&path);
+            drop(dir); // dir must outlive `load` — it does
+            r
+        }
+
+        #[test]
+        fn route_proxy_accepts_site_proxy_shapes() {
+            for shorthand in [
+                r#"proxy = "http://127.0.0.1:9""#,
+                r#"proxy = "cluster""#,
+                r#"proxy = ["http://127.0.0.1:9", "http://127.0.0.1:10"]"#,
+                r#"proxy = { upstream = "http://127.0.0.1:9" }"#,
+            ] {
+                let l = load_str(&format!(
+                    "[[site]]\n[[site.route]]\nprefix = \"/\"\n{shorthand}\n"
+                ))
+                .unwrap_or_else(|e| panic!("{shorthand} should parse: {e}"));
+                assert!(
+                    l.config.site[0].route[0].proxy.is_some(),
+                    "{shorthand} produced no proxy"
+                );
+            }
+        }
+
+        #[test]
+        fn scalar_sugar_on_approved_lists() {
+            // every field in the grammar's scalar-vs-list section parses
+            // the bare-value form as a one-element list
+            for (field, body) in [
+                (
+                    "site.hosts",
+                    "[[site]]\nhosts = \"a.example.com\"\nroot = \"/tmp\"",
+                ),
+                (
+                    "route.ip_allow",
+                    "[[site]]\nroot = \"/tmp\"\n[[site.route]]\nip_allow = \"10.0.0.0/8\"",
+                ),
+                (
+                    "match.methods",
+                    "[[site]]\nroot = \"/tmp\"\n[[site.route]]\n[site.route.match]\nmethods = \"GET\"",
+                ),
+                (
+                    "upstream.servers",
+                    "[upstream.u]\nservers = \"127.0.0.1:1\"",
+                ),
+                (
+                    "bearer.tokens",
+                    "[[site]]\nroot = \"/tmp\"\n[[site.route]]\n[site.route.auth]\n[site.route.auth.bearer]\ntokens = \"t\"",
+                ),
+                ("server.listen", "[server]\nlisten = \"127.0.0.1:18080\""),
+            ] {
+                load_str(body).unwrap_or_else(|e| panic!("{field} should take a scalar: {e}"));
+            }
+        }
+
+        #[test]
+        fn include_stays_strict() {
+            // documented exception — merge order is load-bearing, and
+            // the error is the teaching moment
+            match load_str("include = \"conf.d\"") {
+                Err(e) => {
+                    assert!(e.to_string().contains("list of path strings"), "{e}");
+                }
+                Ok(_) => panic!("include scalar should fail"),
+            }
+        }
+
+        #[test]
+        fn admin_disabled_parses_and_warns_on_dead_config() {
+            let l = load_str("[admin]\nenabled = false\n[[site]]\nhosts = \"x\"\nroot = \"/tmp\"")
+                .unwrap();
+            assert!(!l.config.admin.enabled);
+            assert!(l.diagnostics.iter().all(|d| !d.path.starts_with("admin.")));
+
+            // token/tls set under enabled=false → dead-config warnings
+            let l = load_str("[admin]\nenabled = false\ntoken = \"t\"\n").unwrap();
+            assert!(
+                l.diagnostics
+                    .iter()
+                    .any(|d| d.message.contains("admin.enabled = false")),
+                "{:?}",
+                l.diagnostics
+            );
+        }
+
+        #[test]
+        fn unknown_fields_suggest_close_spellings() {
+            for (body, want) in [
+                ("[[site]]\nhost = \"a\"\nroot = \"/tmp\"", "hosts"),
+                ("[server]\nlistn = \"127.0.0.1:80\"", "listen"),
+                ("[[site]]\n[[site.route]]\nsttic = {}", "static"),
+            ] {
+                match load_str(body) {
+                    Err(LoadError::Schema(_, msg)) => {
+                        assert!(
+                            msg.contains(&format!("did you mean `{want}`?")),
+                            "{body} → {msg}"
+                        );
+                    }
+                    Err(e) => panic!("{body} should be a schema error, got {e}"),
+                    Ok(_) => panic!("{body} should be a schema error"),
+                }
+            }
+            // distant names get no suggestion
+            match load_str("[server]\nzzz = 1") {
+                Err(LoadError::Schema(_, msg)) => {
+                    assert!(!msg.contains("did you mean"), "{msg}");
+                }
+                Err(e) => panic!("expected Schema, got {e}"),
+                Ok(_) => panic!("expected Schema, load succeeded"),
+            }
+        }
     }
 }

@@ -858,7 +858,7 @@ validate` resolves them, so CI can catch missing secrets.
 | Section | Contents |
 | --- | --- |
 | `[server]` | listeners, limits, timeouts, connection caps, trusted proxies |
-| `[admin]` | admin listener, bearer token, optional TLS |
+| `[admin]` | admin listener (`enabled` to disable), bearer token, optional TLS |
 | `[log]` | server log + access log (format/output/filter/sample) |
 | `[[site]]` | virtual hosts: hostnames, TLS mode, routes, trusted proxies |
 | `[upstream.*]` | named upstream clusters for proxy routes |
@@ -1555,7 +1555,7 @@ Root configuration for a verdigris instance.
 | field | type | default | description |
 |---|---|---|---|
 | `acme` | AcmeConfig | `{"ca_roots": null, "challenge": "auto", "directory": "https://acme-v02.api.letsencrypt.org/directory", "dns": null, "eab": null, "email": null, "on_demand": {"allowed_hosts": [], "enabled": false, "rate": null}, "renew_before": "30d", "storage": "./verd-state/acme"}` | ACME account settings used by sites with `tls = "auto"`. |
-| `admin` | AdminConfig | `{"listen": "127.0.0.1:2019", "tls": null, "token": null}` | Admin API listener (metrics, health, reload, purge, inspection). |
+| `admin` | AdminConfig | `{"enabled": true, "listen": "127.0.0.1:2019", "tls": null, "token": null}` | Admin API listener (metrics, health, reload, purge, inspection). |
 | `cache` | object | `{}` | Named cache stores for routes with `cache` enabled. |
 | `include` | [string] |  | Additional files or directories of `*.toml` fragments merged into this configuration, relative to the directory containing this file. Fragment files are loaded in sorted order; scalar conflicts between fragments and the main file are errors. A glob pattern matching no files is a no-op; a missing file or directory is an error. |
 | `limits` | Limits | `{"body_bytes": "10MiB", "header_bytes": "16KiB"}` | Default request limits; individual routes may override. |
@@ -1633,6 +1633,7 @@ the data plane.
 
 | field | type | default | description |
 |---|---|---|---|
+| `enabled` | boolean | `true` | Serve the admin API. `false` disables the listener entirely — `listen`, `token`, and `tls` are then ignored. |
 | `listen` | string | `"127.0.0.1:2019"` | `IP:port` to bind. Use loopback unless remote administration is needed. |
 | `tls` | ManualTls \| null | `null` | Optional TLS for the admin listener (recommended when bound beyond localhost). |
 | `token` | string \| null | `null` | Bearer token required on all admin requests. Mandatory when `listen` is not a loopback address; use `${VAR}` interpolation to keep it out of the file. |
@@ -1708,7 +1709,7 @@ One route: a matcher, one handler, and middleware.
 | `match` | MatchConditions \| null | `null` | Additional match conditions: methods, headers, query parameters. |
 | `prefix` | string \| null | `null` | Match paths starting with this prefix. Prefix matching is segment-aware: `/api` matches `/api` and `/api/…` but not `/apix`. |
 | `priority` | integer | `0` | Priority among routes that tie on specificity. Higher wins. |
-| `proxy` | ProxyHandler \| null | `null` | Reverse proxy handler. |
+| `proxy` | ProxySchema \| null | `null` | Reverse proxy: an upstream reference (`"name"`/`"url"`/`[urls]`, like `site.proxy`) or a full table. |
 | `rate_limit` | RateLimitConfig \| null | `null` | Rate limiting. |
 | `redirect` | RedirectHandler \| null | `null` | Redirect handler. |
 | `regex` | string \| null | `null` | Match paths against this regular expression. Evaluated last; a regex route never overrides a prefix route. |
@@ -2127,6 +2128,11 @@ Prefix replacement: `{ from = "/api", to = "/v1" }`.
 |---|---|---|---|
 | `from` | string **required** |  | Existing path prefix to replace. |
 | `to` | string **required** |  | Replacement path prefix. |
+
+## `ProxySchema`
+
+Schema shape for `route.proxy` (upstream shorthand or a table).
+
 
 ## `RateSpec`
 

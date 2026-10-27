@@ -329,6 +329,7 @@ async fn run_async(
     log_file: Option<ServerLogFile>,
 ) -> ExitCode {
     crate::observe::metrics::install();
+    let admin_enabled = rt.config.admin.enabled;
     let shared = crate::server::Shared::with_watch(rt, watch_plan);
     let (reload_tx, reload_rx) = tokio::sync::mpsc::channel::<crate::server::Reload>(4);
 
@@ -452,7 +453,7 @@ async fn run_async(
             .map_err(|e| e.to_string())
         });
     }
-    {
+    if admin_enabled {
         let sd = sd_rx.clone();
         tasks.spawn(async move {
             crate::admin::serve(shared, reload_tx, sd)

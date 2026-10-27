@@ -37,8 +37,23 @@ workflow publishes the matching section as the GitHub release notes.
 ### Added
 
 - **Route shorthand values** — `route.cache` accepts a bare store name
-  (`cache = "main"`) and `route.compress` accepts `compress = true`
-  to enable with defaults.
+  (`cache = "main"`), `route.compress` accepts `compress = true`,
+  and `route.proxy` accepts an upstream name, URL, or URL list —
+  `[[site.route]] proxy = "https://api.internal"` now expands to
+  `{ upstream = "…" }`, matching `site.proxy`.
+- **`admin.enabled = false`** — disables the admin listener entirely
+  (default `127.0.0.1:2019` previously had no off-switch); `token`/`tls`
+  set under `enabled = false` produce dead-config warnings.
+- **Scalar sugar for simple lists** — single-value string/CIDR lists
+  (`hosts`, `server.listen`, `upstream.servers`, `ip_allow`/`ip_deny`,
+  `match.methods`, `bearer.tokens`, `api_key.keys`, CORS lists, cache
+  bypass lists, `algorithms`, `exempt`, …) accept a bare value as a
+  one-element list, so `hosts = "example.com"` parses. `include`
+  deliberately stays strict (`docs/config-grammar.md` records why).
+- **Config grammar documented and enforced** —
+  `docs/config-grammar.md` freezes the accepted field shapes, shorthand
+  parity rules, scalar-vs-list policy, off-switches, and diagnostic
+  conventions; `surface_audit` tests assert each invariant behaviorally.
 - **`[log]` server logging is now wired** — `log.level`, `log.format`
   and `log.output` actually configure the server log (they were parsed
   and documented but never applied). Level resolves `--log-level` /
@@ -53,6 +68,9 @@ workflow publishes the matching section as the GitHub release notes.
   fails on warnings.
 - **`verd fmt --all`** — formats every file reachable through
   `include`, not just the top-level file.
+- **Unknown-field errors suggest close spellings** — a typo like
+  `host = "a"` now fails with `did you mean \`hosts\`?` appended,
+  across every `deny_unknown_fields` table uniformly.
 
 ### Changed
 

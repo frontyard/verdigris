@@ -45,6 +45,59 @@ pub mod status_map {
     }
 }
 
+/// Serde adapter for `Vec<T>` fields: `x = "v"` parses as `["v"]` —
+/// scalar sugar for the common single-entry case (see
+/// `docs/config-grammar.md`; `include` deliberately stays strict).
+/// Serializes as the list form — canonical output is always an array.
+pub mod one_or_many {
+    use serde::{Deserialize, Deserializer};
+
+    /// Deserialize `v` or `[v, …]` into `Vec<T>`.
+    ///
+    /// `Many` is tried first: an untagged `One(T)` where `T` is a
+    /// struct-with-defaults would positionally accept `[]` and produce
+    /// a bogus single element.
+    pub fn deserialize<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: Deserialize<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr<T> {
+            Many(Vec<T>),
+            One(T),
+        }
+        match Repr::deserialize(d)? {
+            Repr::Many(v) => Ok(v),
+            Repr::One(v) => Ok(vec![v]),
+        }
+    }
+
+    /// Same sugar for `Option<Vec<T>>` fields.
+    pub mod option {
+        use serde::{Deserialize, Deserializer};
+
+        /// Deserialize `v`, `[v, …]`, or none into `Option<Vec<T>>`.
+        pub fn deserialize<'de, D, T>(d: D) -> Result<Option<Vec<T>>, D::Error>
+        where
+            D: Deserializer<'de>,
+            T: Deserialize<'de>,
+        {
+            #[derive(Deserialize)]
+            #[serde(untagged)]
+            enum Repr<T> {
+                Many(Vec<T>),
+                One(T),
+            }
+            Ok(Option::<Repr<T>>::deserialize(d)?.map(|r| match r {
+                Repr::Many(v) => v,
+                Repr::One(v) => vec![v],
+            }))
+        }
+    }
+}
+
 /// Canonical short form for a [`Duration`]: the largest unit that
 /// divides it evenly (`"180d"`, `"2h"`, `"90s"`), falling back to
 /// humantime's compound form when no single unit is exact. Used when

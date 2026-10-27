@@ -10,7 +10,7 @@ use std::time::Duration;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::config::values::{ByteSize, RateSpec, duration};
+use crate::config::values::{ByteSize, RateSpec, duration, one_or_many};
 
 fn default_true() -> bool {
     true
@@ -55,6 +55,32 @@ fn opt_compress<'de, D: serde::Deserializer<'de>>(
     }))
 }
 
+/// `route.proxy` accepts an upstream reference — cluster name, URL, or
+/// list of URLs, same as `site.proxy` — or a full table.
+fn opt_proxy<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<ProxyHandler>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Ref(UpstreamRef),
+        Full(Box<ProxyHandler>),
+    }
+    let r = Option::<Repr>::deserialize(d).map_err(|_| {
+        serde::de::Error::custom(
+            "proxy must be an upstream name, URL, URL list, or an { upstream, … } table",
+        )
+    })?;
+    Ok(r.map(|r| match r {
+        Repr::Ref(upstream) => ProxyHandler {
+            upstream,
+            rewrite: None,
+            request_headers: None,
+            retries: RetryPolicy::default(),
+            host_header: HostHeader::default(),
+        },
+        Repr::Full(p) => *p,
+    }))
+}
+
 /// Root configuration for a verdigris instance.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
@@ -94,6 +120,7 @@ pub struct ServerConfig {
     /// port 80. Entries are either `"ip:port"` strings or
     /// `{ addr = "ip:port", tls = true }` tables to terminate TLS.
     #[schemars(with = "Vec<ListenAddrSchema>")]
+    #[serde(deserialize_with = "one_or_many::deserialize")]
     pub listen: Vec<ListenAddr>,
     /// Time to wait for in-flight requests during shutdown or reload before
     /// connections are closed.
@@ -103,6 +130,7 @@ pub struct ServerConfig {
     /// CIDRs whose `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`,
     /// `X-Real-IP` and `Forwarded` headers are trusted. Empty: trust none.
     #[schemars(with = "Vec<String>")]
+    #[serde(deserialize_with = "one_or_many::deserialize")]
     pub trusted_proxies: Vec<ipnet::IpNet>,
     /// Value of the `Server` response header; `"off"` or `""` omits it.
     pub server_header: String,
@@ -442,6 +470,10 @@ impl Default for AccessLog {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct AdminConfig {
+    /// Serve the admin API. `false` disables the listener entirely —
+    /// `listen`, `token`, and `tls` are then ignored.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
     /// `IP:port` to bind. Use loopback unless remote administration is needed.
     #[schemars(with = "String")]
     pub listen: SocketAddr,
@@ -457,6 +489,7 @@ pub struct AdminConfig {
 impl Default for AdminConfig {
     fn default() -> Self {
         Self {
+            enabled: true,
             listen: SocketAddr::from(([127, 0, 0, 1], 2019)),
             token: None,
             tls: None,
@@ -600,6 +633,7 @@ pub struct OnDemandAcme {
     pub enabled: bool,
     /// Hostnames or `*.suffix` patterns allowed to trigger issuance. Empty
     /// list means on-demand never issues — an explicit allowlist is required.
+    #[serde(deserialize_with = "one_or_many::deserialize")]
     pub allowed_hosts: Vec<String>,
     /// Maximum issuance rate, e.g. `5/hour`.
     pub rate: Option<RateSpec>,
@@ -611,6 +645,7 @@ pub struct OnDemandAcme {
 pub struct UpstreamConfig {
     /// Server URLs: `http://host:port`, `https://host:port`, or `h2c://` for
     /// cleartext HTTP/2 prior knowledge (typical for gRPC backends).
+    #[serde(deserialize_with = "one_or_many::deserialize")]
     pub servers: Vec<String>,
     /// Load balancing algorithm.
     pub lb: LoadBalancing,
@@ -930,6 +965,7 @@ pub struct SiteConfig {
     pub name: Option<String>,
     /// Hostnames served by this site. Exact names and `*.example.com`
     /// wildcards. May be empty only when `default = true`.
+    #[serde(deserialize_with = "one_or_many::deserialize")]
     pub hosts: Vec<String>,
     /// Serve requests whose Host matches no site.
     pub default: bool,
@@ -950,6 +986,7 @@ pub struct SiteConfig {
     pub route: Vec<RouteConfig>,
     /// Per-site override of the trusted proxy CIDR list.
     #[schemars(with = "Option<Vec<String>>")]
+    #[serde(deserialize_with = "one_or_many::option::deserialize")]
     pub trusted_proxies: Option<Vec<ipnet::IpNet>>,
 }
 
@@ -974,7 +1011,10 @@ pub struct RouteConfig {
     /// Serve static files.
     #[serde(rename = "static")]
     pub static_files: Option<StaticHandler>,
-    /// Reverse proxy handler.
+    /// Reverse proxy: an upstream reference (`"name"`/`"url"`/`[urls]`,
+    /// like `site.proxy`) or a full table.
+    #[serde(deserialize_with = "opt_proxy")]
+    #[schemars(with = "Option<ProxySchema>")]
     pub proxy: Option<ProxyHandler>,
     /// Redirect handler.
     pub redirect: Option<RedirectHandler>,
@@ -983,9 +1023,11 @@ pub struct RouteConfig {
 
     /// Client CIDRs allowed; others get 403.
     #[schemars(with = "Vec<String>")]
+    #[serde(deserialize_with = "one_or_many::deserialize")]
     pub ip_allow: Vec<ipnet::IpNet>,
     /// Client CIDRs denied; they get 403 before allow rules.
     #[schemars(with = "Vec<String>")]
+    #[serde(deserialize_with = "one_or_many::deserialize")]
     pub ip_deny: Vec<ipnet::IpNet>,
     /// Authentication configuration.
     pub auth: Option<AuthConfig>,
@@ -1055,6 +1097,7 @@ pub struct LimitOverrides {
 #[serde(default, deny_unknown_fields)]
 pub struct MatchConditions {
     /// HTTP methods, e.g. `["GET", "HEAD"]`.
+    #[serde(deserialize_with = "one_or_many::deserialize")]
     pub methods: Vec<String>,
     /// Required request headers. Values match exactly, or as regex when
     /// prefixed with `re:`.
@@ -1357,6 +1400,7 @@ pub struct BasicAuth {
 #[serde(default, deny_unknown_fields)]
 pub struct BearerAuth {
     /// Valid tokens. Prefer `${VAR}`/`${file:...}` interpolation.
+    #[serde(deserialize_with = "one_or_many::deserialize")]
     pub tokens: Vec<String>,
 }
 
@@ -1369,6 +1413,7 @@ pub struct ApiKeyAuth {
     /// Header name (e.g. `X-Api-Key`) or query parameter name.
     pub name: String,
     /// Valid keys.
+    #[serde(deserialize_with = "one_or_many::deserialize")]
     pub keys: Vec<String>,
 }
 
@@ -1397,6 +1442,7 @@ pub struct RateLimitConfig {
     /// CIDRs exempt from limiting.
     #[serde(default)]
     #[schemars(with = "Vec<String>")]
+    #[serde(deserialize_with = "one_or_many::deserialize")]
     pub exempt: Vec<ipnet::IpNet>,
     /// Log-only mode: never reject, but emit metrics/logs as if it would.
     #[serde(default)]
@@ -1409,12 +1455,16 @@ pub struct RateLimitConfig {
 pub struct CorsConfig {
     /// Allowed origins: exact origins, `*`, `*.suffix` wildcards, or
     /// `re:`-prefixed regular expressions.
+    #[serde(deserialize_with = "one_or_many::deserialize")]
     pub origins: Vec<String>,
     /// Allowed methods for preflight.
+    #[serde(deserialize_with = "one_or_many::deserialize")]
     pub methods: Vec<String>,
     /// Allowed request headers for preflight.
+    #[serde(deserialize_with = "one_or_many::deserialize")]
     pub headers: Vec<String>,
     /// Headers exposed to browsers on real responses.
+    #[serde(deserialize_with = "one_or_many::deserialize")]
     pub expose: Vec<String>,
     /// Allow credentials (cookies, Authorization).
     pub credentials: bool,
@@ -1453,6 +1503,7 @@ pub struct RouteCache {
     /// Extra headers folded into the cache key (in addition to the response
     /// `Vary` header).
     #[serde(default)]
+    #[serde(deserialize_with = "one_or_many::deserialize")]
     pub vary_headers: Vec<String>,
     /// Emit the `X-Cache` response header.
     #[serde(default = "default_true")]
@@ -1501,10 +1552,12 @@ pub struct CacheBypass {
     pub authenticated: bool,
     /// Additional HTTP methods that bypass the cache. Only GET and HEAD
     /// are cacheable anyway — list them here to bypass even those.
+    #[serde(deserialize_with = "one_or_many::deserialize")]
     pub methods: Vec<String>,
     /// Cookie names whose presence bypasses the cache.
     pub cookies: Vec<String>,
     /// Header names whose presence bypasses the cache.
+    #[serde(deserialize_with = "one_or_many::deserialize")]
     pub headers: Vec<String>,
     /// Path globs that bypass the cache.
     pub paths: Vec<String>,
@@ -1528,11 +1581,13 @@ impl Default for CacheBypass {
 pub struct CompressConfig {
     /// Enabled algorithms, negotiated by client `Accept-Encoding` q-values:
     /// `br`, `zstd`, `gzip`. Defaults to all.
+    #[serde(deserialize_with = "one_or_many::deserialize")]
     pub algorithms: Vec<String>,
     /// Don't compress responses smaller than this (when Content-Length is
     /// known).
     pub min_bytes: ByteSize,
     /// Content types eligible for compression; `*` suffixes allowed.
+    #[serde(deserialize_with = "one_or_many::deserialize")]
     pub types: Vec<String>,
     /// Compression level, algorithm-specific (brotli 0–11, gzip 0–9,
     /// zstd 1–19). Default is the algorithm's balanced level.
@@ -1567,6 +1622,16 @@ pub enum CompressConfigSchema {
     Flag(bool),
     /// Full table form.
     Full(CompressConfig),
+}
+
+/// Schema shape for `route.proxy` (upstream shorthand or a table).
+#[derive(JsonSchema)]
+#[schemars(untagged)]
+pub enum ProxySchema {
+    /// Cluster name, one URL, or a URL list — like `site.proxy`.
+    Ref(UpstreamRef),
+    /// Full table form.
+    Full(Box<ProxyHandler>),
 }
 
 #[cfg(test)]
