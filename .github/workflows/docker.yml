@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths: ["src/**", "Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile", "Dockerfile.release", ".dockerignore", "rust-toolchain.toml", ".github/workflows/docker.yml"]
   pull_request:
+    # KEEP THIS LIST IN SYNC WITH paths-ignore IN docker-skip.yml —
+    # the skip workflow reports the required check when this one doesn't run
     paths: ["src/**", "Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile", "Dockerfile.release", ".dockerignore", "rust-toolchain.toml", ".github/workflows/docker.yml"]
 
 permissions: {}

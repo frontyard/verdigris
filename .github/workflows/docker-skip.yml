@@ -1,0 +1,30 @@
+name: Docker (skip)
+
+# Companion to docker.yml: the "Sanity" ruleset requires the
+# `docker build + trivy scan` check on every PR, but docker.yml only
+# triggers when Docker-relevant paths change — a PR that touches
+# nothing in that list would wait on a check that never reports.
+# paths-ignore below is the exact complement of docker.yml's paths,
+# so exactly one of the two jobs reports this check name per push.
+# KEEP THIS LIST IN SYNC WITH paths IN docker.yml.
+
+on:
+  pull_request:
+    paths-ignore: ["src/**", "Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile", "Dockerfile.release", ".dockerignore", "rust-toolchain.toml", ".github/workflows/docker.yml"]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    # must match the required check context exactly — same name as
+    # the real job in docker.yml
+    name: docker build + trivy scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - run: echo "No Docker-relevant files changed; build + scan not required."

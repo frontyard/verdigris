@@ -11,6 +11,13 @@ workflow publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
+### Build & CI
+
+- **Required `docker build + trivy scan` no longer hangs on unrelated
+  PRs** — `docker-skip.yml` reports the check when the diff touches no
+  Docker-relevant paths, so PRs that can't trigger `docker.yml` are no
+  longer blocked on a check that never runs.
+
 ## [0.4.0] - 2026-10-26
 
 ### Added
