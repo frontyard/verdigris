@@ -55,14 +55,15 @@ fn proxy_cfg(port: u16, extra: &str) -> String {
         r#"
 [upstream.up]
 servers = ["http://127.0.0.1:{port}"]
-limits = {{ connect = "500ms", response_header = "1s", idle = "1s", max_connections = 8 }}
+timeouts = {{ connect = "500ms", response_header = "1s", idle = "1s" }}
+max_connections = 8
 
 [[site]]
 default = true
 tls = "off"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 proxy = {{ upstream = "up" }}
 {extra}
 "#
@@ -149,7 +150,7 @@ default = true
 tls = "off"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = { body = "x" }
 "#,
     )
@@ -185,7 +186,7 @@ default = true
 tls = "off"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = {{ body = "x" }}
 "#,
         dir.path().display()
@@ -229,7 +230,7 @@ default = true
 tls = "off"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 static = {{ root = "{}" }}
 cache = {{ store = "main" }}
 "#,

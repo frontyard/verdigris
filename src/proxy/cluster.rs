@@ -230,7 +230,7 @@ impl Member {
             h2: Mutex::new(None),
             dns: tokio::sync::Mutex::new(DnsState::default()),
             literal,
-            sem: Arc::new(Semaphore::new(max_connections.max(1))),
+            sem: Arc::new(Semaphore::new(max_connections)),
             meters,
         })
     }
@@ -710,9 +710,7 @@ impl Cluster {
             .enumerate()
             .map(|(i, raw)| {
                 UpstreamUrl::parse(raw)
-                    .map(|url| {
-                        Member::build(i, url, c.timeouts.max_connections, cluster_lbl.clone())
-                    })
+                    .map(|url| Member::build(i, url, c.max_connections, cluster_lbl.clone()))
                     .map_err(|e| format!("upstream.{name}.servers[{i}]: {e}"))
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -743,6 +741,16 @@ impl Cluster {
             .get_or_init(|| build_tls_client(&self.tls))
             .clone()
             .map_err(UpError::Tls)
+    }
+
+    /// `BuildMode::Check` extra: force the TLS client build now — it is
+    /// lazy in `Live` so an https upstream with a bad `tls` block would
+    /// only fail on first request, after `verd validate` said OK.
+    pub fn check(&self) -> Result<(), String> {
+        if self.members.iter().any(|m| m.url.tls) {
+            self.tls_client().map(|_| ()).map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 
     /// Lazily build the DNS resolver (needs a Tokio context, so not built
@@ -985,9 +993,9 @@ mod tests {
                 timeouts: cfg::UpstreamTimeouts {
                     connect: Duration::from_millis(300),
                     idle,
-                    max_connections: max_conn,
                     ..Default::default()
                 },
+                max_connections: max_conn,
                 dns: cfg::UpstreamDns::default(),
                 tls: cfg::UpstreamTls::default(),
                 unavailable: cfg::UnavailableResponse::default(),

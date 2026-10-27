@@ -17,7 +17,8 @@ Client IP honours `X-Forwarded-For` only from `trusted_proxies`.
 ## Authentication
 
 ```toml
-auth = { basic = { realm = "ops", users = { ned = "$argon2id$…" } }}
+auth = { basic = { realm = "ops",
+                   users = { ned = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$3nGf8u5Z2p2mJx0yq9Rk3g" } }}
 # or: auth = { bearer = { tokens = ["${API_TOKEN}"] } }
 # or: auth = { api_key = { location = "header", name = "x-api-key", keys = ["${KEY1}"] } }
 ```
@@ -53,6 +54,7 @@ Idle buckets are swept automatically.
 ```toml
 compress = { types = ["text/*", "application/json"], min_bytes = "1KiB",
              algorithms = ["br", "zstd", "gzip"], level = 5 }
+# or just: compress = true
 ```
 
 Streams br/zstd/gzip by `Accept-Encoding` q-values; skips small bodies,

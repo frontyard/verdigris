@@ -45,33 +45,46 @@ pub mod status_map {
     }
 }
 
-/// Serde adapter for [`Duration`] fields: a humantime string (`"30s"`,
-/// `"180d"`) or a bare integer number of seconds (accepted for
-/// compatibility with configs written before the field took strings).
-/// Serializes as the canonical humantime string.
-pub mod secs_or_duration {
+/// Canonical short form for a [`Duration`]: the largest unit that
+/// divides it evenly (`"180d"`, `"2h"`, `"90s"`), falling back to
+/// humantime's compound form when no single unit is exact. Used when
+/// serializing durations back out (`verd config`, schema defaults).
+pub fn format_duration(d: Duration) -> String {
+    let ns = d.as_nanos();
+    const UNITS: [(u128, &str); 7] = [
+        (86_400_000_000_000, "d"),
+        (3_600_000_000_000, "h"),
+        (60_000_000_000, "m"),
+        (1_000_000_000, "s"),
+        (1_000_000, "ms"),
+        (1_000, "us"),
+        (1, "ns"),
+    ];
+    for (unit_ns, suffix) in UNITS {
+        if ns >= unit_ns && ns.is_multiple_of(unit_ns) {
+            return format!("{}{}", ns / unit_ns, suffix);
+        }
+    }
+    humantime::format_duration(d).to_string()
+}
+
+/// Serde adapter for [`Duration`] fields: humantime strings only
+/// (`"30s"`, `"180d"`). Serializes as the compact canonical string.
+pub mod duration {
     use std::time::Duration;
 
     use serde::de::Error;
     use serde::{Deserialize, Deserializer, Serializer};
 
-    /// Deserialize `123` (seconds) or `"180d"`.
+    /// Deserialize a humantime string like `"180d"`.
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Repr {
-            Int(u64),
-            Str(String),
-        }
-        match Repr::deserialize(d)? {
-            Repr::Int(secs) => Ok(Duration::from_secs(secs)),
-            Repr::Str(s) => humantime::parse_duration(&s).map_err(Error::custom),
-        }
+        let s = String::deserialize(d)?;
+        humantime::parse_duration(&s).map_err(Error::custom)
     }
 
     /// Serialize as `"180d"`.
     pub fn serialize<S: Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&humantime::format_duration(*d).to_string())
+        s.serialize_str(&super::format_duration(*d))
     }
 
     /// Same for `Option<Duration>` fields.
@@ -81,30 +94,20 @@ pub mod secs_or_duration {
         use serde::de::Error;
         use serde::{Deserialize, Deserializer, Serializer};
 
-        /// Deserialize `null`, `123` (seconds), or `"180d"`.
+        /// Deserialize `null` or a humantime string.
         pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Duration>, D::Error> {
-            Option::<super::Repr>::deserialize(d)?
-                .map(|r| match r {
-                    super::Repr::Int(secs) => Ok(Duration::from_secs(secs)),
-                    super::Repr::Str(s) => humantime::parse_duration(&s).map_err(Error::custom),
-                })
+            Option::<String>::deserialize(d)?
+                .map(|s| humantime::parse_duration(&s).map_err(Error::custom))
                 .transpose()
         }
 
         /// Serialize `null` or `"180d"`.
         pub fn serialize<S: Serializer>(d: &Option<Duration>, s: S) -> Result<S::Ok, S::Error> {
             match d {
-                Some(d) => s.serialize_str(&humantime::format_duration(*d).to_string()),
+                Some(d) => s.serialize_str(&super::super::format_duration(*d)),
                 None => s.serialize_none(),
             }
         }
-    }
-
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Int(u64),
-        Str(String),
     }
 }
 

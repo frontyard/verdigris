@@ -242,13 +242,19 @@ pub struct Factory {
 impl Factory {
     /// New factory from global config; builds the named cache stores.
     /// `prior` reuses unchanged stores across a reload so RAM contents and
-    /// open disk indexes survive a config generation swap.
-    pub fn new(cfg: &cfg::Config, prior: Option<&Factory>) -> Result<Self, String> {
+    /// open disk indexes survive a config generation swap. `mode`
+    /// [`BuildMode::Check`] builds everything read-only (no cache dirs
+    /// created) for `verd validate` dry runs.
+    pub fn new(
+        cfg: &cfg::Config,
+        prior: Option<&Factory>,
+        mode: crate::BuildMode,
+    ) -> Result<Self, String> {
         Ok(Self {
             trusted_proxies: cfg.server.trusted_proxies.clone(),
             security: cfg.server.security.clone(),
             limiters: Mutex::new(Vec::new()),
-            caches: crate::cache::Cache::build_all(cfg, prior.map(|p| p.caches()))?,
+            caches: crate::cache::Cache::build_all(cfg, prior.map(|p| p.caches()), mode)?,
         })
     }
 

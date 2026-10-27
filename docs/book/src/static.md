@@ -2,7 +2,7 @@
 
 ```toml
 [[site.route]]
-path = "/"
+prefix = "/"
 static = { root = "/var/www/site", index = ["index.html"] }
 ```
 

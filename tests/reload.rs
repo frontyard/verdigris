@@ -13,7 +13,7 @@ default = true
 tls = "off"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = { status = 200, body = "v1\n" }
 "#;
 
@@ -142,7 +142,7 @@ default = true
 tls = "off"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = { status = 200, body = "v2\n" }
 "#,
     );
@@ -243,7 +243,7 @@ default = true
 tls = "off"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = { status = 200, body = "v1\n" }
 
 [upstream.app]
@@ -349,7 +349,7 @@ default = true
 tls = "off"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = { status = 200, body = "v2\n" }
 "#,
     );

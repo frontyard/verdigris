@@ -4,7 +4,7 @@
 | --- | --- |
 | `server { listen 443 ssl; }` | `server.listen = [{ addr = "0.0.0.0:443", tls = true }]` |
 | `server_name example.com` | `hosts = ["example.com"]` on `[[site]]` |
-| `location / { root … }` | `[[site.route]] path="/" static={root="…"}` |
+| `location / { root … }` | `[[site.route]] prefix="/" static={root="…"}` |
 | `proxy_pass http://app` | `proxy = "http://app"` or `{ upstream = "app" }` |
 | `upstream { least_conn; }` | `[upstream.app] lb="least_conn"` |
 | `limit_req_zone` | `route.rate_limit` |

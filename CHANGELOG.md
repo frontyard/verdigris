@@ -23,6 +23,10 @@ workflow publishes the matching section as the GitHub release notes.
 
 ### Build & CI
 
+- **Doc snippets gated on every PR** — `ci.yml`'s `generated docs in
+  sync` job now runs `docs/check-snippets.py`; previously it only ran
+  in `docs.yml` on `docs/**` changes, so a `src/config`-only PR could
+  break book/README TOML snippets with no check firing.
 - **CodSpeed perf tracking** — `codspeed.yml` benchmarks the
   per-request pipeline in simulation mode (`benches/hot_paths.rs`:
   normalization, host/route matching incl. condition-rejection climbs
@@ -30,14 +34,124 @@ workflow publishes the matching section as the GitHub release notes.
   RAM lookup, forwarded-header rewrite, response decoration, config
   parse as control), posting regression reports on every PR.
 
+### Added
+
+- **Route shorthand values** — `route.cache` accepts a bare store name
+  (`cache = "main"`) and `route.compress` accepts `compress = true`
+  to enable with defaults.
+- **`[log]` server logging is now wired** — `log.level`, `log.format`
+  and `log.output` actually configure the server log (they were parsed
+  and documented but never applied). Level resolves `--log-level` /
+  `VERD_LOG` over the config value over `info`; `format` selects `json`
+  or `pretty`; `output` accepts `stdout`, `stderr` or a file path that
+  is reopened on `SIGUSR1` for logrotate.
+- **`verd init`** — scaffolds a starter `verd.toml` (`-o PATH` chooses
+  the destination, `-o -` prints to stdout, `--force` overwrites).
+- **`verd validate --format json` and `--strict`** — a machine-readable
+  diagnostics report (severity, config path, message, plus the resolved
+  source-file list) for CI and editor integrations; `--strict` also
+  fails on warnings.
+- **`verd fmt --all`** — formats every file reachable through
+  `include`, not just the top-level file.
+
 ### Changed
 
+- **Duration values must be strings** — all duration fields (e.g.
+  `hsts_max_age`, timeouts, cache TTLs) now only accept quoted
+  humantime strings like `"180d"` or `"30s"`; bare integers are
+  rejected. `verd config` prints them back in the compact canonical
+  form (`"180d"`).
+- **`verd validate` performs a full dry build** — routes, middleware,
+  upstreams, TLS material, access-log filters and auth files are all
+  compiled read-only, so a valid result means `verd run` would actually
+  start. Previously upstream URLs with paths, bad header names,
+  malformed password hashes and unreadable htpasswd files only failed
+  at startup.
+- **`--watch` follows the config's real sources** — it now tracks the
+  config file and its parents (atomic renames and editor save-swap
+  patterns fire), every `include` file, `include` dirs/globs so new
+  `*.toml` fragments are picked up, `${file:…}` secret files, and k8s
+  `..data` symlink swaps; the set is re-derived after each reload so
+  added or removed includes take effect without a restart. Events that
+  merely touch unrelated files in watched directories — including the
+  server's own log output — no longer trigger a reload.
+- **Exit codes unified** — config and runtime failures exit `1`
+  (including missing config, which used to exit `2`); `2` is reserved
+  for CLI usage errors.
+- **Wildcard hosts match longest suffix first** — `*.b.example.com`
+  wins over `*.example.com` regardless of declaration order.
+- **Malformed password hashes rejected at startup** — `auth.basic`
+  argon2/bcrypt values are fully parsed (not just prefix-sniffed), so
+  truncated or corrupt hashes fail `verd validate`/`verd run` instead
+  of failing closed at request time.
+- **`max_connections = 0` is an error** — on `server` and
+  `upstream.*` limits; previously an upstream cap of zero was silently
+  clamped to one.
+- **Secret redaction is path-aware** — `verd config` and the admin
+  `/config` dump now scrub password hashes, tokens and URL userinfo by
+  field position instead of substring, so `tls.key` file paths,
+  `eab.key_id`, and unrelated keys like `monkey` stay readable while
+  `users = { u = "$argon2id$…" }` no longer leaks.
+- **Pre-0.4.0 field names removed** — the compatibility aliases
+  `route.proxy.headers` (use `request_headers`), `route.headers` (use
+  `response_headers`), and `upstream.*.limits` (use `timeouts`) no
+  longer parse; configs using them now fail schema validation.
+- **Config surface tidied** — `route.path` (was an alias for `prefix`),
+  the `conditions` alias for `route.match`, and the `["/a","/b"]` tuple
+  form of `rewrite.replace_prefix` (use `{ from, to }`) are gone.
+  `upstream.*.timeouts.max_connections` moved to
+  `upstream.*.max_connections` (it was never a timeout).
+- **`proxy.pass_host` is now `proxy.host_header`** —
+  `host_header = "upstream"` (default) keeps the previous `pass_host =
+  true` behaviour; `host_header = "original"` passes the client's `Host`
+  through. The old bool read backwards (`true` did *not* pass the host).
+- **Canonical enum spellings tightened** — `tls` mode is now spelled
+  `self_signed` (`self-signed` still parses; `selfsigned` doesn't), and
+  squashed variants like `leastconn`, `roundrobin`, `iphash`, `http01`,
+  `dns01`, `tls-alpn01` are rejected — use the canonical or kebab-case
+  spelling shown in `verd schema` / the reference docs.
 - **Upstream pick now reads the clock once** — `lb::pick` evaluates all
   members against a single `Instant` (one `clock_gettime` per selection
   instead of one per member) and judges them at a consistent instant.
+- **Bare `{ tls = true }` listen tables bind `:443`** — previously they
+  defaulted `addr` to `0.0.0.0:80`, terminating TLS on the plaintext
+  port.
+- **Relative `${file:…}` paths resolve against the config file's
+  directory** — the same anchor `include` uses; previously they
+  resolved against the process working directory.
+- **Schema errors name the fragment and line** — an unknown key in an
+  included file now reports e.g. `conf.d/site.toml: TOML parse error at
+  line 3` instead of blaming the merged document, and errors include
+  the full field path.
+- **`compress.algorithms` takes canonical names only** — `br`, `zstd`,
+  `gzip`; the `brotli`/`gz` spellings are now rejected.
+- **`hosts` values must be hostnames** — entries containing a scheme,
+  path, or `host:port` (pasted URLs) are errors, and duplicates are
+  compared after port/case/trailing-dot normalization.
+- **New warnings for likely misconfigurations** — `error_pages` keys
+  outside 400–599, `rate_limit key = "identity"` on routes with no
+  auth, and `tls = "auto"` on non-public names (IPs, `localhost`,
+  `.internal`, …) or on a hostless site without on-demand issuance.
 
 ### Fixed
 
+- **`default = true` + `hosts = ["*"]` on one site** no longer
+  double-counts as two default sites and spuriously fails validation.
+- **Duplicate diagnostics removed** — listeners without TLS and
+  out-of-range `retries.budget_fraction` were each reported twice.
+- **`include` type errors surfaced** — a non-array `include` value or a
+  non-string entry was silently ignored; both are now load errors.
+- **Merge conflicts name the original source** — the diagnostic now
+  reports which file first set the conflicting key.
+- **Diamond `include` graphs duplicated arrays** — a fragment reachable
+  via two include paths merged twice (e.g. `[[site]]` entries appeared
+  twice); each file now merges once, and a genuine include cycle
+  reports `include cycle` instead of the nesting-depth error.
+- **Interpolation errors carry context** — `${VAR}` failures name the
+  config key that needed the variable, and config-permission warnings
+  only fire for files that were actually interpolated.
+- **Unused definitions warn** — `[upstream.*]` and `[cache.*]` blocks
+  never referenced by a route produce warnings.
 - **CodSpeed bench broke `nextest` and image builds** — the new
   `[[bench]]` target rejected nextest's test-enumeration flags and was
   missing from the Docker build context. `verd::bench/hot_paths` is now

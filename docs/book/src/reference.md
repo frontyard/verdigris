@@ -13,15 +13,15 @@ Root configuration for a verdigris instance.
 
 | field | type | default | description |
 |---|---|---|---|
-| `acme` | AcmeConfig | `{"ca_roots": null, "challenge": "auto", "directory": "https://acme-v02.api.letsencrypt.org/directory", "dns": null, "eab": null, "email": null, "on_demand": {"allowed_hosts": [], "enabled": false, "rate": null}, "renew_before": "30days", "storage": "./verd-state/acme"}` | ACME account settings used by sites with `tls = "auto"`. |
+| `acme` | AcmeConfig | `{"ca_roots": null, "challenge": "auto", "directory": "https://acme-v02.api.letsencrypt.org/directory", "dns": null, "eab": null, "email": null, "on_demand": {"allowed_hosts": [], "enabled": false, "rate": null}, "renew_before": "30d", "storage": "./verd-state/acme"}` | ACME account settings used by sites with `tls = "auto"`. |
 | `admin` | AdminConfig | `{"listen": "127.0.0.1:2019", "tls": null, "token": null}` | Admin API listener (metrics, health, reload, purge, inspection). |
 | `cache` | object | `{}` | Named cache stores for routes with `cache` enabled. |
-| `include` | [string] | `[]` | Additional files or directories of `*.toml` fragments merged into this configuration, relative to the directory containing this file. Fragment files are loaded in sorted order; scalar conflicts between fragments and the main file are errors. A glob pattern matching no files is a no-op; a missing file or directory is an error. |
+| `include` | [string] |  | Additional files or directories of `*.toml` fragments merged into this configuration, relative to the directory containing this file. Fragment files are loaded in sorted order; scalar conflicts between fragments and the main file are errors. A glob pattern matching no files is a no-op; a missing file or directory is an error. |
 | `limits` | Limits | `{"body_bytes": "10MiB", "header_bytes": "16KiB"}` | Default request limits; individual routes may override. |
 | `log` | LogConfig | `{"access": {"enabled": true, "filter": null, "format": "json", "output": "stdout", "sample": 1.0}, "format": "json", "level": "info", "output": "stderr"}` | Server and access logging. |
-| `server` | ServerConfig | `{"graceful_timeout": "30s", "listen": [{"addr": "0.0.0.0:80", "tls": false}], "max_connections": 65536, "max_connections_per_ip": 256, "security": {"content_type_options": true, "cross_domain_policy": "", "csp": null, "enabled": true, "frame_options": "DENY", "hsts": true, "hsts_max_age": "5months 27days 19h 12m", "hsts_subdomains": false, "referrer_policy": "strict-origin-when-cross-origin"}, "server_header": "verd", "trusted_proxies": []}` | Server-wide settings: listeners, connection limits, shutdown. |
+| `server` | ServerConfig | `{"graceful_timeout": "30s", "listen": [{"addr": "0.0.0.0:80", "tls": false}], "max_connections": 65536, "max_connections_per_ip": 256, "security": {"content_type_options": true, "cross_domain_policy": "", "csp": null, "enabled": true, "frame_options": "DENY", "hsts": true, "hsts_max_age": "180d", "hsts_subdomains": false, "referrer_policy": "strict-origin-when-cross-origin"}, "server_header": "verd", "trusted_proxies": []}` | Server-wide settings: listeners, connection limits, shutdown. |
 | `site` | [SiteConfig] | `[]` | Virtual sites. Requests are routed by the Host header. |
-| `timeouts` | Timeouts | `{"body_read": "1m", "header_read": "20s", "idle": "1m 15s", "request_deadline": "5m", "send": "1m", "tls_handshake": "10s"}` | Default timeouts; individual routes may override. |
+| `timeouts` | Timeouts | `{"body_read": "1m", "header_read": "20s", "idle": "75s", "request_deadline": "5m", "send": "1m", "tls_handshake": "10s"}` | Default timeouts; individual routes may override. |
 | `upstream` | object | `{}` | Named upstream clusters for reverse proxy routes. |
 
 ## `ServerConfig`
@@ -34,7 +34,7 @@ Server-wide settings.
 | `listen` | [ListenAddrSchema] | `[{"addr": "0.0.0.0:80", "tls": false}]` | Addresses to listen on. Defaults to a single plaintext listener on port 80. Entries are either `"ip:port"` strings or `{ addr = "ip:port", tls = true }` tables to terminate TLS. |
 | `max_connections` | integer | `65536` | Maximum concurrent connections across all listeners. |
 | `max_connections_per_ip` | integer | `256` | Maximum concurrent connections per client IP address. |
-| `security` | SecurityConfig | `{"content_type_options": true, "cross_domain_policy": "", "csp": null, "enabled": true, "frame_options": "DENY", "hsts": true, "hsts_max_age": "5months 27days 19h 12m", "hsts_subdomains": false, "referrer_policy": "strict-origin-when-cross-origin"}` | Baseline security response headers applied to every route. |
+| `security` | SecurityConfig | `{"content_type_options": true, "cross_domain_policy": "", "csp": null, "enabled": true, "frame_options": "DENY", "hsts": true, "hsts_max_age": "180d", "hsts_subdomains": false, "referrer_policy": "strict-origin-when-cross-origin"}` | Baseline security response headers applied to every route. |
 | `server_header` | string | `"verd"` | Value of the `Server` response header; `"off"` or `""` omits it. |
 | `trusted_proxies` | [string] | `[]` | CIDRs whose `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`, `X-Real-IP` and `Forwarded` headers are trusted. Empty: trust none. |
 
@@ -56,7 +56,7 @@ Timeout settings. `0s` disables a timeout.
 |---|---|---|---|
 | `body_read` | string | `"1m"` | Time allowed to read a request body. |
 | `header_read` | string | `"20s"` | Time allowed to read request headers (slowloris protection). |
-| `idle` | string | `"1m 15s"` | Keep-alive idle time between requests on one connection. |
+| `idle` | string | `"75s"` | Keep-alive idle time between requests on one connection. |
 | `request_deadline` | string | `"5m"` | Overall per-request deadline. Set to `0s` for long-lived routes (SSE, WebSocket, long-polling). |
 | `send` | string | `"1m"` | Write-side inactivity deadline: a send that stalls longer than this closes the connection (slow-client/slow-read protection). Progress resets it — large slow downloads are fine. `0s` disables. |
 | `tls_handshake` | string | `"10s"` | TLS handshake deadline. |
@@ -118,7 +118,7 @@ ACME account settings (Let's Encrypt or any RFC 8555 directory).
 | `eab` | ExternalAccountBinding \| null | `null` | External Account Binding for providers that require it. |
 | `email` | string \| null | `null` | Contact email for the ACME account. |
 | `on_demand` | OnDemandAcme | `{"allowed_hosts": [], "enabled": false, "rate": null}` | On-demand issuance for previously unseen hostnames. |
-| `renew_before` | string | `"30days"` | Renew certificates this long before expiry. |
+| `renew_before` | string | `"30d"` | Renew certificates this long before expiry. |
 | `storage` | string | `"./verd-state/acme"` | Directory holding the account key and issued certificates. Must be writable; persists across restarts. |
 
 ## `SiteConfig`
@@ -135,7 +135,7 @@ A virtual site: a set of hosts with routes and optional TLS.
 | `redirect_https` | boolean \| null | `null` | Redirect plaintext HTTP to HTTPS when TLS is enabled; defaults on. Set explicitly `false` only to serve a TLS site on plain HTTP. |
 | `root` | string \| null | `null` | Shorthand for a catch-all static file route rooted here. |
 | `route` | [RouteConfig] | `[]` | Routes, evaluated in order of specificity, not declaration order. |
-| `tls` | SiteTls | `"auto"` | TLS mode: `"auto"` (ACME), `{cert, key}`, `"selfsigned"`, or `"off"`. |
+| `tls` | SiteTls | `"auto"` | TLS mode: `"auto"` (ACME), `{cert, key}`, `"self_signed"`, or `"off"`. |
 | `trusted_proxies` | array \| null | `null` | Per-site override of the trusted proxy CIDR list. |
 
 ## `SiteTls`
@@ -157,15 +157,14 @@ One route: a matcher, one handler, and middleware.
 | field | type | default | description |
 |---|---|---|---|
 | `auth` | AuthConfig \| null | `null` | Authentication configuration. |
-| `cache` | RouteCache \| null | `null` | Response caching. |
-| `compress` | CompressConfig \| null | `null` | Response compression. |
+| `cache` | RouteCacheSchema \| null | `null` | Response caching: a store name (`cache = "main"`) or a table. |
+| `compress` | CompressConfigSchema \| null | `null` | Response compression: `true` for defaults, or a table. |
 | `cors` | CorsConfig \| null | `null` | CORS handling. |
 | `exact` | string \| null | `null` | Match this exact path only. |
 | `ip_allow` | [string] | `[]` | Client CIDRs allowed; others get 403. |
 | `ip_deny` | [string] | `[]` | Client CIDRs denied; they get 403 before allow rules. |
 | `limits` | LimitOverrides \| null | `null` | Per-route limit overrides. |
-| `match` | MatchConditions \| null | `null` | Additional match conditions: methods, headers, query parameters. (`conditions` is accepted as an alias.) |
-| `path` | string \| null | `null` | Alias for `prefix`. |
+| `match` | MatchConditions \| null | `null` | Additional match conditions: methods, headers, query parameters. |
 | `prefix` | string \| null | `null` | Match paths starting with this prefix. Prefix matching is segment-aware: `/api` matches `/api` and `/api/…` but not `/apix`. |
 | `priority` | integer | `0` | Priority among routes that tie on specificity. Higher wins. |
 | `proxy` | ProxyHandler \| null | `null` | Reverse proxy handler. |
@@ -173,7 +172,7 @@ One route: a matcher, one handler, and middleware.
 | `redirect` | RedirectHandler \| null | `null` | Redirect handler. |
 | `regex` | string \| null | `null` | Match paths against this regular expression. Evaluated last; a regex route never overrides a prefix route. |
 | `respond` | RespondHandler \| null | `null` | Fixed response handler. |
-| `response_headers` | HeaderOps \| null | `null` | Response header manipulation applied to this route's responses. (`headers` is accepted as an alias.) |
+| `response_headers` | HeaderOps \| null | `null` | Response header manipulation applied to this route's responses. |
 | `security` | RouteSecurity \| null | `null` | Per-route security-header overrides. |
 | `static` | StaticHandler \| null | `null` | Serve static files. |
 | `timeouts` | TimeoutOverrides \| null | `null` | Per-route timeout overrides (e.g. `0s` deadline for SSE/WebSocket). |
@@ -204,7 +203,7 @@ Fixed response handler.
 | field | type | default | description |
 |---|---|---|---|
 | `body` | string | `""` | Response body (text). `{path}`, `{host}`, `{method}` substitute from the request. |
-| `headers` | object | `{}` | Extra response headers. |
+| `headers` | object | `{}` | Extra response headers — e.g. `content-type = "text/plain"`; the body is text, so pick a non-HTML type when placeholders are used. |
 | `status` | integer | `200` | Status code. |
 
 ## `RedirectHandler`
@@ -224,8 +223,8 @@ Reverse proxy handler.
 
 | field | type | default | description |
 |---|---|---|---|
-| `pass_host` | boolean | `true` | Rewrite the `Host` header to the upstream authority (vs. passing the original host through). |
-| `request_headers` | HeaderOps \| null | `null` | Request header manipulation applied before forwarding upstream. (`headers` is accepted as an alias.) |
+| `host_header` | HostHeader | `"upstream"` | Which `Host` the upstream sees. |
+| `request_headers` | HeaderOps \| null | `null` | Request header manipulation applied before forwarding upstream. |
 | `retries` | RetryPolicy | `{"budget_fraction": 0.2, "max_per_request": 2}` | Retry policy for idempotent requests on connection failure. |
 | `rewrite` | Rewrite \| null | `null` | Path rewriting before forwarding. |
 | `upstream` | UpstreamRef **required** |  | Named upstream (`upstream.name`) or an inline list of upstream URLs. |
@@ -249,8 +248,9 @@ A named cluster of upstream servers.
 | `dns` | UpstreamDns | `{"grace": "1m"}` | DNS re-resolution behaviour for hostname upstreams. |
 | `health` | HealthCheck | `{"active": null, "passive": null}` | Health checking. |
 | `lb` | LoadBalancing | `"round_robin"` | Load balancing algorithm. |
+| `max_connections` | integer | `1024` | Max concurrent connections to a single upstream. |
 | `servers` | [string] | `[]` | Server URLs: `http://host:port`, `https://host:port`, or `h2c://` for cleartext HTTP/2 prior knowledge (typical for gRPC backends). |
-| `timeouts` | UpstreamTimeouts | `{"connect": "5s", "idle": "1m 30s", "max_connections": 1024, "response_header": "30s"}` | Per-upstream timeouts and the per-member connection cap. |
+| `timeouts` | UpstreamTimeouts | `{"connect": "5s", "idle": "90s", "response_header": "30s"}` | Per-upstream timeouts. |
 | `tls` | UpstreamTls | `{"ca": null, "sni": null, "verify": true}` | TLS options for `https://` upstreams. |
 | `unavailable` | UnavailableResponse | `{"body": null, "status": 502}` | Response when no upstream in the cluster is healthy. |
 
@@ -386,7 +386,7 @@ override or disable individual headers via `route.security`.
 | `enabled` | boolean | `true` | Master switch; `false` emits none of these headers. |
 | `frame_options` | string | `"DENY"` | `X-Frame-Options` value, e.g. `"DENY"` or `"SAMEORIGIN"`. Empty string disables the header. |
 | `hsts` | boolean | `true` | `Strict-Transport-Security`, emitted only on TLS responses. |
-| `hsts_max_age` | string | `"5months 27days 19h 12m"` | HSTS `max-age`: `"180d"`, or a bare number of seconds. |
+| `hsts_max_age` | string | `"180d"` | HSTS `max-age`, e.g. `"180d"`. |
 | `hsts_subdomains` | boolean | `false` | Append `includeSubDomains` to the HSTS header. |
 | `referrer_policy` | string | `"strict-origin-when-cross-origin"` | `Referrer-Policy` value. Empty string disables the header. |
 
@@ -403,7 +403,7 @@ Per-route security-header overrides: absent fields inherit the global
 | `enabled` | boolean \| null | `null` | Route-level master switch; absent inherits global `enabled`. |
 | `frame_options` | string \| null | `null` | Override `X-Frame-Options` (`""` disables). |
 | `hsts` | boolean \| null | `null` | Override HSTS on/off for this route. |
-| `hsts_max_age` | string \| null | `null` | Override HSTS `max-age` (`"180d"`, or a bare number of seconds). |
+| `hsts_max_age` | string \| null | `null` | Override HSTS `max-age` (`"180d"`). |
 | `hsts_subdomains` | boolean \| null | `null` | Override `includeSubDomains`. |
 | `referrer_policy` | string \| null | `null` | Override `Referrer-Policy` (`""` disables). |
 
@@ -497,10 +497,15 @@ Cloudflare credentials for `dns-01` (`[acme.dns.cloudflare]`).
 | field | type | default | description |
 |---|---|---|---|
 | `api_base` | string \| null |  | API base URL — override only for tests or API gateways (default `https://api.cloudflare.com/client/v4`). |
-| `api_token` | string **required** |  | API token with `Zone.DNS:Edit` on the zones to validate; zone discovery also needs `Zone.Zone:Read`. Prefer `${env:…}` or `${file:…}` interpolation over a literal token. |
+| `api_token` | string **required** |  | API token with `Zone.DNS:Edit` on the zones to validate; zone discovery also needs `Zone.Zone:Read`. Prefer `${VAR}` or `${file:…}` interpolation over a literal token. |
 | `propagation_timeout` | string | `"2m"` | How long to wait for TXT records to appear in DNS before the CA is told to validate (default `2m`). |
 | `resolver` | string \| null |  | Nameserver (`ip` or `ip:port`) to poll while waiting for TXT propagation — e.g. the zone's authoritative NS or a fast public resolver. Defaults to the system resolver. |
 | `zone_id` | string \| null |  | Zone ID to pin all records to. When unset the zone is discovered per hostname by walking up its labels via the API. |
+
+## `CompressConfigSchema`
+
+Schema shape for `route.compress` (`true` or a table).
+
 
 ## `Duration`
 
@@ -522,6 +527,11 @@ External Account Binding credentials.
 |---|---|---|---|
 | `key` | string **required** |  | Base64url-encoded HMAC key. |
 | `key_id` | string **required** |  | EAB key identifier. |
+
+## `HostHeader`
+
+Which `Host` value a proxied request carries upstream.
+
 
 ## `LimitOverrides`
 
@@ -570,9 +580,12 @@ On-demand certificate issuance.
 
 ## `PrefixPair`
 
-Prefix replacement: `{ from = "/api", to = "/v1" }`. The legacy
-two-element array `["/api", "/v1"]` is also accepted.
+Prefix replacement: `{ from = "/api", to = "/v1" }`.
 
+| field | type | default | description |
+|---|---|---|---|
+| `from` | string **required** |  | Existing path prefix to replace. |
+| `to` | string **required** |  | Replacement path prefix. |
 
 ## `RateSpec`
 
@@ -592,6 +605,11 @@ Regex path rewrite: `pattern` → `replace`.
 |---|---|---|---|
 | `pattern` | string **required** |  | Regular expression matched against the path. |
 | `replace` | string **required** |  | Replacement, may contain `$1`-style capture references. |
+
+## `RouteCacheSchema`
+
+Schema shape for `route.cache` (`"store-name"` or a table).
+
 
 ## `TimeoutOverrides`
 
@@ -624,14 +642,12 @@ DNS re-resolution for hostname upstreams.
 
 ## `UpstreamTimeouts`
 
-Per-upstream timeouts and the per-member connection cap.
-(`[upstream.*.limits]` is accepted as an alias.)
+Per-upstream timeouts.
 
 | field | type | default | description |
 |---|---|---|---|
 | `connect` | string | `"5s"` | TCP/TLS connect timeout. |
-| `idle` | string | `"1m 30s"` | Idle keep-alive time for pooled upstream connections. |
-| `max_connections` | integer | `1024` | Max concurrent connections to a single upstream. |
+| `idle` | string | `"90s"` | Idle keep-alive time for pooled upstream connections. |
 | `response_header` | string | `"30s"` | Time waiting for upstream response headers. |
 
 ## `UpstreamTls`

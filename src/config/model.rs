@@ -10,10 +10,49 @@ use std::time::Duration;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::config::values::{ByteSize, RateSpec, secs_or_duration};
+use crate::config::values::{ByteSize, RateSpec, duration};
 
 fn default_true() -> bool {
     true
+}
+
+/// `route.cache` accepts a store name (`cache = "main"`) or a table.
+fn opt_route_cache<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<RouteCache>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Name(String),
+        Full(RouteCache),
+    }
+    let r = Option::<Repr>::deserialize(d).map_err(|_| {
+        serde::de::Error::custom("cache must be a store name or a { store, … } table")
+    })?;
+    Ok(r.map(|r| match r {
+        Repr::Name(store) => RouteCache {
+            store,
+            ..Default::default()
+        },
+        Repr::Full(c) => c,
+    }))
+}
+
+/// `route.compress` accepts `true` (enable with defaults) or a table.
+fn opt_compress<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<CompressConfig>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        On(bool),
+        Full(CompressConfig),
+    }
+    let r = Option::<Repr>::deserialize(d)
+        .map_err(|_| serde::de::Error::custom("compress must be true or a table"))?;
+    Ok(r.and_then(|r| match r {
+        Repr::On(true) => Some(CompressConfig::default()),
+        Repr::On(false) => None,
+        Repr::Full(c) => Some(c),
+    }))
 }
 
 /// Root configuration for a verdigris instance.
@@ -25,6 +64,7 @@ pub struct Config {
     /// Fragment files are loaded in sorted order; scalar conflicts between
     /// fragments and the main file are errors. A glob pattern matching no
     /// files is a no-op; a missing file or directory is an error.
+    #[serde(skip_serializing)]
     pub include: Vec<String>,
     /// Server-wide settings: listeners, connection limits, shutdown.
     pub server: ServerConfig,
@@ -57,7 +97,7 @@ pub struct ServerConfig {
     pub listen: Vec<ListenAddr>,
     /// Time to wait for in-flight requests during shutdown or reload before
     /// connections are closed.
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "duration")]
     #[schemars(with = "String")]
     pub graceful_timeout: Duration,
     /// CIDRs whose `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`,
@@ -97,8 +137,8 @@ pub struct SecurityConfig {
     pub enabled: bool,
     /// `Strict-Transport-Security`, emitted only on TLS responses.
     pub hsts: bool,
-    /// HSTS `max-age`: `"180d"`, or a bare number of seconds.
-    #[serde(with = "secs_or_duration")]
+    /// HSTS `max-age`, e.g. `"180d"`.
+    #[serde(with = "duration")]
     #[schemars(with = "String")]
     pub hsts_max_age: Duration,
     /// Append `includeSubDomains` to the HSTS header.
@@ -141,8 +181,8 @@ pub struct RouteSecurity {
     pub enabled: Option<bool>,
     /// Override HSTS on/off for this route.
     pub hsts: Option<bool>,
-    /// Override HSTS `max-age` (`"180d"`, or a bare number of seconds).
-    #[serde(with = "secs_or_duration::option")]
+    /// Override HSTS `max-age` (`"180d"`).
+    #[serde(with = "duration::option")]
     #[schemars(with = "Option<String>")]
     pub hsts_max_age: Option<Duration>,
     /// Override `includeSubDomains`.
@@ -175,8 +215,8 @@ impl<'de> Deserialize<'de> for ListenAddr {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Table {
-            #[serde(default = "default_addr")]
-            addr: SocketAddr,
+            #[serde(default)]
+            addr: Option<SocketAddr>,
             #[serde(default)]
             tls: bool,
         }
@@ -186,18 +226,26 @@ impl<'de> Deserialize<'de> for ListenAddr {
             Addr(SocketAddr),
             Table(Table),
         }
-        match Repr::deserialize(d)? {
+        match Repr::deserialize(d).map_err(|_| {
+            serde::de::Error::custom(
+                "listen entries must be \"ip:port\" strings or { addr, tls } tables",
+            )
+        })? {
             Repr::Addr(addr) => Ok(Self { addr, tls: false }),
             Repr::Table(t) => Ok(Self {
-                addr: t.addr,
+                // `tls = true` alone implies the HTTPS port — ending up
+                // serving TLS on :80 is never what the operator meant.
+                addr: t.addr.unwrap_or_else(|| {
+                    if t.tls {
+                        SocketAddr::from(([0, 0, 0, 0], 443))
+                    } else {
+                        ListenAddr::default().addr
+                    }
+                }),
                 tls: t.tls,
             }),
         }
     }
-}
-
-fn default_addr() -> SocketAddr {
-    ListenAddr::default().addr
 }
 
 /// Schema shape for a `server.listen` entry (`"ip:port"` or `{addr, tls}`).
@@ -208,7 +256,7 @@ pub enum ListenAddrSchema {
     Addr(String),
     /// `{ addr = "ip:port", tls = true }` — both optional.
     Full {
-        /// `IP:port` to bind (default `0.0.0.0:80`).
+        /// `IP:port` to bind (default `0.0.0.0:80`, or `:443` when `tls`).
         addr: Option<String>,
         /// Terminate TLS on this listener (default `false`).
         tls: Option<bool>,
@@ -229,30 +277,30 @@ impl Default for ListenAddr {
 #[serde(default, deny_unknown_fields)]
 pub struct Timeouts {
     /// TLS handshake deadline.
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "duration")]
     #[schemars(with = "String")]
     pub tls_handshake: Duration,
     /// Time allowed to read request headers (slowloris protection).
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "duration")]
     #[schemars(with = "String")]
     pub header_read: Duration,
     /// Time allowed to read a request body.
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "duration")]
     #[schemars(with = "String")]
     pub body_read: Duration,
     /// Keep-alive idle time between requests on one connection.
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "duration")]
     #[schemars(with = "String")]
     pub idle: Duration,
     /// Write-side inactivity deadline: a send that stalls longer than
     /// this closes the connection (slow-client/slow-read protection).
     /// Progress resets it — large slow downloads are fine. `0s` disables.
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "duration")]
     #[schemars(with = "String")]
     pub send: Duration,
     /// Overall per-request deadline. Set to `0s` for long-lived routes
     /// (SSE, WebSocket, long-polling).
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "duration")]
     #[schemars(with = "String")]
     pub request_deadline: Duration,
 }
@@ -442,7 +490,7 @@ pub struct AcmeConfig {
     /// External Account Binding for providers that require it.
     pub eab: Option<ExternalAccountBinding>,
     /// Renew certificates this long before expiry.
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "duration")]
     #[schemars(with = "String")]
     pub renew_before: Duration,
     /// Preferred challenge type: `http-01`, `tls-alpn-01`, `dns-01`
@@ -464,15 +512,15 @@ pub struct AcmeConfig {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub enum AcmeChallenge {
     /// `http-01` — answer challenges over HTTP on port 80.
-    #[serde(rename = "http-01", alias = "http01")]
+    #[serde(rename = "http-01")]
     Http01,
     /// `tls-alpn-01` — answer challenges inside the TLS handshake.
-    #[serde(rename = "tls-alpn-01", alias = "tls-alpn01")]
+    #[serde(rename = "tls-alpn-01")]
     TlsAlpn01,
     /// `dns-01` — publish `_acme-challenge` TXT records via a DNS
     /// provider API (`acme.dns`). Required for wildcard certificates;
     /// works with no ACME-reachable ports at all.
-    #[serde(rename = "dns-01", alias = "dns01")]
+    #[serde(rename = "dns-01")]
     Dns01,
     /// `http-01` when a plaintext listener exists, else `tls-alpn-01`.
     #[serde(rename = "auto")]
@@ -510,7 +558,7 @@ pub enum AcmeDns {
 #[serde(deny_unknown_fields)]
 pub struct CloudflareDns {
     /// API token with `Zone.DNS:Edit` on the zones to validate; zone
-    /// discovery also needs `Zone.Zone:Read`. Prefer `${env:…}` or
+    /// discovery also needs `Zone.Zone:Read`. Prefer `${VAR}` or
     /// `${file:…}` interpolation over a literal token.
     pub api_token: String,
     /// Zone ID to pin all records to. When unset the zone is
@@ -525,7 +573,7 @@ pub struct CloudflareDns {
     pub resolver: Option<String>,
     /// How long to wait for TXT records to appear in DNS before the CA
     /// is told to validate (default `2m`).
-    #[serde(default = "default_dns_propagation_timeout", with = "humantime_serde")]
+    #[serde(default = "default_dns_propagation_timeout", with = "duration")]
     #[schemars(with = "String")]
     pub propagation_timeout: Duration,
 }
@@ -558,7 +606,7 @@ pub struct OnDemandAcme {
 }
 
 /// A named cluster of upstream servers.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct UpstreamConfig {
     /// Server URLs: `http://host:port`, `https://host:port`, or `h2c://` for
@@ -568,15 +616,36 @@ pub struct UpstreamConfig {
     pub lb: LoadBalancing,
     /// Health checking.
     pub health: HealthCheck,
-    /// Per-upstream timeouts and the per-member connection cap.
-    #[serde(alias = "limits")]
+    /// Per-upstream timeouts.
     pub timeouts: UpstreamTimeouts,
+    /// Max concurrent connections to a single upstream.
+    #[serde(default = "default_upstream_max_connections")]
+    pub max_connections: usize,
     /// DNS re-resolution behaviour for hostname upstreams.
     pub dns: UpstreamDns,
     /// TLS options for `https://` upstreams.
     pub tls: UpstreamTls,
     /// Response when no upstream in the cluster is healthy.
     pub unavailable: UnavailableResponse,
+}
+
+impl Default for UpstreamConfig {
+    fn default() -> Self {
+        Self {
+            servers: Vec::new(),
+            lb: LoadBalancing::default(),
+            health: HealthCheck::default(),
+            timeouts: UpstreamTimeouts::default(),
+            max_connections: default_upstream_max_connections(),
+            dns: UpstreamDns::default(),
+            tls: UpstreamTls::default(),
+            unavailable: UnavailableResponse::default(),
+        }
+    }
+}
+
+fn default_upstream_max_connections() -> usize {
+    1024
 }
 
 /// Response served when every upstream in a cluster is unhealthy.
@@ -604,13 +673,13 @@ impl Default for UnavailableResponse {
 pub enum LoadBalancing {
     /// Rotate through healthy upstreams in order.
     #[default]
-    #[serde(alias = "round-robin", alias = "roundrobin")]
+    #[serde(alias = "round-robin")]
     RoundRobin,
     /// Send to the healthy upstream with fewest in-flight requests.
-    #[serde(alias = "least-conn", alias = "leastconn", alias = "least_conns")]
+    #[serde(alias = "least-conn")]
     LeastConn,
     /// Hash the client IP so it consistently reaches the same upstream.
-    #[serde(alias = "ip-hash", alias = "iphash")]
+    #[serde(alias = "ip-hash")]
     IpHash,
 }
 
@@ -631,11 +700,11 @@ pub struct ActiveHealth {
     /// Path to GET on each upstream, e.g. `/healthz`.
     pub path: String,
     /// Probe interval.
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "duration")]
     #[schemars(with = "String")]
     pub interval: Duration,
     /// Per-probe timeout.
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "duration")]
     #[schemars(with = "String")]
     pub timeout: Duration,
     /// Expected HTTP status. The upstream is healthy only on an exact match.
@@ -660,7 +729,7 @@ pub struct PassiveHealth {
     /// Consecutive failures before an upstream is marked unhealthy.
     pub failures: u32,
     /// How long an upstream stays out of rotation before re-admission.
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "duration")]
     #[schemars(with = "String")]
     pub cooldown: Duration,
 }
@@ -674,25 +743,22 @@ impl Default for PassiveHealth {
     }
 }
 
-/// Per-upstream timeouts and the per-member connection cap.
-/// (`[upstream.*.limits]` is accepted as an alias.)
+/// Per-upstream timeouts.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct UpstreamTimeouts {
     /// TCP/TLS connect timeout.
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "duration")]
     #[schemars(with = "String")]
     pub connect: Duration,
     /// Time waiting for upstream response headers.
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "duration")]
     #[schemars(with = "String")]
     pub response_header: Duration,
     /// Idle keep-alive time for pooled upstream connections.
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "duration")]
     #[schemars(with = "String")]
     pub idle: Duration,
-    /// Max concurrent connections to a single upstream.
-    pub max_connections: usize,
 }
 
 impl Default for UpstreamTimeouts {
@@ -701,7 +767,6 @@ impl Default for UpstreamTimeouts {
             connect: Duration::from_secs(5),
             response_header: Duration::from_secs(30),
             idle: Duration::from_secs(90),
-            max_connections: 1024,
         }
     }
 }
@@ -712,7 +777,7 @@ impl Default for UpstreamTimeouts {
 pub struct UpstreamDns {
     /// After DNS records disappear, keep last-known-good addresses for this
     /// long before removing the upstream from rotation.
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "duration")]
     #[schemars(with = "String")]
     pub grace: Duration,
 }
@@ -809,13 +874,32 @@ pub enum EvictionPolicy {
 }
 
 /// TLS mode for a site.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(untagged)]
 pub enum SiteTls {
     /// A mode keyword.
     Mode(TlsMode),
     /// Explicit certificate files.
     Manual(ManualTls),
+}
+
+impl<'de> Deserialize<'de> for SiteTls {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Mode(TlsMode),
+            Manual(ManualTls),
+        }
+        match Repr::deserialize(d).map_err(|_| {
+            serde::de::Error::custom(
+                "tls must be \"auto\", \"off\", \"self_signed\", or a { cert, key } table",
+            )
+        })? {
+            Repr::Mode(m) => Ok(Self::Mode(m)),
+            Repr::Manual(m) => Ok(Self::Manual(m)),
+        }
+    }
 }
 
 impl Default for SiteTls {
@@ -826,7 +910,7 @@ impl Default for SiteTls {
 
 /// TLS mode keyword.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum TlsMode {
     /// Obtain and renew certificates automatically via ACME.
     #[default]
@@ -834,7 +918,7 @@ pub enum TlsMode {
     /// No TLS for this site.
     Off,
     /// Generate a self-signed certificate (local development).
-    #[serde(alias = "self-signed", alias = "self_signed")]
+    #[serde(alias = "self-signed")]
     SelfSigned,
 }
 
@@ -849,7 +933,7 @@ pub struct SiteConfig {
     pub hosts: Vec<String>,
     /// Serve requests whose Host matches no site.
     pub default: bool,
-    /// TLS mode: `"auto"` (ACME), `{cert, key}`, `"selfsigned"`, or `"off"`.
+    /// TLS mode: `"auto"` (ACME), `{cert, key}`, `"self_signed"`, or `"off"`.
     pub tls: SiteTls,
     /// Redirect plaintext HTTP to HTTPS when TLS is enabled; defaults on.
     /// Set explicitly `false` only to serve a TLS site on plain HTTP.
@@ -873,8 +957,6 @@ pub struct SiteConfig {
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct RouteConfig {
-    /// Alias for `prefix`.
-    pub path: Option<String>,
     /// Match this exact path only.
     pub exact: Option<String>,
     /// Match paths starting with this prefix. Prefix matching is
@@ -884,8 +966,7 @@ pub struct RouteConfig {
     /// route never overrides a prefix route.
     pub regex: Option<String>,
     /// Additional match conditions: methods, headers, query parameters.
-    /// (`conditions` is accepted as an alias.)
-    #[serde(rename = "match", alias = "conditions")]
+    #[serde(rename = "match")]
     pub match_: Option<MatchConditions>,
     /// Priority among routes that tie on specificity. Higher wins.
     pub priority: i32,
@@ -912,13 +993,15 @@ pub struct RouteConfig {
     pub rate_limit: Option<RateLimitConfig>,
     /// CORS handling.
     pub cors: Option<CorsConfig>,
-    /// Response caching.
+    /// Response caching: a store name (`cache = "main"`) or a table.
+    #[serde(deserialize_with = "opt_route_cache")]
+    #[schemars(with = "Option<RouteCacheSchema>")]
     pub cache: Option<RouteCache>,
-    /// Response compression.
+    /// Response compression: `true` for defaults, or a table.
+    #[serde(deserialize_with = "opt_compress")]
+    #[schemars(with = "Option<CompressConfigSchema>")]
     pub compress: Option<CompressConfig>,
     /// Response header manipulation applied to this route's responses.
-    /// (`headers` is accepted as an alias.)
-    #[serde(alias = "headers")]
     pub response_headers: Option<HeaderOps>,
     /// Per-route security-header overrides.
     pub security: Option<RouteSecurity>,
@@ -933,25 +1016,25 @@ pub struct RouteConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct TimeoutOverrides {
     /// See [`Timeouts::header_read`].
-    #[serde(with = "humantime_serde::option")]
+    #[serde(with = "duration::option")]
     #[schemars(with = "Option<String>")]
     pub header_read: Option<Duration>,
     /// See [`Timeouts::body_read`].
-    #[serde(with = "humantime_serde::option")]
+    #[serde(with = "duration::option")]
     #[schemars(with = "Option<String>")]
     pub body_read: Option<Duration>,
     /// See [`Timeouts::idle`].
-    #[serde(with = "humantime_serde::option")]
+    #[serde(with = "duration::option")]
     #[schemars(with = "Option<String>")]
     pub idle: Option<Duration>,
     /// See [`Timeouts::send`]; also the inactivity bound applied to
     /// upgrade tunnels (e.g. WebSocket) — raise it or set `0s` for
     /// long-idle tunnels.
-    #[serde(with = "humantime_serde::option")]
+    #[serde(with = "duration::option")]
     #[schemars(with = "Option<String>")]
     pub send: Option<Duration>,
     /// See [`Timeouts::request_deadline`]; set `0s` for long-lived streams.
-    #[serde(with = "humantime_serde::option")]
+    #[serde(with = "duration::option")]
     #[schemars(with = "Option<String>")]
     pub request_deadline: Option<Duration>,
 }
@@ -1051,16 +1134,25 @@ pub struct ProxyHandler {
     #[serde(default)]
     pub rewrite: Option<Rewrite>,
     /// Request header manipulation applied before forwarding upstream.
-    /// (`headers` is accepted as an alias.)
-    #[serde(default, alias = "headers")]
+    #[serde(default)]
     pub request_headers: Option<HeaderOps>,
     /// Retry policy for idempotent requests on connection failure.
     #[serde(default)]
     pub retries: RetryPolicy,
-    /// Rewrite the `Host` header to the upstream authority (vs. passing the
-    /// original host through).
-    #[serde(default = "default_true")]
-    pub pass_host: bool,
+    /// Which `Host` the upstream sees.
+    #[serde(default)]
+    pub host_header: HostHeader,
+}
+
+/// Which `Host` value a proxied request carries upstream.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HostHeader {
+    /// Rewrite `Host` to the upstream authority (default).
+    #[default]
+    Upstream,
+    /// Pass the client's `Host` through unchanged.
+    Original,
 }
 
 /// Upstream reference: a name, a single URL (`"http://app:9000"`), or an
@@ -1082,7 +1174,9 @@ impl<'de> Deserialize<'de> for UpstreamRef {
             Name(String),
             Urls(Vec<String>),
         }
-        match Repr::deserialize(d)? {
+        match Repr::deserialize(d).map_err(|_| {
+            serde::de::Error::custom("upstream must be a cluster name, URL, or list of URLs")
+        })? {
             // `"http://…"`/`"h2c://…"` reads as a one-element URL list;
             // a bare word is a cluster name.
             Repr::Name(s) if s.contains("://") => Ok(Self::Urls(vec![s])),
@@ -1104,29 +1198,38 @@ pub struct Rewrite {
     pub regex: Option<RegexRewrite>,
 }
 
-/// Prefix replacement: `{ from = "/api", to = "/v1" }`. The legacy
-/// two-element array `["/api", "/v1"]` is also accepted.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(untagged)]
-pub enum PrefixPair {
-    /// `{ from = "…", to = "…" }`.
-    Named {
-        /// Existing path prefix to replace.
-        from: String,
-        /// Replacement path prefix.
-        to: String,
-    },
-    /// `["/from", "/to"]` — first element is `from`, second is `to`.
-    Tuple(String, String),
+/// Prefix replacement: `{ from = "/api", to = "/v1" }`.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct PrefixPair {
+    /// Existing path prefix to replace.
+    pub from: String,
+    /// Replacement path prefix.
+    pub to: String,
+}
+
+impl<'de> Deserialize<'de> for PrefixPair {
+    // map-only: the legacy `["/a", "/b"]` positional form is rejected
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Named {
+            from: String,
+            to: String,
+        }
+        let t = toml::Table::deserialize(d)?;
+        Named::deserialize(toml::Value::Table(t))
+            .map(|n| Self {
+                from: n.from,
+                to: n.to,
+            })
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 impl PrefixPair {
     /// Split into `(from, to)`.
     pub fn pair(&self) -> (&str, &str) {
-        match self {
-            Self::Named { from, to } => (from, to),
-            Self::Tuple(f, t) => (f, t),
-        }
+        (&self.from, &self.to)
     }
 }
 
@@ -1196,7 +1299,8 @@ pub struct RespondHandler {
     /// Response body (text). `{path}`, `{host}`, `{method}` substitute from
     /// the request.
     pub body: String,
-    /// Extra response headers.
+    /// Extra response headers — e.g. `content-type = "text/plain"`; the
+    /// body is text, so pick a non-HTML type when placeholders are used.
     pub headers: BTreeMap<String, String>,
 }
 
@@ -1315,7 +1419,7 @@ pub struct CorsConfig {
     /// Allow credentials (cookies, Authorization).
     pub credentials: bool,
     /// Preflight cache duration.
-    #[serde(with = "humantime_serde::option")]
+    #[serde(with = "duration::option")]
     #[schemars(with = "Option<String>")]
     pub max_age: Option<Duration>,
 }
@@ -1328,19 +1432,19 @@ pub struct RouteCache {
     pub store: String,
     /// TTL override for responses without explicit freshness. Otherwise
     /// `Cache-Control`/`Expires` semantics apply.
-    #[serde(with = "humantime_serde::option", default)]
+    #[serde(with = "duration::option", default)]
     #[schemars(with = "Option<String>")]
     pub ttl: Option<Duration>,
     /// Serve stale while revalidating in the background, for this long.
-    #[serde(with = "humantime_serde::option", default)]
+    #[serde(with = "duration::option", default)]
     #[schemars(with = "Option<String>")]
     pub stale_while_revalidate: Option<Duration>,
     /// Serve stale on upstream error for this long.
-    #[serde(with = "humantime_serde::option", default)]
+    #[serde(with = "duration::option", default)]
     #[schemars(with = "Option<String>")]
     pub stale_if_error: Option<Duration>,
     /// Short TTL used for error responses (negative caching).
-    #[serde(with = "humantime_serde", default = "RouteCache::default_negative_ttl")]
+    #[serde(with = "duration", default = "RouteCache::default_negative_ttl")]
     #[schemars(with = "String")]
     pub negative_ttl: Duration,
     /// Requests that bypass the cache.
@@ -1374,6 +1478,16 @@ impl RouteCache {
     fn default_negative_ttl() -> Duration {
         Duration::from_secs(10)
     }
+}
+
+/// Schema shape for `route.cache` (`"store-name"` or a table).
+#[derive(JsonSchema)]
+#[schemars(untagged)]
+pub enum RouteCacheSchema {
+    /// `"store-name"` — cache via `[cache.<name>]` with default settings.
+    Store(String),
+    /// Full table form.
+    Full(RouteCache),
 }
 
 /// Cache bypass rules. Requests carrying `Authorization` bypass by default
@@ -1445,6 +1559,16 @@ impl Default for CompressConfig {
     }
 }
 
+/// Schema shape for `route.compress` (`true` or a table).
+#[derive(JsonSchema)]
+#[schemars(untagged)]
+pub enum CompressConfigSchema {
+    /// `compress = true` — enable with default settings.
+    Flag(bool),
+    /// Full table form.
+    Full(CompressConfig),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1475,14 +1599,19 @@ mod tests {
 
     #[test]
     fn listen_table_defaults_addr() {
-        // `{ tls = true }` alone selects TLS on the default listener —
-        // addr defaults like the pre-untagged-table shape did
+        // `{ tls = true }` alone selects TLS on the HTTPS port —
+        // TLS on :80 is never what the operator meant
         let l: ListenAddr = toml::from_str("tls = true\n").unwrap();
-        assert_eq!(l.addr, SocketAddr::from(([0, 0, 0, 0], 80)));
+        assert_eq!(l.addr, SocketAddr::from(([0, 0, 0, 0], 443)));
         assert!(l.tls);
 
         let l: ListenAddr = toml::from_str("addr = \"127.0.0.1:8080\"\n").unwrap();
         assert_eq!(l.addr, SocketAddr::from(([127, 0, 0, 1], 8080)));
+        assert!(!l.tls);
+
+        // an empty table is a plaintext :80 listener
+        let l: ListenAddr = toml::from_str("").unwrap();
+        assert_eq!(l.addr, SocketAddr::from(([0, 0, 0, 0], 80)));
         assert!(!l.tls);
     }
 

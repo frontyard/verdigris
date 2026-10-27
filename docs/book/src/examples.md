@@ -4,7 +4,7 @@ Each example is a complete `verd.toml` — copy it, replace the domains
 and paths, check it with `verd validate`, then `verd run`. The HTTPS
 examples assume DNS already resolves to the machine and ports 80 and
 443 are reachable; drop the `[acme]` section and use `tls = "off"` or
-`"selfsigned"` where that's not true.
+`"self_signed"` where that's not true.
 
 ## Static site with automatic HTTPS
 
@@ -46,7 +46,7 @@ hosts = ["app.example.com"]
 tls = "auto"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 static = { root = "/var/www/app/dist", spa = true,
            cache_control = { "/assets/*" = "public, max-age=31536000, immutable" } }
 ```
@@ -93,7 +93,7 @@ proxy = { upstream = "http://127.0.0.1:3000",
           rewrite = { strip_prefix = "/api" } }
 
 [[site.route]]
-path = "/"
+prefix = "/"
 static = { root = "/var/www/site", spa = true }
 ```
 
@@ -114,6 +114,7 @@ email = "ops@example.com"
 servers = ["http://10.0.0.11:8080", "http://10.0.0.12:8080",
            "http://10.0.0.13:8080"]
 lb = "least_conn"                 # round_robin | least_conn | ip_hash
+max_connections = 256             # per-member connection cap
 
 [upstream.api.health.active]      # periodic probes on each member
 path = "/healthz"
@@ -127,7 +128,6 @@ cooldown = "30s"
 [upstream.api.timeouts]
 connect = "3s"
 response_header = "10s"
-max_connections = 256
 
 [[site]]
 hosts = ["api.example.com"]
@@ -167,7 +167,7 @@ default = true
 tls = "off"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = { status = 404, body = "unknown host" }
 ```
 
@@ -196,7 +196,7 @@ tls = "auto"
 redirect_host = "example.com"     # http://www… → https://example.com…
 
 [[site.route]]
-path = "/"
+prefix = "/"
 redirect = { to = "https://example.com{path}{query}", status = 308 }
 ```
 
@@ -209,7 +209,7 @@ hosts = ["old.example.com", "www.old.example.com"]
 tls = "auto"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 redirect = { to = "https://new.example.com{path}{query}", status = 301 }
 ```
 
@@ -256,7 +256,7 @@ hosts = ["grafana.internal.example"]
 tls = "auto"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 proxy = { upstream = "http://10.0.0.5:3000" }
 ip_allow = ["10.0.0.0/8", "192.168.0.0/16"]
 auth = { basic = { realm = "ops",
@@ -327,7 +327,7 @@ hosts = ["cdn.example.com"]
 tls = "auto"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 proxy = { upstream = "app" }
 cache = { store = "main", stale_while_revalidate = "30s",
           stale_if_error = "1h" }
@@ -354,7 +354,7 @@ exact = "/healthz"
 respond = { status = 200, body = "ok" }
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = { status = 503, body = "back in a few minutes",
             headers = { "retry-after" = "300" } }
 ```
@@ -378,7 +378,7 @@ root = "./public"
 ```
 
 To test HTTPS locally swap the listener for
-`{ addr = "127.0.0.1:8443", tls = true }` and set `tls = "selfsigned"`
+`{ addr = "127.0.0.1:8443", tls = true }` and set `tls = "self_signed"`
 on the site — a throwaway certificate is generated at boot.
 
 ## Splitting a large config

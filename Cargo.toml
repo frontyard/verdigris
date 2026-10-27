@@ -128,6 +128,7 @@ time = { version = "0.3", features = ["formatting"] }
 
 # CLI
 clap = { version = "4", features = ["derive", "cargo", "env"] }
+serde_path_to_error = "0.1.20"
 
 [[bench]]
 name = "hot_paths"

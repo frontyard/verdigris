@@ -84,12 +84,7 @@ pub fn build(
         return Ok(Handler::Redirect(Redirect::build(r, site)?));
     }
     if let Some(r) = &route.static_files {
-        let prefix = route
-            .prefix
-            .as_ref()
-            .or(route.path.as_ref())
-            .cloned()
-            .unwrap_or_default();
+        let prefix = route.prefix.clone().unwrap_or_default();
         return Ok(Handler::Static(Static::build(r, &prefix, site)?));
     }
     if let Some(p) = &route.proxy {
@@ -319,7 +314,7 @@ mod tests {
     fn build_dispatches_and_rejects_missing() {
         // no handler configured
         let route = cfg::RouteConfig {
-            path: Some("/x".into()),
+            prefix: Some("/x".into()),
             ..Default::default()
         };
         let empty = crate::config::model::Config::default();
@@ -331,7 +326,7 @@ mod tests {
 
         // respond arm
         let route = cfg::RouteConfig {
-            path: Some("/x".into()),
+            prefix: Some("/x".into()),
             respond: Some(cfg::RespondHandler {
                 status: 200,
                 body: "ok".into(),

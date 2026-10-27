@@ -765,7 +765,7 @@ tier = "ram"
 hosts = ["x"]
 tls = "off"
 [[site.route]]
-path = "/p"
+prefix = "/p"
 respond = { status = 200, body = "hi", headers = { "cache-control" = "max-age=60", "etag" = "\"v1\"" } }
 cache = { store = "c" }
 "#;
@@ -933,7 +933,7 @@ tier = "ram"
 hosts = ["x"]
 tls = "off"
 [[site.route]]
-path = "/p"
+prefix = "/p"
 respond = { status = 200, body = "hi" }
 cache = { store = "c", bypass = { cookies = ["session"], headers = ["x-skip"], paths = ["/p"] } }
 "#;
@@ -960,7 +960,7 @@ tier = "ram"
 hosts = ["x"]
 tls = "off"
 [[site.route]]
-path = "/p"
+prefix = "/p"
 respond = { status = 200, body = "hi" }
 cache = { store = "c", bypass = { cookies = ["session"] } }
 "#,
@@ -993,7 +993,7 @@ tier = "ram"
 hosts = ["x"]
 tls = "off"
 [[site.route]]
-path = "/p"
+prefix = "/p"
 respond = { status = 200, body = "hi" }
 cache = { store = "c", bypass = { cookies = ["*"] } }
 "#,
@@ -1015,7 +1015,7 @@ tier = "ram"
 hosts = ["x"]
 tls = "off"
 [[site.route]]
-path = "/p"
+prefix = "/p"
 respond = { status = 200, body = "hi" }
 cache = { store = "c", bypass = { methods = ["get"] } }
 "#,
@@ -1078,7 +1078,7 @@ tier = "ram"
 hosts = ["x"]
 tls = "off"
 [[site.route]]
-path = "/p"
+prefix = "/p"
 respond = { status = 500, body = "boom" }
 cache = { store = "c" }
 "#;
@@ -1117,7 +1117,7 @@ tier = "ram"
 hosts = ["x"]
 tls = "off"
 [[site.route]]
-path = "/p"
+prefix = "/p"
 respond = { status = 304, headers = { "etag" = "\"v2\"", "cache-control" = "max-age=600" } }
 cache = { store = "c" }
 "#;
@@ -1152,7 +1152,7 @@ tier = "ram"
 hosts = ["x"]
 tls = "off"
 [[site.route]]
-path = "/p"
+prefix = "/p"
 respond = { status = 200, body = "hi", headers = { "cache-control" = "no-store" } }
 cache = { store = "c" }
 "#;
@@ -1265,7 +1265,7 @@ tier = "ram"
 hosts = ["x"]
 tls = "off"
 [[site.route]]
-path = "/p"
+prefix = "/p"
 respond = { status = 200, body = "hi", headers = { "cache-control" = "max-age=60" } }
 cache = { store = "c", vary_headers = ["x-tenant"] }
 "#;

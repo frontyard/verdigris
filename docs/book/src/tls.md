@@ -18,7 +18,7 @@ the file and new handshakes use it, no restart.
 ## Self-signed (dev)
 
 ```toml
-tls = "selfsigned"   # generates a throwaway cert per host at boot
+tls = "self_signed"   # generates a throwaway cert per host at boot
 ```
 
 ## ACME — automatic certificates
@@ -52,7 +52,7 @@ tls = "auto"
 challenge = "dns-01"
 
 [acme.dns.cloudflare]
-api_token = "${env:CF_API_TOKEN}"   # Zone.DNS:Edit + Zone.Zone:Read
+api_token = "${CF_API_TOKEN}"       # Zone.DNS:Edit + Zone.Zone:Read
 # zone_id = "..."                   # optional — pins one zone
 # resolver = "1.1.1.1"              # optional propagation-check NS
 # propagation_timeout = "2m"
@@ -67,7 +67,7 @@ waits for them to appear in public DNS, then tells the CA to validate
 and deletes the records afterwards. Zones are discovered automatically
 by walking up each hostname's labels (`zone_id` pins one instead), so
 sites spanning multiple Cloudflare zones just work. The token supports
-`${env:}`/`${file:}` interpolation like every other config string —
+`${VAR}`/`${file:}` interpolation like every other config string —
 prefer it over a literal so the config file stays non-sensitive.
 
 ## HTTP→HTTPS and security headers

@@ -31,8 +31,11 @@ impl TlsRuntime {
     /// Build certificates for every site that needs them:
     /// `manual` → load PEMs (+watch), `selfsigned` → generate, `auto` →
     /// deferred to the ACME phase (nothing is inserted yet). Returns `None`
-    /// when no TLS listeners exist.
-    pub fn build(config: &cfg::Config) -> Result<Option<Self>, String> {
+    /// when no TLS listeners exist. `mode` [`crate::BuildMode::Check`]
+    /// parses cert files that exist but skips missing ones — the
+    /// validator already warns about those, and certs may live on the
+    /// deploy host rather than the validation environment.
+    pub fn build(config: &cfg::Config, mode: crate::BuildMode) -> Result<Option<Self>, String> {
         if !config.server.listen.iter().any(|l| l.tls) {
             return Ok(None);
         }
@@ -43,6 +46,11 @@ impl TlsRuntime {
         for site in &config.site {
             let hosts = &site.hosts;
             match &site.tls {
+                cfg::SiteTls::Manual(m) if !mode.live() => {
+                    manual::check_pair(m).map_err(|e| {
+                        format!("site {:?}: {e}", site.name.as_deref().unwrap_or("?"))
+                    })?;
+                }
                 cfg::SiteTls::Manual(m) => {
                     let key = manual::load_pair(m).map_err(|e| {
                         format!("site {:?}: {e}", site.name.as_deref().unwrap_or("?"))

@@ -26,7 +26,7 @@ respond = { body = "r" }
 "#,
         )
         .unwrap();
-        let mw = verd::middleware::Factory::new(&cfg, None).unwrap();
+        let mw = verd::middleware::Factory::new(&cfg, None, verd::BuildMode::Live).unwrap();
         verd::router::build(&cfg, &mw).unwrap()
     })
 }

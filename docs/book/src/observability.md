@@ -1,5 +1,25 @@
 # Observability
 
+## Server log
+
+Diagnostics from the server itself — startup, listener binds, reloads,
+upstream health transitions — go through `[log]`:
+
+```toml
+[log]
+level = "info"               # error / warn / info / debug / trace,
+                             # or env-filter style "verd=debug,hyper=info"
+format = "json"              # or "pretty"
+output = "stderr"            # or "stdout" / a file path
+```
+
+Precedence: `--log-level` / `VERD_LOG` (command line) overrides
+`[log] level`, which overrides the built-in `info` default. Format and
+output have no flag — they only come from the config file.
+
+File output is appended and reopened on **SIGUSR1** (logrotate), same
+as the access log.
+
 ## Access log
 
 One JSON record per request (default), emitted when the response body

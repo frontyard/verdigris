@@ -11,7 +11,7 @@ default = true
 tls = "off"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 static = { root = "/var/www/site" }
 ```
 

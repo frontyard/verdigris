@@ -103,10 +103,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       # same checks as docs.yml, but on every PR — schema/docs drift
-      # doesn't only come from docs/** paths
+      # doesn't only come from docs/** paths. check-snippets runs here too:
+      # a src/config-only PR can break doc snippets without touching docs/.
       - run: |
           cargo run --quiet -- schema | python3 docs/gen-reference.py > docs/book/src/reference.md
           python3 docs/gen-llms-full.py
+          python3 docs/check-snippets.py target/debug/verd
           git diff --exit-code docs/book/src/reference.md llms-full.txt || {
             echo "::error::generated docs are stale — run:"
             echo "  cargo run -- schema | python3 docs/gen-reference.py > docs/book/src/reference.md"

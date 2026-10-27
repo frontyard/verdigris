@@ -169,29 +169,35 @@ async fn version() -> Json<Value> {
 /// The live config, serialized, with secret-bearing keys blanked out.
 async fn show_config(State(state): State<Arc<AdminState>>) -> Json<Value> {
     let mut v = serde_json::to_value(&*state.rt().config).unwrap_or_else(|_| json!({}));
-    redact(&mut v);
+    redact(&mut v, &mut Vec::new(), false);
     Json(v)
 }
 
-/// Recursively replace values whose key name suggests a secret.
-fn redact(v: &mut Value) {
+/// Recursively blank leaf values under secret-named keys — same policy
+/// as `verd config` (`config::secret_at`) — and scrub `user:pass@`
+/// credentials embedded in URL strings.
+fn redact(v: &mut Value, path: &mut Vec<String>, under_secret: bool) {
     match v {
         Value::Object(m) => {
             for (k, val) in m.iter_mut() {
-                if crate::config::key_is_secret(k) {
-                    // blank the whole value — an array of api keys or a map
-                    // of secrets under a secret-named key is still secret
-                    *val = json!("***");
-                } else {
-                    redact(val);
-                }
+                let secret = under_secret || crate::config::secret_at(path, k, val.is_object());
+                path.push(k.clone());
+                redact(val, path, secret);
+                path.pop();
             }
         }
-        Value::Array(a) => a.iter_mut().for_each(redact),
+        Value::Array(a) => {
+            for val in a.iter_mut() {
+                redact(val, path, under_secret);
+            }
+        }
         Value::String(s) => {
-            // credentials embedded in URL userinfo: `scheme://user:pass@host`
-            // — the `url` key doesn't smell secret but the value is
-            if let Some(scheme_end) = s.find("://") {
+            if under_secret {
+                *s = "***".into();
+            } else if let Some(scheme_end) = s.find("://") {
+                // credentials embedded in URL userinfo:
+                // `scheme://user:pass@host` — the `url` key doesn't smell
+                // secret but the value is
                 let rest = &s[scheme_end + 3..];
                 let authority_end = rest.find('/').unwrap_or(rest.len());
                 let authority = &rest[..authority_end];
@@ -202,7 +208,11 @@ fn redact(v: &mut Value) {
                 }
             }
         }
-        _ => {}
+        _ => {
+            if under_secret {
+                *v = json!("***");
+            }
+        }
     }
 }
 
@@ -736,9 +746,9 @@ mod api_tests {
             "urls": ["http://u:p@h/x"],
             "plain": "value",
         });
-        redact(&mut v);
+        redact(&mut v, &mut Vec::new(), false);
         assert_eq!(v["password"], "***");
-        assert_eq!(v["api_key"], "***");
+        assert_eq!(v["api_key"], json!(["***", "***"]));
         assert_eq!(v["nested"]["secret"], "***");
         assert_eq!(v["nested"]["safe"], "keep");
         assert_eq!(v["url"], "https://***@host");

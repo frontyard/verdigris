@@ -26,3 +26,23 @@ pub mod proxy;
 pub mod router;
 pub mod server;
 pub mod tls;
+
+/// Whether a runtime build may touch the filesystem. `verd run` builds
+/// [`BuildMode::Live`] — log files are opened and cache directories
+/// created. `verd validate` builds [`BuildMode::Check`]: every
+/// compile-time check runs (URLs, headers, auth files, filters, TLS
+/// material) but nothing is created or written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuildMode {
+    /// A real generation — filesystem side effects allowed.
+    Live,
+    /// A `verd validate` dry run — read-only.
+    Check,
+}
+
+impl BuildMode {
+    /// Filesystem writes permitted?
+    pub fn live(self) -> bool {
+        matches!(self, Self::Live)
+    }
+}

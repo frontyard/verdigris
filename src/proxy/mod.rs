@@ -113,7 +113,7 @@ pub struct Proxy {
     rewrite: Option<CompiledRewrite>,
     headers: Option<middleware::HeaderOps>,
     retries: cfg::RetryPolicy,
-    pass_host: bool,
+    host_header: cfg::HostHeader,
 }
 
 struct CompiledRewrite {
@@ -163,7 +163,7 @@ impl Proxy {
             rewrite,
             headers,
             retries: p.retries.clone(),
-            pass_host: p.pass_host,
+            host_header: p.host_header,
         })
     }
 
@@ -334,16 +334,16 @@ impl Proxy {
             // per member/connection kind
             let mut headers = parts.headers.clone();
             headers::preserve_te_trailers(&mut headers, &orig_headers, h2);
-            // exactly one outbound Host: the upstream authority when
-            // pass_host, else the client Host we routed on. `insert`
+            // exactly one outbound Host: the upstream authority for
+            // host_header = "upstream", else the client Host we routed on.
+            // `insert`
             // collapses duplicate client Host headers (we routed on the
             // first; the upstream must see that same value, not both),
             // and it synthesizes Host for h2-inbound requests (whose
             // authority lives in :authority) heading to h1 upstreams.
-            let host_out = if self.pass_host {
-                member.url.authority()
-            } else {
-                orig_host.clone()
+            let host_out = match self.host_header {
+                cfg::HostHeader::Upstream => member.url.authority(),
+                cfg::HostHeader::Original => orig_host.clone(),
             };
             if let Ok(v) = HeaderValue::from_str(&host_out) {
                 headers.insert(HOST, v);
@@ -784,7 +784,7 @@ mod handle_tests {
             rewrite: None,
             request_headers: None,
             retries: cfg::RetryPolicy::default(),
-            pass_host: true,
+            host_header: cfg::HostHeader::Upstream,
         }
     }
 
@@ -799,15 +799,19 @@ mod handle_tests {
     #[tokio::test]
     async fn handle_happy_path_and_host_modes() {
         let (addr, hosts) = fake(200, "hi").await;
-        // pass_host → upstream sees its own authority
-        let p = proxy_for(vec![format!("http://{addr}")], |p| p.pass_host = true);
+        // host_header = "upstream" → upstream sees its own authority
+        let p = proxy_for(vec![format!("http://{addr}")], |p| {
+            p.host_header = cfg::HostHeader::Upstream
+        });
         let r = p.handle(req("/x"), &ctx("/x")).await;
         assert_eq!(r.status(), 200);
         r.into_body().collect().await.unwrap();
         assert_eq!(hosts.lock().unwrap().as_str(), addr.to_string());
 
-        // !pass_host → upstream sees the routed client Host
-        let p = proxy_for(vec![format!("http://{addr}")], |p| p.pass_host = false);
+        // host_header = "original" → upstream sees the routed client Host
+        let p = proxy_for(vec![format!("http://{addr}")], |p| {
+            p.host_header = cfg::HostHeader::Original
+        });
         let r = p.handle(req("/y"), &ctx("/y")).await;
         assert_eq!(r.status(), 200);
         r.into_body().collect().await.unwrap();
@@ -830,7 +834,10 @@ mod handle_tests {
         // replace_prefix
         let p = proxy_for(vec![format!("http://{addr}")], |p| {
             p.rewrite = Some(cfg::Rewrite {
-                replace_prefix: Some(cfg::PrefixPair::Tuple("/old".into(), "/new".into())),
+                replace_prefix: Some(cfg::PrefixPair {
+                    from: "/old".into(),
+                    to: "/new".into(),
+                }),
                 ..Default::default()
             });
         });
@@ -943,7 +950,7 @@ mod handle_tests {
             rewrite: None,
             headers: None,
             retries: cfg::RetryPolicy::default(),
-            pass_host: true,
+            host_header: cfg::HostHeader::Upstream,
         };
         for m in &p.cluster.members {
             m.mark_sick(Duration::from_secs(60));

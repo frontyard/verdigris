@@ -1,4 +1,4 @@
-//! `tls = "selfsigned"`: generate a per-site self-signed certificate at
+//! `tls = "self_signed"`: generate a per-site self-signed certificate at
 //! startup via rcgen — a development convenience, never used for `auto`.
 
 use std::sync::Arc;

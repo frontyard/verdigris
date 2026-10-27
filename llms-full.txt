@@ -12,9 +12,13 @@
 - `verd schema` prints the complete JSON Schema of the config. When
   unsure about a field name, type, or default, consult it — it is
   generated from the same structs the binary parses.
-- `verd validate -c FILE` checks a config (syntax, types, and
-  cross-field rules) without starting the server.
-- `verd fmt -c FILE` normalizes a config file's formatting.
+- `verd validate -c FILE` checks a config and dry-runs the full
+  runtime build (read-only). `--format json` emits a machine-readable
+  report; `--strict` fails on warnings.
+- `verd init` writes a starter `verd.toml` (`-o PATH`, `-o -` for
+  stdout, `--force` to overwrite).
+- `verd fmt -c FILE` normalizes a config file's formatting (`--all`
+  covers included files; `--check` only reports).
 - `docs/book/src/reference.md` is a generated table of every field.
 - `llms-full.txt` (repo root) concatenates this file plus the full
   reference for one-shot ingestion.
@@ -29,13 +33,14 @@ Top-level keys: `server`, `timeouts`, `limits`, `log`, `admin`, `acme`,
   are top-level siblings of `[server]`, not children.**
 - `[[site]]` = a virtual host set: `hosts` (or `default = true`),
   `tls`, `root`/`proxy` catch-all shorthands, and `[[site.route]]` tables.
-- A route = matcher (`prefix` — `path` is a shorthand — `exact`,
-  `regex`, `match`) + **exactly one handler** (`static`, `proxy`,
-  `redirect`, `respond`) + middleware (`ip_allow`, `ip_deny`, `auth`,
-  `rate_limit`, `cors`, `headers`, `security`, `compress`, `cache`,
-  `limits`, `timeouts`). More specific prefixes win.
+- A route = matcher (`exact`, `prefix`, `regex`, `match`) + **exactly
+  one handler** (`static`, `proxy`, `redirect`, `respond`) + middleware
+  (`ip_allow`, `ip_deny`, `auth`, `rate_limit`, `cors`,
+  `response_headers`, `security`, `compress`, `cache`, `limits`,
+  `timeouts`). More specific prefixes win.
 - Upstreams may be named (`[upstream.NAME]` clusters with `servers`,
-  `lb`, `health`, `timeouts`, `tls`) or inline URL lists.
+  `lb`, `max_connections`, `health`, `timeouts`, `tls`) or inline URL
+  lists.
 
 ## Recipes (each validates against `verd validate`)
 
@@ -89,7 +94,7 @@ TLS — pick one per site:
 ```toml
 # inside [[site]] — choose ONE:
 tls = "auto"          # ACME/Let's Encrypt; needs [acme] email + port 80 or 443
-# tls = "selfsigned"  # throwaway dev cert per host at boot
+# tls = "self_signed" # throwaway dev cert per host at boot
 # tls = { cert = "/etc/verd/site.pem", key = "/etc/verd/site.key" }
 # tls = "off"         # plaintext only
 ```
@@ -152,9 +157,15 @@ cache = { store = "main", ttl = "5m", stale_if_error = "5m" }
   not per-algorithm switches.
 - `include` takes a file, a directory (expands `*.toml` inside the
   dir), or a glob like `conf.d/*.toml` — a glob matching nothing is
-  silently ignored.
-- `pass_host = true` (the default) rewrites `Host` to the upstream
-  authority; `false` passes the client's original `Host` through.
+  silently ignored. A file included via two paths merges once; an
+  include cycle is an error.
+- `hosts` entries are hostnames (or `*.suffix` wildcards / `"*"` with
+  `default = true`) — no scheme, port, or path; `*.x.com:443` and
+  `https://x.com` are rejected.
+- A bare `{ tls = true }` listen table binds `:443` (no `addr` needed);
+  `{ addr = "…" }` alone is plaintext.
+- `host_header = "upstream"` (the default) rewrites `Host` to the
+  upstream authority; `"original"` passes the client's `Host` through.
 - `site.proxy` is a catch-all site shorthand accepting a cluster name,
   one URL, or a URL list; per-route use `route.proxy = { upstream =
   "name" | "url" | [urls] }`.
@@ -165,7 +176,8 @@ cache = { store = "main", ttl = "5m", stale_if_error = "5m" }
 - Cache entries are keyed by scheme + authority (incl. port) + raw
   request target: HTTP and HTTPS, `host` and `host:8443`, and
   differently-encoded paths never share an entry.
-- `${ENV_VAR}` and `${file:/path}` interpolation works for secrets.
+- `${ENV_VAR}` and `${file:/path}` interpolation works for secrets —
+  relative `${file:}` paths anchor to the config file's directory.
   `verd validate` resolves them, so exports/files must exist then.
 
 ## Doc pages
@@ -203,7 +215,8 @@ a readable TOML configuration.
 - Static files with ranges, ETag/Last-Modified validators, precompressed variants
 - Reverse proxy with load balancing, retries, health checks, HTTP upgrades (WebSockets)
 - TLS termination with manual certificates, self-signed, or fully automatic
-  ACME (Let's Encrypt) issuance — http-01 and tls-alpn-01 challenges
+  ACME (Let's Encrypt) issuance — http-01, tls-alpn-01 and dns-01
+  (Cloudflare) challenges, incl. wildcards
 - Authentication (basic, bearer, API key), IP ACLs, CORS, rate limiting,
   compression (br/zstd/gzip), and a full HTTP response cache (RAM/disk/hybrid)
 - Prometheus metrics, structured access logs, and an admin API with
@@ -290,7 +303,7 @@ default = true
 tls = "off"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 static = { root = "/var/www/site" }
 ```
 
@@ -376,7 +389,7 @@ Each example is a complete `verd.toml` — copy it, replace the domains
 and paths, check it with `verd validate`, then `verd run`. The HTTPS
 examples assume DNS already resolves to the machine and ports 80 and
 443 are reachable; drop the `[acme]` section and use `tls = "off"` or
-`"selfsigned"` where that's not true.
+`"self_signed"` where that's not true.
 
 ## Static site with automatic HTTPS
 
@@ -418,7 +431,7 @@ hosts = ["app.example.com"]
 tls = "auto"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 static = { root = "/var/www/app/dist", spa = true,
            cache_control = { "/assets/*" = "public, max-age=31536000, immutable" } }
 ```
@@ -465,7 +478,7 @@ proxy = { upstream = "http://127.0.0.1:3000",
           rewrite = { strip_prefix = "/api" } }
 
 [[site.route]]
-path = "/"
+prefix = "/"
 static = { root = "/var/www/site", spa = true }
 ```
 
@@ -486,6 +499,7 @@ email = "ops@example.com"
 servers = ["http://10.0.0.11:8080", "http://10.0.0.12:8080",
            "http://10.0.0.13:8080"]
 lb = "least_conn"                 # round_robin | least_conn | ip_hash
+max_connections = 256             # per-member connection cap
 
 [upstream.api.health.active]      # periodic probes on each member
 path = "/healthz"
@@ -499,7 +513,6 @@ cooldown = "30s"
 [upstream.api.timeouts]
 connect = "3s"
 response_header = "10s"
-max_connections = 256
 
 [[site]]
 hosts = ["api.example.com"]
@@ -539,7 +552,7 @@ default = true
 tls = "off"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = { status = 404, body = "unknown host" }
 ```
 
@@ -568,7 +581,7 @@ tls = "auto"
 redirect_host = "example.com"     # http://www… → https://example.com…
 
 [[site.route]]
-path = "/"
+prefix = "/"
 redirect = { to = "https://example.com{path}{query}", status = 308 }
 ```
 
@@ -581,7 +594,7 @@ hosts = ["old.example.com", "www.old.example.com"]
 tls = "auto"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 redirect = { to = "https://new.example.com{path}{query}", status = 301 }
 ```
 
@@ -628,7 +641,7 @@ hosts = ["grafana.internal.example"]
 tls = "auto"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 proxy = { upstream = "http://10.0.0.5:3000" }
 ip_allow = ["10.0.0.0/8", "192.168.0.0/16"]
 auth = { basic = { realm = "ops",
@@ -699,7 +712,7 @@ hosts = ["cdn.example.com"]
 tls = "auto"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 proxy = { upstream = "app" }
 cache = { store = "main", stale_while_revalidate = "30s",
           stale_if_error = "1h" }
@@ -726,7 +739,7 @@ exact = "/healthz"
 respond = { status = 200, body = "ok" }
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = { status = 503, body = "back in a few minutes",
             headers = { "retry-after" = "300" } }
 ```
@@ -750,7 +763,7 @@ root = "./public"
 ```
 
 To test HTTPS locally swap the listener for
-`{ addr = "127.0.0.1:8443", tls = true }` and set `tls = "selfsigned"`
+`{ addr = "127.0.0.1:8443", tls = true }` and set `tls = "self_signed"`
 on the site — a throwaway certificate is generated at boot.
 
 ## Splitting a large config
@@ -789,11 +802,19 @@ fragments added up to.
 
 # Configuration
 
-Verdigris reads a single TOML file. `verd validate` checks it without
-starting; `verd config` prints the merged, interpolated effective
-configuration (secrets redacted); `verd fmt` normalizes whitespace in
-place preserving comments; `verd schema` prints the generated JSON
-Schema.
+Verdigris reads a single TOML file. `verd validate` checks it and
+dry-runs the full runtime build (read-only — nothing is created), so a
+green result means `verd run` would actually start; `verd config`
+prints the merged, interpolated effective configuration (secrets
+redacted); `verd fmt` normalizes whitespace in place preserving
+comments; `verd schema` prints the generated JSON Schema.
+
+## Durations
+
+Every duration field is a quoted string in humantime form — `"30s"`,
+`"5m"`, `"2h"`, `"180d"` (`ms`, `us`, `ns`, `w`, `M`, `y` work too).
+Bare integers are rejected: write the unit explicitly (`hsts_max_age =
+"180d"`, not `180`).
 
 ## Includes
 
@@ -810,7 +831,10 @@ glob that matches nothing is silently ignored, so `conf.d/*.toml` can
 be populated later. Tables merge recursively — `[[site]]` entries append,
 `[upstream.*]` and `[cache.*]` tables merge by name — and **arrays
 concatenate** rather than conflict. Scalars set to different values in
-different fragments are an error.
+different fragments are an error. A file reachable through two include
+paths (a "diamond") merges only once; an actual include cycle is an
+error. Paths are always resolved relative to the file that writes the
+`include` line.
 
 ## Secrets and environment interpolation
 
@@ -823,9 +847,11 @@ token = "${ADMIN_TOKEN}"        # from the environment
 ```
 
 `${VAR}` errors when unset; `${VAR:-default}` supplies a default, as
-does `${file:/path:-default}` when the file is unreadable. A literal
-`${` is written `$${`. `verd validate` resolves them, so CI can catch
-missing secrets.
+does `${file:/path:-default}` when the file is unreadable. Relative
+`${file:}` paths resolve against the directory of the file that
+contains the reference — the same anchor `include` uses — so a config
+tree can be moved as a unit. A literal `${` is written `$${`. `verd
+validate` resolves them, so CI can catch missing secrets.
 
 ## Top-level layout
 
@@ -842,6 +868,24 @@ missing secrets.
 The full field-by-field listing is in the
 [configuration reference](./reference.md).
 
+## Editor integration
+
+`verd schema` prints the JSON Schema for the config format. Point a
+TOML language server (taplo, Even Better TOML) at it for completion,
+hover docs, and inline diagnostics — save the schema next to the config
+and reference it from the first line:
+
+```sh
+verd schema -o verd.schema.json
+```
+
+```toml
+#:schema ./verd.schema.json
+```
+
+A schema generated from the installed binary always matches the
+version in use.
+
 
 
 ---
@@ -850,7 +894,7 @@ The full field-by-field listing is in the
 
 ```toml
 [[site.route]]
-path = "/"
+prefix = "/"
 static = { root = "/var/www/site", index = ["index.html"] }
 ```
 
@@ -877,9 +921,7 @@ to its `index` or return `404`.
 [upstream.app]
 servers = ["http://app1:9000", "http://app2:9000"]
 lb = "least_conn"                  # round_robin | least_conn | ip_hash
-
-[upstream.app.timeouts]
-max_connections = 256
+max_connections = 256              # per-member connection cap
 
 [upstream.app.health.passive]
 failures = 3
@@ -927,10 +969,10 @@ list. Inside a route, `proxy.upstream` accepts the same three shapes:
 ## Headers
 
 Request headers can be set/cleared per route under
-`proxy.request_headers` (`headers` is accepted as an alias); response
-headers under `route.response_headers`. `Host` is rewritten to the
-member authority when `pass_host = true` (the default); set it `false`
-to pass the client's original `Host` through. Hop-by-hop headers are
+`proxy.request_headers`; response headers under `route.response_headers`.
+`Host` is rewritten to the member authority by default
+(`host_header = "upstream"`); set `host_header = "original"` to pass the
+client's `Host` through. Hop-by-hop headers are
 stripped; `X-Forwarded-For` is appended when the peer is trusted
 (otherwise replaced) and `X-Forwarded-Proto` reflects the inbound scheme.
 
@@ -958,7 +1000,7 @@ the file and new handshakes use it, no restart.
 ## Self-signed (dev)
 
 ```toml
-tls = "selfsigned"   # generates a throwaway cert per host at boot
+tls = "self_signed"   # generates a throwaway cert per host at boot
 ```
 
 ## ACME — automatic certificates
@@ -975,13 +1017,40 @@ tls = "auto"
 ```
 
 - Challenges: **http-01** (served on `/.well-known/acme-challenge/` over
-  any plaintext listener) and **tls-alpn-01** (answered during the TLS
-  handshake on 443 — works when port 80 is blocked). `acme.challenge`
-  picks the preference.
+  any plaintext listener), **tls-alpn-01** (answered during the TLS
+  handshake on 443 — works when port 80 is blocked), and **dns-01**
+  (TXT records published via a DNS provider API — required for
+  wildcards, works with no ACME-reachable ports at all).
+  `acme.challenge` picks the preference.
 - Renewal runs automatically (lead time capped at a third of the
   certificate's lifetime) with retry backoff on failure.
 - `[acme.on_demand]` (`enabled`, `allowed_hosts`, `rate`) issues certificates lazily
   on first handshake for allowlisted names, rate-limited to bound abuse.
+
+### dns-01 (wildcard certificates, no public ports)
+
+```toml
+[acme]
+challenge = "dns-01"
+
+[acme.dns.cloudflare]
+api_token = "${CF_API_TOKEN}"       # Zone.DNS:Edit + Zone.Zone:Read
+# zone_id = "..."                   # optional — pins one zone
+# resolver = "1.1.1.1"              # optional propagation-check NS
+# propagation_timeout = "2m"
+
+[[site]]
+hosts = ["example.com", "*.example.com"]
+tls = "auto"
+```
+
+verd creates `_acme-challenge.<host>` TXT records via the provider API,
+waits for them to appear in public DNS, then tells the CA to validate
+and deletes the records afterwards. Zones are discovered automatically
+by walking up each hostname's labels (`zone_id` pins one instead), so
+sites spanning multiple Cloudflare zones just work. The token supports
+`${VAR}`/`${file:}` interpolation like every other config string —
+prefer it over a literal so the config file stays non-sensitive.
 
 ## HTTP→HTTPS and security headers
 
@@ -1015,7 +1084,8 @@ Client IP honours `X-Forwarded-For` only from `trusted_proxies`.
 ## Authentication
 
 ```toml
-auth = { basic = { realm = "ops", users = { ned = "$argon2id$…" } }}
+auth = { basic = { realm = "ops",
+                   users = { ned = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$3nGf8u5Z2p2mJx0yq9Rk3g" } }}
 # or: auth = { bearer = { tokens = ["${API_TOKEN}"] } }
 # or: auth = { api_key = { location = "header", name = "x-api-key", keys = ["${KEY1}"] } }
 ```
@@ -1051,6 +1121,7 @@ Idle buckets are swept automatically.
 ```toml
 compress = { types = ["text/*", "application/json"], min_bytes = "1KiB",
              algorithms = ["br", "zstd", "gzip"], level = 5 }
+# or just: compress = true
 ```
 
 Streams br/zstd/gzip by `Accept-Encoding` q-values; skips small bodies,
@@ -1079,6 +1150,8 @@ prefix = "/assets"
 cache = { store = "main", ttl = "5m",
           stale_while_revalidate = "30s", stale_if_error = "5m" }
 ```
+
+A bare `cache = "main"` enables the store with default settings.
 
 ## Semantics
 
@@ -1117,6 +1190,26 @@ curl -XPOST localhost:2019/purge -d '{"all":true}'
 ---
 
 # Observability
+
+## Server log
+
+Diagnostics from the server itself — startup, listener binds, reloads,
+upstream health transitions — go through `[log]`:
+
+```toml
+[log]
+level = "info"               # error / warn / info / debug / trace,
+                             # or env-filter style "verd=debug,hyper=info"
+format = "json"              # or "pretty"
+output = "stderr"            # or "stdout" / a file path
+```
+
+Precedence: `--log-level` / `VERD_LOG` (command line) overrides
+`[log] level`, which overrides the built-in `info` default. Format and
+output have no flag — they only come from the config file.
+
+File output is appended and reopened on **SIGUSR1** (logrotate), same
+as the access log.
 
 ## Access log
 
@@ -1322,7 +1415,7 @@ request_deadline = "0" # whole-request cap, per route; 0 = none
 | --- | --- |
 | `server { listen 443 ssl; }` | `server.listen = [{ addr = "0.0.0.0:443", tls = true }]` |
 | `server_name example.com` | `hosts = ["example.com"]` on `[[site]]` |
-| `location / { root … }` | `[[site.route]] path="/" static={root="…"}` |
+| `location / { root … }` | `[[site.route]] prefix="/" static={root="…"}` |
 | `proxy_pass http://app` | `proxy = "http://app"` or `{ upstream = "app" }` |
 | `upstream { least_conn; }` | `[upstream.app] lb="least_conn"` |
 | `limit_req_zone` | `route.rate_limit` |
@@ -1402,13 +1495,13 @@ covers each knob.
 
 # Command line
 
-`verd` is a single binary with five subcommands. All options can also be
-set via environment variables.
+`verd` is a single binary with seven subcommands.
 
 | Command | Purpose |
 | --- | --- |
-| `verd run` | Start the server. Default when a config file exists. |
-| `verd validate` | Check a config file for errors; exits non-zero on failure. |
+| `verd run` | Start the server. |
+| `verd validate` | Check a config file for errors and dry-run the full runtime build (read-only); exits non-zero on failure. |
+| `verd init` | Write a starter `verd.toml`. |
 | `verd config` | Print the effective merged/interpolated config as TOML (secrets redacted). |
 | `verd fmt` | Normalize whitespace in a config file in place, preserving comments. |
 | `verd schema` | Print the JSON Schema for the config format to stdout. |
@@ -1418,19 +1511,29 @@ set via environment variables.
 
 | Flag | Env var | Applies to | Effect |
 | --- | --- | --- | --- |
-| `-c, --config PATH` | `VERD_CONFIG` | `run`, `validate`, `config`, `fmt` | Config file path. Without it, `verd` searches `./verd.toml`, `./config/verd.toml`, `/etc/verd/verd.toml`. |
-| `--watch` | — | `run` | Reload config when the file changes on disk (in addition to `POST /reload`). |
+| `-c, --config PATH` | `VERD_CONFIG` | `run`, `validate`, `config`, `fmt` | Config file path. Without it, `verd` searches `./verd.toml` and `/etc/verd/verd.toml`. |
+| `--watch` | — | `run` | Reload config when it changes on disk (in addition to `POST /reload`). Observes the parent directories of every loaded source — the config file, `include`d files, `include` dirs/globs, and `${file:…}` secret files — so atomic renames, editor save-swaps, k8s `..data` swaps, and newly dropped-in `*.toml` include fragments all trigger a reload. Events on unrelated files in those directories (e.g. a log file written next to the config) are ignored. The watched set is re-derived after each reload. |
+| `--format FMT` | — | `validate` | `text` (default) prints diagnostics on stderr; `json` prints a machine-readable report `{ valid, error, diagnostics, sources }` on stdout. |
+| `--strict` | — | `validate` | Fail on warnings too, not just errors. |
 | `--check` | — | `fmt` | Exit non-zero if unformatted instead of rewriting. |
-| `-o, --output PATH` | — | `schema` | Write the schema to a file instead of stdout. |
-| `--log-level LVL` | `VERD_LOG` | all | `error` / `warn` / `info` / `debug` / `trace`; default `info`. JSON logs when stderr is not a TTY. |
+| `--all` | — | `fmt` | Also format every file reachable through `include`. |
+| `-o, --output PATH` | — | `schema`, `init` | `schema`: write the schema to a file instead of stdout. `init`: where to write the config (default `./verd.toml`; `-` is stdout). |
+| `--force` | — | `init` | Overwrite an existing file. |
+| `--log-level LVL` | `VERD_LOG` | `run`, `validate` | Server log level filter (`error` / `warn` / `info` / `debug` / `trace`, or an env-filter spec like `verd=debug,hyper=info`). Overrides `[log] level`; default `info`. |
+
+The server log's format and destination are configured in the file
+(`[log] format` / `[log] output`), not on the command line — see
+[Observability](./observability.md).
 
 `verd --version` prints just the crate version; `verd version` also
 prints the build commit (when built with `VERD_GIT_SHA`) and target.
 
 ## Exit codes
 
-`0` success; `1` config errors / missing config; `2` CLI usage errors.
-`validate` prints one line per error or warning to stderr.
+`0` success; `1` config/runtime failures (including missing config);
+`2` CLI usage errors. `validate` prints one line per error or warning
+to stderr (or a JSON report on stdout with `--format json`); `--strict`
+turns warnings fatal.
 
 
 
@@ -1451,15 +1554,15 @@ Root configuration for a verdigris instance.
 
 | field | type | default | description |
 |---|---|---|---|
-| `acme` | AcmeConfig | `{"ca_roots": null, "challenge": "auto", "directory": "https://acme-v02.api.letsencrypt.org/directory", "eab": null, "email": null, "on_demand": {"allowed_hosts": [], "enabled": false, "rate": null}, "renew_before": "30days", "storage": "./verd-state/acme"}` | ACME account settings used by sites with `tls = "auto"`. |
+| `acme` | AcmeConfig | `{"ca_roots": null, "challenge": "auto", "directory": "https://acme-v02.api.letsencrypt.org/directory", "dns": null, "eab": null, "email": null, "on_demand": {"allowed_hosts": [], "enabled": false, "rate": null}, "renew_before": "30d", "storage": "./verd-state/acme"}` | ACME account settings used by sites with `tls = "auto"`. |
 | `admin` | AdminConfig | `{"listen": "127.0.0.1:2019", "tls": null, "token": null}` | Admin API listener (metrics, health, reload, purge, inspection). |
 | `cache` | object | `{}` | Named cache stores for routes with `cache` enabled. |
-| `include` | [string] | `[]` | Additional files or directories of `*.toml` fragments merged into this configuration, relative to the directory containing this file. Fragment files are loaded in sorted order; scalar conflicts between fragments and the main file are errors. A glob pattern matching no files is a no-op; a missing file or directory is an error. |
+| `include` | [string] |  | Additional files or directories of `*.toml` fragments merged into this configuration, relative to the directory containing this file. Fragment files are loaded in sorted order; scalar conflicts between fragments and the main file are errors. A glob pattern matching no files is a no-op; a missing file or directory is an error. |
 | `limits` | Limits | `{"body_bytes": "10MiB", "header_bytes": "16KiB"}` | Default request limits; individual routes may override. |
 | `log` | LogConfig | `{"access": {"enabled": true, "filter": null, "format": "json", "output": "stdout", "sample": 1.0}, "format": "json", "level": "info", "output": "stderr"}` | Server and access logging. |
-| `server` | ServerConfig | `{"graceful_timeout": "30s", "listen": [{"addr": "0.0.0.0:80", "tls": false}], "max_connections": 65536, "max_connections_per_ip": 256, "security": {"content_type_options": true, "cross_domain_policy": "", "csp": null, "enabled": true, "frame_options": "DENY", "hsts": true, "hsts_max_age": "5months 27days 19h 12m", "hsts_subdomains": false, "referrer_policy": "strict-origin-when-cross-origin"}, "server_header": "verd", "trusted_proxies": []}` | Server-wide settings: listeners, connection limits, shutdown. |
+| `server` | ServerConfig | `{"graceful_timeout": "30s", "listen": [{"addr": "0.0.0.0:80", "tls": false}], "max_connections": 65536, "max_connections_per_ip": 256, "security": {"content_type_options": true, "cross_domain_policy": "", "csp": null, "enabled": true, "frame_options": "DENY", "hsts": true, "hsts_max_age": "180d", "hsts_subdomains": false, "referrer_policy": "strict-origin-when-cross-origin"}, "server_header": "verd", "trusted_proxies": []}` | Server-wide settings: listeners, connection limits, shutdown. |
 | `site` | [SiteConfig] | `[]` | Virtual sites. Requests are routed by the Host header. |
-| `timeouts` | Timeouts | `{"body_read": "1m", "header_read": "20s", "idle": "1m 15s", "request_deadline": "5m", "send": "1m", "tls_handshake": "10s"}` | Default timeouts; individual routes may override. |
+| `timeouts` | Timeouts | `{"body_read": "1m", "header_read": "20s", "idle": "75s", "request_deadline": "5m", "send": "1m", "tls_handshake": "10s"}` | Default timeouts; individual routes may override. |
 | `upstream` | object | `{}` | Named upstream clusters for reverse proxy routes. |
 
 ## `ServerConfig`
@@ -1472,7 +1575,7 @@ Server-wide settings.
 | `listen` | [ListenAddrSchema] | `[{"addr": "0.0.0.0:80", "tls": false}]` | Addresses to listen on. Defaults to a single plaintext listener on port 80. Entries are either `"ip:port"` strings or `{ addr = "ip:port", tls = true }` tables to terminate TLS. |
 | `max_connections` | integer | `65536` | Maximum concurrent connections across all listeners. |
 | `max_connections_per_ip` | integer | `256` | Maximum concurrent connections per client IP address. |
-| `security` | SecurityConfig | `{"content_type_options": true, "cross_domain_policy": "", "csp": null, "enabled": true, "frame_options": "DENY", "hsts": true, "hsts_max_age": "5months 27days 19h 12m", "hsts_subdomains": false, "referrer_policy": "strict-origin-when-cross-origin"}` | Baseline security response headers applied to every route. |
+| `security` | SecurityConfig | `{"content_type_options": true, "cross_domain_policy": "", "csp": null, "enabled": true, "frame_options": "DENY", "hsts": true, "hsts_max_age": "180d", "hsts_subdomains": false, "referrer_policy": "strict-origin-when-cross-origin"}` | Baseline security response headers applied to every route. |
 | `server_header` | string | `"verd"` | Value of the `Server` response header; `"off"` or `""` omits it. |
 | `trusted_proxies` | [string] | `[]` | CIDRs whose `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`, `X-Real-IP` and `Forwarded` headers are trusted. Empty: trust none. |
 
@@ -1494,7 +1597,7 @@ Timeout settings. `0s` disables a timeout.
 |---|---|---|---|
 | `body_read` | string | `"1m"` | Time allowed to read a request body. |
 | `header_read` | string | `"20s"` | Time allowed to read request headers (slowloris protection). |
-| `idle` | string | `"1m 15s"` | Keep-alive idle time between requests on one connection. |
+| `idle` | string | `"75s"` | Keep-alive idle time between requests on one connection. |
 | `request_deadline` | string | `"5m"` | Overall per-request deadline. Set to `0s` for long-lived routes (SSE, WebSocket, long-polling). |
 | `send` | string | `"1m"` | Write-side inactivity deadline: a send that stalls longer than this closes the connection (slow-client/slow-read protection). Progress resets it — large slow downloads are fine. `0s` disables. |
 | `tls_handshake` | string | `"10s"` | TLS handshake deadline. |
@@ -1550,12 +1653,13 @@ ACME account settings (Let's Encrypt or any RFC 8555 directory).
 | field | type | default | description |
 |---|---|---|---|
 | `ca_roots` | string \| null | `null` | PEM bundle of extra CA roots to trust when talking to the ACME directory — for private ACME servers (Pebble, step-ca, internal PKI). The system/WebPKI roots are always included. |
-| `challenge` | AcmeChallenge | `"auto"` | Preferred challenge type: `http-01`, `tls-alpn-01`, or `auto` (HTTP-01 when a plaintext listener exists, else TLS-ALPN-01). |
+| `challenge` | AcmeChallenge | `"auto"` | Preferred challenge type: `http-01`, `tls-alpn-01`, `dns-01` (requires `acme.dns`), or `auto` (HTTP-01 when a plaintext listener exists, else TLS-ALPN-01). |
 | `directory` | string | `"https://acme-v02.api.letsencrypt.org/directory"` | ACME directory URL. Use the Let's Encrypt staging directory (`https://acme-staging-v02.api.letsencrypt.org/directory`) while testing to avoid production rate limits. |
+| `dns` | AcmeDns \| null | `null` | DNS provider for the `dns-01` challenge — required when `acme.challenge = "dns-01"`. |
 | `eab` | ExternalAccountBinding \| null | `null` | External Account Binding for providers that require it. |
 | `email` | string \| null | `null` | Contact email for the ACME account. |
 | `on_demand` | OnDemandAcme | `{"allowed_hosts": [], "enabled": false, "rate": null}` | On-demand issuance for previously unseen hostnames. |
-| `renew_before` | string | `"30days"` | Renew certificates this long before expiry. |
+| `renew_before` | string | `"30d"` | Renew certificates this long before expiry. |
 | `storage` | string | `"./verd-state/acme"` | Directory holding the account key and issued certificates. Must be writable; persists across restarts. |
 
 ## `SiteConfig`
@@ -1572,7 +1676,7 @@ A virtual site: a set of hosts with routes and optional TLS.
 | `redirect_https` | boolean \| null | `null` | Redirect plaintext HTTP to HTTPS when TLS is enabled; defaults on. Set explicitly `false` only to serve a TLS site on plain HTTP. |
 | `root` | string \| null | `null` | Shorthand for a catch-all static file route rooted here. |
 | `route` | [RouteConfig] | `[]` | Routes, evaluated in order of specificity, not declaration order. |
-| `tls` | SiteTls | `"auto"` | TLS mode: `"auto"` (ACME), `{cert, key}`, `"selfsigned"`, or `"off"`. |
+| `tls` | SiteTls | `"auto"` | TLS mode: `"auto"` (ACME), `{cert, key}`, `"self_signed"`, or `"off"`. |
 | `trusted_proxies` | array \| null | `null` | Per-site override of the trusted proxy CIDR list. |
 
 ## `SiteTls`
@@ -1594,15 +1698,14 @@ One route: a matcher, one handler, and middleware.
 | field | type | default | description |
 |---|---|---|---|
 | `auth` | AuthConfig \| null | `null` | Authentication configuration. |
-| `cache` | RouteCache \| null | `null` | Response caching. |
-| `compress` | CompressConfig \| null | `null` | Response compression. |
+| `cache` | RouteCacheSchema \| null | `null` | Response caching: a store name (`cache = "main"`) or a table. |
+| `compress` | CompressConfigSchema \| null | `null` | Response compression: `true` for defaults, or a table. |
 | `cors` | CorsConfig \| null | `null` | CORS handling. |
 | `exact` | string \| null | `null` | Match this exact path only. |
 | `ip_allow` | [string] | `[]` | Client CIDRs allowed; others get 403. |
 | `ip_deny` | [string] | `[]` | Client CIDRs denied; they get 403 before allow rules. |
 | `limits` | LimitOverrides \| null | `null` | Per-route limit overrides. |
-| `match` | MatchConditions \| null | `null` | Additional match conditions: methods, headers, query parameters. (`conditions` is accepted as an alias.) |
-| `path` | string \| null | `null` | Alias for `prefix`. |
+| `match` | MatchConditions \| null | `null` | Additional match conditions: methods, headers, query parameters. |
 | `prefix` | string \| null | `null` | Match paths starting with this prefix. Prefix matching is segment-aware: `/api` matches `/api` and `/api/…` but not `/apix`. |
 | `priority` | integer | `0` | Priority among routes that tie on specificity. Higher wins. |
 | `proxy` | ProxyHandler \| null | `null` | Reverse proxy handler. |
@@ -1610,7 +1713,7 @@ One route: a matcher, one handler, and middleware.
 | `redirect` | RedirectHandler \| null | `null` | Redirect handler. |
 | `regex` | string \| null | `null` | Match paths against this regular expression. Evaluated last; a regex route never overrides a prefix route. |
 | `respond` | RespondHandler \| null | `null` | Fixed response handler. |
-| `response_headers` | HeaderOps \| null | `null` | Response header manipulation applied to this route's responses. (`headers` is accepted as an alias.) |
+| `response_headers` | HeaderOps \| null | `null` | Response header manipulation applied to this route's responses. |
 | `security` | RouteSecurity \| null | `null` | Per-route security-header overrides. |
 | `static` | StaticHandler \| null | `null` | Serve static files. |
 | `timeouts` | TimeoutOverrides \| null | `null` | Per-route timeout overrides (e.g. `0s` deadline for SSE/WebSocket). |
@@ -1641,7 +1744,7 @@ Fixed response handler.
 | field | type | default | description |
 |---|---|---|---|
 | `body` | string | `""` | Response body (text). `{path}`, `{host}`, `{method}` substitute from the request. |
-| `headers` | object | `{}` | Extra response headers. |
+| `headers` | object | `{}` | Extra response headers — e.g. `content-type = "text/plain"`; the body is text, so pick a non-HTML type when placeholders are used. |
 | `status` | integer | `200` | Status code. |
 
 ## `RedirectHandler`
@@ -1661,8 +1764,8 @@ Reverse proxy handler.
 
 | field | type | default | description |
 |---|---|---|---|
-| `pass_host` | boolean | `true` | Rewrite the `Host` header to the upstream authority (vs. passing the original host through). |
-| `request_headers` | HeaderOps \| null | `null` | Request header manipulation applied before forwarding upstream. (`headers` is accepted as an alias.) |
+| `host_header` | HostHeader | `"upstream"` | Which `Host` the upstream sees. |
+| `request_headers` | HeaderOps \| null | `null` | Request header manipulation applied before forwarding upstream. |
 | `retries` | RetryPolicy | `{"budget_fraction": 0.2, "max_per_request": 2}` | Retry policy for idempotent requests on connection failure. |
 | `rewrite` | Rewrite \| null | `null` | Path rewriting before forwarding. |
 | `upstream` | UpstreamRef **required** |  | Named upstream (`upstream.name`) or an inline list of upstream URLs. |
@@ -1686,8 +1789,9 @@ A named cluster of upstream servers.
 | `dns` | UpstreamDns | `{"grace": "1m"}` | DNS re-resolution behaviour for hostname upstreams. |
 | `health` | HealthCheck | `{"active": null, "passive": null}` | Health checking. |
 | `lb` | LoadBalancing | `"round_robin"` | Load balancing algorithm. |
+| `max_connections` | integer | `1024` | Max concurrent connections to a single upstream. |
 | `servers` | [string] | `[]` | Server URLs: `http://host:port`, `https://host:port`, or `h2c://` for cleartext HTTP/2 prior knowledge (typical for gRPC backends). |
-| `timeouts` | UpstreamTimeouts | `{"connect": "5s", "idle": "1m 30s", "max_connections": 1024, "response_header": "30s"}` | Per-upstream timeouts and the per-member connection cap. |
+| `timeouts` | UpstreamTimeouts | `{"connect": "5s", "idle": "90s", "response_header": "30s"}` | Per-upstream timeouts. |
 | `tls` | UpstreamTls | `{"ca": null, "sni": null, "verify": true}` | TLS options for `https://` upstreams. |
 | `unavailable` | UnavailableResponse | `{"body": null, "status": 502}` | Response when no upstream in the cluster is healthy. |
 
@@ -1823,7 +1927,7 @@ override or disable individual headers via `route.security`.
 | `enabled` | boolean | `true` | Master switch; `false` emits none of these headers. |
 | `frame_options` | string | `"DENY"` | `X-Frame-Options` value, e.g. `"DENY"` or `"SAMEORIGIN"`. Empty string disables the header. |
 | `hsts` | boolean | `true` | `Strict-Transport-Security`, emitted only on TLS responses. |
-| `hsts_max_age` | string | `"5months 27days 19h 12m"` | HSTS `max-age`: `"180d"`, or a bare number of seconds. |
+| `hsts_max_age` | string | `"180d"` | HSTS `max-age`, e.g. `"180d"`. |
 | `hsts_subdomains` | boolean | `false` | Append `includeSubDomains` to the HSTS header. |
 | `referrer_policy` | string | `"strict-origin-when-cross-origin"` | `Referrer-Policy` value. Empty string disables the header. |
 
@@ -1840,7 +1944,7 @@ Per-route security-header overrides: absent fields inherit the global
 | `enabled` | boolean \| null | `null` | Route-level master switch; absent inherits global `enabled`. |
 | `frame_options` | string \| null | `null` | Override `X-Frame-Options` (`""` disables). |
 | `hsts` | boolean \| null | `null` | Override HSTS on/off for this route. |
-| `hsts_max_age` | string \| null | `null` | Override HSTS `max-age` (`"180d"`, or a bare number of seconds). |
+| `hsts_max_age` | string \| null | `null` | Override HSTS `max-age` (`"180d"`). |
 | `hsts_subdomains` | boolean \| null | `null` | Override `includeSubDomains`. |
 | `referrer_policy` | string \| null | `null` | Override `Referrer-Policy` (`""` disables). |
 
@@ -1904,6 +2008,12 @@ A named cache store.
 Which ACME challenge type to solve.
 
 
+## `AcmeDns`
+
+DNS provider used to publish `_acme-challenge` TXT records for the
+`dns-01` challenge (`[acme.dns]`).
+
+
 ## `ApiKeyLocation`
 
 API key location.
@@ -1919,6 +2029,23 @@ decimal (×1000); `Ki`/`Mi`/`Gi` are binary (×1024).
 ## `CacheTier`
 
 Cache storage tier.
+
+
+## `CloudflareDns`
+
+Cloudflare credentials for `dns-01` (`[acme.dns.cloudflare]`).
+
+| field | type | default | description |
+|---|---|---|---|
+| `api_base` | string \| null |  | API base URL — override only for tests or API gateways (default `https://api.cloudflare.com/client/v4`). |
+| `api_token` | string **required** |  | API token with `Zone.DNS:Edit` on the zones to validate; zone discovery also needs `Zone.Zone:Read`. Prefer `${VAR}` or `${file:…}` interpolation over a literal token. |
+| `propagation_timeout` | string | `"2m"` | How long to wait for TXT records to appear in DNS before the CA is told to validate (default `2m`). |
+| `resolver` | string \| null |  | Nameserver (`ip` or `ip:port`) to poll while waiting for TXT propagation — e.g. the zone's authoritative NS or a fast public resolver. Defaults to the system resolver. |
+| `zone_id` | string \| null |  | Zone ID to pin all records to. When unset the zone is discovered per hostname by walking up its labels via the API. |
+
+## `CompressConfigSchema`
+
+Schema shape for `route.compress` (`true` or a table).
 
 
 ## `Duration`
@@ -1941,6 +2068,11 @@ External Account Binding credentials.
 |---|---|---|---|
 | `key` | string **required** |  | Base64url-encoded HMAC key. |
 | `key_id` | string **required** |  | EAB key identifier. |
+
+## `HostHeader`
+
+Which `Host` value a proxied request carries upstream.
+
 
 ## `LimitOverrides`
 
@@ -1989,9 +2121,12 @@ On-demand certificate issuance.
 
 ## `PrefixPair`
 
-Prefix replacement: `{ from = "/api", to = "/v1" }`. The legacy
-two-element array `["/api", "/v1"]` is also accepted.
+Prefix replacement: `{ from = "/api", to = "/v1" }`.
 
+| field | type | default | description |
+|---|---|---|---|
+| `from` | string **required** |  | Existing path prefix to replace. |
+| `to` | string **required** |  | Replacement path prefix. |
 
 ## `RateSpec`
 
@@ -2011,6 +2146,11 @@ Regex path rewrite: `pattern` → `replace`.
 |---|---|---|---|
 | `pattern` | string **required** |  | Regular expression matched against the path. |
 | `replace` | string **required** |  | Replacement, may contain `$1`-style capture references. |
+
+## `RouteCacheSchema`
+
+Schema shape for `route.cache` (`"store-name"` or a table).
+
 
 ## `TimeoutOverrides`
 
@@ -2043,14 +2183,12 @@ DNS re-resolution for hostname upstreams.
 
 ## `UpstreamTimeouts`
 
-Per-upstream timeouts and the per-member connection cap.
-(`[upstream.*.limits]` is accepted as an alias.)
+Per-upstream timeouts.
 
 | field | type | default | description |
 |---|---|---|---|
 | `connect` | string | `"5s"` | TCP/TLS connect timeout. |
-| `idle` | string | `"1m 30s"` | Idle keep-alive time for pooled upstream connections. |
-| `max_connections` | integer | `1024` | Max concurrent connections to a single upstream. |
+| `idle` | string | `"90s"` | Idle keep-alive time for pooled upstream connections. |
 | `response_header` | string | `"30s"` | Time waiting for upstream response headers. |
 
 ## `UpstreamTls`

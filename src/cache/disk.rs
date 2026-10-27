@@ -100,6 +100,39 @@ impl Disk {
         Ok(store)
     }
 
+    /// `BuildMode::Check` verification of `disk_path` — nothing is
+    /// created, but paths `open_sync` would fail on (a file where the
+    /// store or a parent directory belongs, an `objects/` that isn't a
+    /// directory) are errors.
+    pub fn check_path(cfg: &CacheStore) -> Result<(), String> {
+        let Some(dir) = cfg.disk_path.clone() else {
+            return Err("disk tier requires disk_path".into());
+        };
+        // First existing ancestor must be a directory — `create_dir_all`
+        // fails on a file in the way.
+        let mut p: &std::path::Path = &dir;
+        loop {
+            if p.is_dir() {
+                break;
+            }
+            if p.exists() {
+                return Err(format!("cache dir {}: not a directory", p.display()));
+            }
+            match p.parent() {
+                Some(up) => p = up,
+                None => break,
+            }
+        }
+        let objects = dir.join("objects");
+        if objects.exists() && !objects.is_dir() {
+            return Err(format!(
+                "cache dir {}: objects is not a directory",
+                dir.display()
+            ));
+        }
+        Ok(())
+    }
+
     /// Scan `objects/`, parsing each header into the index.
     fn rebuild(&self) {
         let objects = self.dir.join("objects");

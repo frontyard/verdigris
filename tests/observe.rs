@@ -99,11 +99,11 @@ default = true
 tls = "off"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = {{ status = 200, body = "hi\n" }}
 
 [[site.route]]
-path = "/skip"
+prefix = "/skip"
 respond = {{ status = 200, body = "skip\n" }}
 "#,
         log = log.display()
@@ -177,7 +177,7 @@ default = true
 tls = "off"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 static = {{ root = "{www}" }}
 "#,
         log = log.display(),
@@ -227,7 +227,7 @@ default = true
 tls = "off"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = {{ status = 200, body = "complete\n" }}
 "#,
         log = log.display()
@@ -276,11 +276,11 @@ default = true
 tls = "off"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = {{ status = 200, body = "m\n" }}
 
 [[site.route]]
-path = "/proxy"
+prefix = "/proxy"
 proxy = {{ upstream = ["http://127.0.0.1:{up_port}"] }}
 "#
     );

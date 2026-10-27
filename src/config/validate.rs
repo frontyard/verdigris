@@ -11,7 +11,8 @@ use regex::Regex;
 use crate::config::model::*;
 
 /// Severity of a [`Diagnostic`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Severity {
     /// Fatal: the configuration cannot run.
     Error,
@@ -20,7 +21,7 @@ pub enum Severity {
 }
 
 /// One validation finding with a human-readable location.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct Diagnostic {
     /// Severity.
     pub severity: Severity,
@@ -91,15 +92,16 @@ fn check_listeners(ctx: &mut Ctx, cfg: &Config) {
             );
         }
     }
-    let any_tls_site = cfg
-        .site
-        .iter()
-        .any(|s| !matches!(s.tls, SiteTls::Mode(TlsMode::Off)));
-    let any_tls_listener = cfg.server.listen.iter().any(|l| l.tls);
-    if any_tls_site && !any_tls_listener {
-        ctx.warn(
-            "server.listen",
-            "TLS-enabled sites exist but no listener has tls = true",
+    if cfg.server.max_connections == 0 {
+        ctx.error(
+            "server.max_connections",
+            "max_connections must be > 0 — 0 rejects every connection",
+        );
+    }
+    if cfg.server.max_connections_per_ip == 0 {
+        ctx.error(
+            "server.max_connections_per_ip",
+            "must be > 0 — 0 rejects every connection",
         );
     }
     if cfg.server.max_connections_per_ip > cfg.server.max_connections {
@@ -139,8 +141,32 @@ fn check_sites(ctx: &mut Ctx, cfg: &Config) {
             default_count += 1;
         }
         for host in &site.hosts {
-            let h = host.to_ascii_lowercase();
-            if let Some(rest) = h.strip_prefix("*.") {
+            let raw = host.trim();
+            // `hosts` takes hostnames only — a scheme, path, whitespace,
+            // or `host:port` is a copy-paste mistake the matcher would
+            // silently normalize away. Bracketed IPv6 (`[::1]`) is fine.
+            if raw.is_empty()
+                || raw.contains("://")
+                || raw.contains('/')
+                || raw.chars().any(char::is_whitespace)
+                || (!raw.starts_with('[')
+                    && raw
+                        .rsplit_once(':')
+                        .is_some_and(|(_, t)| t.parse::<u16>().is_ok()))
+            {
+                ctx.error(
+                    format!("{site_path}.hosts"),
+                    format!(
+                        "invalid host {host:?} — hosts takes hostnames only, no scheme/port/path"
+                    ),
+                );
+                continue;
+            }
+            // `*.` is detected on the raw spelling (normalizing first
+            // would eat the dot in "*."); the suffix is normalized so
+            // "*.X.com." and "*.x.com" still collide as duplicates.
+            if let Some(rest) = raw.strip_prefix("*.") {
+                let rest = crate::router::normalize_host(rest);
                 if rest.is_empty() || rest.contains('*') {
                     ctx.error(
                         format!("{site_path}.hosts"),
@@ -148,21 +174,31 @@ fn check_sites(ctx: &mut Ctx, cfg: &Config) {
                     );
                     continue;
                 }
-                if wildcards.insert(rest.to_string(), i).is_some() {
+                if wildcards.insert(rest, i).is_some() {
                     ctx.error(
                         format!("{site_path}.hosts"),
                         format!("duplicate wildcard host {host:?}"),
                     );
                 }
-            } else if h == "*" {
-                if site.default {
-                    default_count += 1;
-                } else {
+                continue;
+            }
+            let h = crate::router::normalize_host(raw);
+            if h == "*" {
+                // a catch-all host claims defaultness via `default = true`,
+                // which `if site.default` above already counted once
+                if !site.default {
                     ctx.error(
                         format!("{site_path}.hosts"),
                         "bare \"*\" host needs `default = true`".to_string(),
                     );
                 }
+            } else if h.contains('*') {
+                // mid-label `*` is never a legal wildcard — it would
+                // sit in the exact index as a dead entry
+                ctx.error(
+                    format!("{site_path}.hosts"),
+                    format!("invalid wildcard host {host:?}"),
+                );
             } else if exact_hosts.insert(h, i).is_some() {
                 ctx.error(
                     format!("{site_path}.hosts"),
@@ -233,6 +269,29 @@ fn check_sites(ctx: &mut Ctx, cfg: &Config) {
                 );
             }
         }
+        for (i, s) in cfg.site.iter().enumerate() {
+            if !matches!(s.tls, SiteTls::Mode(TlsMode::Auto)) {
+                continue;
+            }
+            // a hostless default site is still legitimate with on-demand
+            // issuance (certs mint per-SNI against the allowlist)
+            if s.hosts.is_empty() && !cfg.acme.on_demand.enabled {
+                ctx.warn(
+                    format!("{}.hosts", site_label(i, s)),
+                    "site has tls = \"auto\" but no hostnames — ACME cannot issue a certificate",
+                );
+            }
+            for host in &s.hosts {
+                if !looks_public_dns(host.strip_prefix("*.").unwrap_or(host)) {
+                    ctx.warn(
+                        format!("{}.hosts", site_label(i, s)),
+                        format!(
+                            "{host:?} is not a public DNS name — ACME issuance will fail; use tls = \"off\" or \"self_signed\""
+                        ),
+                    );
+                }
+            }
+        }
         if needs_acme
             && matches!(
                 cfg.acme.challenge,
@@ -265,6 +324,31 @@ fn check_sites(ctx: &mut Ctx, cfg: &Config) {
     }
 }
 
+/// Can a public CA plausibly issue for `host`? IPs, single labels,
+/// catch-alls, and known-local TLDs can never pass ACME validation.
+fn looks_public_dns(host: &str) -> bool {
+    let h = crate::router::normalize_host(host);
+    if h.is_empty() || h == "*" || h.parse::<std::net::IpAddr>().is_ok() {
+        return false;
+    }
+    if !h.contains('.') {
+        return false;
+    }
+    const LOCAL_TLDS: [&str; 8] = [
+        "test",
+        "example",
+        "invalid",
+        "localhost",
+        "local",
+        "internal",
+        "lan",
+        "corp",
+    ];
+    !LOCAL_TLDS
+        .iter()
+        .any(|t| h == *t || h.ends_with(&format!(".{t}")))
+}
+
 fn check_trusted_proxies(ctx: &mut Ctx, _cfg: &Config, i: usize, site: &SiteConfig) {
     if let Some(proxies) = &site.trusted_proxies
         && proxies.is_empty()
@@ -287,7 +371,6 @@ fn check_route(
 
     // exactly one path matcher
     let matchers = [
-        route.path.is_some(),
         route.exact.is_some(),
         route.prefix.is_some(),
         route.regex.is_some(),
@@ -298,16 +381,15 @@ fn check_route(
     if matchers == 0 {
         ctx.error(
             path.clone(),
-            "route has no path matcher (set path, exact, prefix, or regex)",
+            "route has no path matcher (set exact, prefix, or regex)",
         );
     } else if matchers > 1 {
         ctx.error(
             path.clone(),
-            "route sets multiple path matchers; keep exactly one of path/exact/prefix/regex",
+            "route sets multiple path matchers; keep exactly one of exact/prefix/regex",
         );
     }
     for (name, m) in [
-        ("path", &route.path),
         ("exact", &route.exact),
         ("prefix", &route.prefix),
         ("regex", &route.regex),
@@ -371,6 +453,16 @@ fn check_route(
                     st.root.display()
                 ),
             );
+        }
+        for status in st.error_pages.keys() {
+            if !(400..=599).contains(status) {
+                ctx.warn(
+                    format!("{path}.static.error_pages"),
+                    format!(
+                        "status {status} is not an error status — error_pages only apply to 400–599"
+                    ),
+                );
+            }
         }
         if st.index.is_empty() && !st.listing && !st.spa {
             ctx.warn(
@@ -444,6 +536,12 @@ fn check_route(
     }
     if let Some(rl) = &route.rate_limit {
         check_rate_limit(ctx, &path, rl);
+        if rl.key == "identity" && route.auth.is_none() {
+            ctx.warn(
+                format!("{path}.rate_limit.key"),
+                "key \"identity\" but the route has no auth — requests are keyed by client IP",
+            );
+        }
     }
     if let Some(cors) = &route.cors {
         check_cors(ctx, &path, cors);
@@ -472,22 +570,29 @@ fn check_route(
     }
     if let Some(comp) = &route.compress {
         for alg in &comp.algorithms {
-            if !["br", "brotli", "zstd", "gzip", "gz"].contains(&alg.as_str()) {
+            if !["br", "zstd", "gzip"].contains(&alg.as_str()) {
                 ctx.error(
                     format!("{path}.compress.algorithms"),
-                    format!(
-                        "unknown algorithm {alg:?}; use br, zstd, or gzip (brotli/gz aliases accepted)"
-                    ),
+                    format!("unknown algorithm {alg:?}; use br, zstd, or gzip"),
                 );
             }
         }
-    }
-    if route.response_headers.is_some()
-        && route.static_files.is_none()
-        && route.proxy.is_none()
-        && route.respond.is_none()
-    {
-        // headers middleware applies to all handlers; redirect too — fine
+        if let Some(level) = comp.level {
+            for alg in &comp.algorithms {
+                let max = match alg.as_str() {
+                    "gzip" => 9,
+                    "br" => 11,
+                    "zstd" => 19,
+                    _ => continue, // unknown names error above
+                };
+                if level > max {
+                    ctx.error(
+                        format!("{path}.compress.level"),
+                        format!("level {level} exceeds {alg}'s maximum ({max})"),
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -565,12 +670,6 @@ fn check_proxy(ctx: &mut Ctx, cfg: &Config, path: &str, proxy: &ProxyHandler) {
             );
         }
     }
-    if proxy.retries.budget_fraction < 0.0 || proxy.retries.budget_fraction > 1.0 {
-        ctx.error(
-            format!("{path}.proxy.retries"),
-            "budget_fraction must be in [0, 1]",
-        );
-    }
 }
 
 fn check_auth(ctx: &mut Ctx, path: &str, auth: &AuthConfig) {
@@ -615,11 +714,11 @@ fn check_auth(ctx: &mut Ctx, path: &str, auth: &AuthConfig) {
                             continue;
                         }
                         match line.split_once(':') {
-                            Some((_, hash)) if looks_like_bcrypt(hash) => {}
+                            Some((_, hash)) if looks_like_password_hash(hash) => {}
                             _ => ctx.error(
                                 format!("{path}.auth.basic.htpasswd"),
                                 format!(
-                                    "{} line {}: expected user:$2y$... bcrypt hash",
+                                    "{} line {}: expected user:$2y$... bcrypt or $argon2$... hash",
                                     file.display(),
                                     lineno + 1
                                 ),
@@ -705,13 +804,52 @@ fn check_cors(ctx: &mut Ctx, path: &str, cors: &CorsConfig) {
     }
 }
 
+/// Names referenced by `site.proxy`/`route.proxy.upstream` — for the
+/// unused-definition warning.
+fn referenced_upstreams(cfg: &Config) -> HashSet<&str> {
+    cfg.site
+        .iter()
+        .flat_map(|s| {
+            s.proxy.iter().chain(
+                s.route
+                    .iter()
+                    .filter_map(|r| r.proxy.as_ref().map(|p| &p.upstream)),
+            )
+        })
+        .filter_map(|u| match u {
+            UpstreamRef::Name(n) => Some(n.as_str()),
+            UpstreamRef::Urls(_) => None,
+        })
+        .collect()
+}
+
 fn check_upstreams(ctx: &mut Ctx, cfg: &Config) {
+    let referenced = referenced_upstreams(cfg);
     for (name, up) in &cfg.upstream {
         let path = format!("upstream.{name}");
+        if !referenced.contains(name.as_str()) {
+            ctx.warn(
+                path.clone(),
+                "upstream is defined but never referenced by any site or route",
+            );
+        }
         if up.servers.is_empty() {
             ctx.error(path.clone(), "upstream has no servers");
         }
+        if up.max_connections == 0 {
+            ctx.error(
+                format!("{path}.max_connections"),
+                "max_connections must be > 0",
+            );
+        }
+        let mut seen_urls = HashSet::new();
         for url in &up.servers {
+            if !seen_urls.insert(url) {
+                ctx.warn(
+                    format!("{path}.servers"),
+                    format!("duplicate server URL {url:?}"),
+                );
+            }
             check_upstream_url(ctx, &path, url);
         }
         if !up.tls.verify && up.servers.iter().any(|u| u.starts_with("https://")) {
@@ -773,8 +911,20 @@ fn check_upstream_url(ctx: &mut Ctx, path: &str, url: &str) {
 }
 
 fn check_caches(ctx: &mut Ctx, cfg: &Config) {
+    let used: HashSet<&str> = cfg
+        .site
+        .iter()
+        .flat_map(|s| s.route.iter())
+        .filter_map(|r| r.cache.as_ref().map(|c| c.store.as_str()))
+        .collect();
     for (name, store) in &cfg.cache {
         let path = format!("cache.{name}");
+        if !used.contains(name.as_str()) {
+            ctx.warn(
+                path.clone(),
+                "cache store is defined but never referenced by any route",
+            );
+        }
         match store.tier {
             CacheTier::Ram => {
                 if store.disk_path.is_some() {
@@ -847,6 +997,12 @@ fn check_admin(ctx: &mut Ctx, cfg: &Config) {
 
 fn check_acme(ctx: &mut Ctx, cfg: &Config) {
     let acme = &cfg.acme;
+    if !acme.directory.starts_with("https://") && !acme.directory.starts_with("http://") {
+        ctx.error(
+            "acme.directory",
+            format!("{:?} is not an http(s) URL", acme.directory),
+        );
+    }
     if let Some(eab) = &acme.eab
         && (eab.key_id.is_empty() || eab.key.is_empty())
     {
@@ -936,9 +1092,6 @@ fn check_timeouts_limits(ctx: &mut Ctx, cfg: &Config) {
             "0s disables the send inactivity timeout — clients that stop reading can pin connections indefinitely",
         );
     }
-    if !(0.0..=1.0).contains(&cfg.log.access.sample) {
-        ctx.error("log.access.sample", "must be within 0.0–1.0");
-    }
 }
 
 fn check_log(ctx: &mut Ctx, cfg: &Config) {
@@ -954,6 +1107,9 @@ fn check_log(ctx: &mut Ctx, cfg: &Config) {
             ),
         );
     }
+    if !(0.0..=1.0).contains(&cfg.log.access.sample) {
+        ctx.error("log.access.sample", "must be within 0.0–1.0");
+    }
 }
 
 /// Build a [`Config`] from a TOML string after interpolation; shared by
@@ -961,7 +1117,7 @@ fn check_log(ctx: &mut Ctx, cfg: &Config) {
 #[cfg(test)]
 pub(crate) fn parse_test_config(text: &str) -> Config {
     let mut v: toml::Value = toml::from_str(text).unwrap();
-    crate::config::interpolate::interpolate(&mut v).unwrap();
+    crate::config::interpolate::interpolate(&mut v, std::path::Path::new(".")).unwrap();
     v.try_into().unwrap()
 }
 
@@ -1035,7 +1191,7 @@ root = "/tmp"
 [[site]]
 hosts = ["x"]
 [[site.route]]
-path = "/a"
+prefix = "/a"
 exact = "/b"
 respond = { status = 200 }
 [[site.route]]
@@ -1061,7 +1217,7 @@ respond = { status = 200 }
 [[site]]
 hosts = ["x"]
 [[site.route]]
-path = "/"
+prefix = "/"
 proxy = { upstream = "nope" }
 "#,
         );
@@ -1079,7 +1235,7 @@ proxy = { upstream = "nope" }
 [[site]]
 hosts = ["x"]
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = { status = 200 }
 auth = { basic = { users = { u = "plaintext" } } }
 "#,
@@ -1131,7 +1287,7 @@ tier = "disk"
 [[site]]
 hosts = ["x"]
 [[site.route]]
-path = "/old"
+prefix = "/old"
 redirect = { scheme = "https", status = 303 }
 "#,
         );
@@ -1217,11 +1373,17 @@ tls = "auto"
 root = "/tmp"
 "#,
         );
-        assert!(has_warn(
-            &cfg,
-            "server.listen",
-            "no listener has tls = true"
-        ));
+        assert!(has_warn(&cfg, "server.listen", "HTTPS is unreachable"));
+        // exactly one such warning — not duplicated across checks
+        assert_eq!(
+            warnings(&cfg)
+                .iter()
+                .filter(|d| d.path == "server.listen" && d.message.contains("tls"))
+                .count(),
+            1,
+            "{:?}",
+            warnings(&cfg)
+        );
 
         // TLS listener but every site is plaintext
         let cfg = parse_test_config(
@@ -1274,6 +1436,15 @@ root = "/tmp"
         let cfg = parse_test_config("[[site]]\nhosts = [\"*\"]\nroot = \"/tmp\"");
         assert!(has_err(&cfg, "site[\"*\"].hosts", "needs `default = true`"));
 
+        // `default = true` + `hosts = ["*"]` on ONE site claims the
+        // default slot once — it must not trip the duplicate check
+        let cfg = parse_test_config("[[site]]\nhosts = [\"*\"]\ndefault = true\nroot = \"/tmp\"");
+        assert!(
+            !has_err(&cfg, "site", "more than one site is marked default"),
+            "{:?}",
+            errors(&cfg)
+        );
+
         let cfg = parse_test_config(
             r#"
 [[site]]
@@ -1291,6 +1462,220 @@ root = "/tmp"
             "site",
             "more than one site is marked default"
         ));
+    }
+
+    #[test]
+    fn host_spellings_normalized_for_dups() {
+        // case and a trailing dot collide after normalization
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["example.com."]
+root = "/tmp"
+[[site]]
+hosts = ["EXAMPLE.com"]
+root = "/tmp"
+"#,
+        );
+        assert!(has_err(
+            &cfg,
+            "site[\"EXAMPLE.com\"].hosts",
+            "duplicate host"
+        ));
+    }
+
+    #[test]
+    fn urlish_hosts_rejected() {
+        for bad in ["https://x.com", "x.com/path", "x.com:8443", " "] {
+            let cfg = parse_test_config(&format!("[[site]]\nhosts = [{bad:?}]\nroot = \"/tmp\""));
+            assert!(
+                errors(&cfg)
+                    .iter()
+                    .any(|d| d.message.contains("hostnames only")),
+                "{bad}"
+            );
+        }
+        // bracketed IPv6 is a hostname, not a host:port mistake
+        let cfg = parse_test_config("[[site]]\nhosts = [\"[::1]\"]\nroot = \"/tmp\"");
+        assert!(
+            errors(&cfg)
+                .iter()
+                .all(|d| !d.message.contains("hostnames only")),
+            "{:?}",
+            errors(&cfg)
+        );
+    }
+
+    #[test]
+    fn acme_nonpublic_names_warn() {
+        let cfg = parse_test_config(
+            r#"
+[server]
+listen = [{ addr = "127.0.0.1:8443", tls = true }]
+[acme]
+email = "a@b.c"
+[[site]]
+hosts = ["wiki.internal", "localhost", "10.0.0.5"]
+tls = "auto"
+root = "/tmp"
+"#,
+        );
+        let n = warnings(&cfg)
+            .iter()
+            .filter(|d| d.message.contains("not a public DNS name"))
+            .count();
+        assert_eq!(n, 3, "{:?}", validate(&cfg));
+
+        // a public name is quiet
+        let cfg = parse_test_config(
+            r#"
+[server]
+listen = ["127.0.0.1:8080", { addr = "127.0.0.1:8443", tls = true }]
+[acme]
+email = "a@b.c"
+[[site]]
+hosts = ["app.example.com"]
+tls = "auto"
+root = "/tmp"
+"#,
+        );
+        assert!(
+            warnings(&cfg)
+                .iter()
+                .all(|d| !d.message.contains("not a public DNS name")),
+            "{:?}",
+            validate(&cfg)
+        );
+    }
+
+    #[test]
+    fn error_pages_status_range_warned() {
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+prefix = "/"
+static = { root = "/tmp", error_pages = { 200 = "/ok.html", 404 = "/nf.html" } }
+"#,
+        );
+        assert!(has_warn(
+            &cfg,
+            "site[\"x\"].route[0].static.error_pages",
+            "200"
+        ));
+    }
+
+    #[test]
+    fn identity_key_without_auth_warns() {
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+prefix = "/"
+respond = { status = 200 }
+rate_limit = { key = "identity", rate = "10/s" }
+"#,
+        );
+        assert!(has_warn(
+            &cfg,
+            "site[\"x\"].route[0].rate_limit.key",
+            "no auth"
+        ));
+
+        // auth present → identity keying is meaningful, stays quiet
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+prefix = "/"
+respond = { status = 200 }
+auth = { bearer = { tokens = ["t"] } }
+rate_limit = { key = "identity", rate = "10/s" }
+"#,
+        );
+        assert!(!has_warn(
+            &cfg,
+            "site[\"x\"].route[0].rate_limit.key",
+            "no auth"
+        ));
+    }
+
+    #[test]
+    fn zero_connection_caps_rejected() {
+        for field in ["max_connections", "max_connections_per_ip"] {
+            let cfg = parse_test_config(&format!("[server]\n{field} = 0"));
+            assert!(has_err(&cfg, &format!("server.{field}"), "> 0"), "{field}");
+        }
+        let cfg =
+            parse_test_config("[upstream.app]\nservers = [\"http://x\"]\nmax_connections = 0");
+        assert!(has_err(&cfg, "upstream.app.max_connections", "> 0"));
+    }
+
+    #[test]
+    fn unused_definitions_and_dup_servers_warned() {
+        let cfg = parse_test_config(
+            r#"
+[upstream.used]
+servers = ["http://u", "http://u", "http://v"]
+[upstream.orphan]
+servers = ["http://u"]
+[cache.main]
+tier = "ram"
+[cache.orphan]
+tier = "ram"
+[[site]]
+hosts = ["x"]
+proxy = "used"
+[[site.route]]
+prefix = "/c"
+respond = { status = 200 }
+cache = "main"
+"#,
+        );
+        assert!(has_warn(&cfg, "upstream.orphan", "never referenced"));
+        assert!(!has_warn(&cfg, "upstream.used", "never referenced"));
+        assert!(has_warn(
+            &cfg,
+            "upstream.used.servers",
+            "duplicate server URL"
+        ));
+        assert!(has_warn(&cfg, "cache.orphan", "never referenced"));
+        assert!(!has_warn(&cfg, "cache.main", "never referenced"));
+    }
+
+    #[test]
+    fn compress_level_checked_against_algorithms() {
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+prefix = "/a"
+respond = { status = 200 }
+compress = { algorithms = ["zstd"], level = 15 }
+[[site.route]]
+prefix = "/b"
+respond = { status = 200 }
+compress = { algorithms = ["gzip"], level = 12 }
+"#,
+        );
+        assert!(!has_err(&cfg, "site[\"x\"].route[0].compress.level", ""));
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].route[1].compress.level",
+            "exceeds gzip"
+        ));
+    }
+
+    #[test]
+    fn acme_directory_needs_http_scheme() {
+        let cfg = parse_test_config("[acme]\ndirectory = \"ftp://ca.local/dir\"");
+        assert!(has_err(&cfg, "acme.directory", "http(s)"));
+        let cfg = parse_test_config("[acme]\ndirectory = \"http://ca.local/dir\"");
+        assert!(!has_err(&cfg, "acme.directory", ""));
     }
 
     #[test]
@@ -1375,7 +1760,7 @@ respond = { status = 200 }
 regex = "(["
 respond = { status = 200 }
 [[site.route]]
-path = "/m"
+prefix = "/m"
 match = { methods = ["B A D"], headers = { "X-A" = "re:([" }, query = { q = "re:)(" } }
 respond = { status = 200 }
 "#,
@@ -1402,9 +1787,9 @@ respond = { status = 200 }
 [[site]]
 hosts = ["x"]
 [[site.route]]
-path = "/none"
+prefix = "/none"
 [[site.route]]
-path = "/two"
+prefix = "/two"
 respond = { status = 200 }
 redirect = { scheme = "https" }
 "#,
@@ -1425,7 +1810,7 @@ redirect = { scheme = "https" }
 [[site]]
 hosts = ["x"]
 [[site.route]]
-path = "/s"
+prefix = "/s"
 static = { root = "/definitely/missing-dir", index = [] }
 "#,
         );
@@ -1448,21 +1833,21 @@ static = { root = "/definitely/missing-dir", index = [] }
 [[site]]
 hosts = ["x"]
 [[site.route]]
-path = "/a"
+prefix = "/a"
 redirect = { to = "https://x/{path}", scheme = "https" }
 [[site.route]]
-path = "/b"
+prefix = "/b"
 redirect = { scheme = "gopher" }
 [[site.route]]
-path = "/c"
+prefix = "/c"
 respond = { status = 99 }
 [[site.route]]
-path = "/d"
+prefix = "/d"
 respond = { status = 200, body = "you asked for {path}", headers = { "content-type" = "text/html" } }
 [[site.route]]
-path = "/e"
+prefix = "/e"
 redirect = { to = "https://x" }
-headers = { set = { "x-a" = "1" } }
+response_headers = { set = { "x-a" = "1" } }
 "#,
         );
         assert!(has_err(
@@ -1492,19 +1877,19 @@ headers = { set = { "x-a" = "1" } }
 [[site]]
 hosts = ["x"]
 [[site.route]]
-path = "/a"
+prefix = "/a"
 respond = { status = 200 }
 auth = {}
 [[site.route]]
-path = "/b"
+prefix = "/b"
 respond = { status = 200 }
 auth = { basic = { users = { u = "$argon2id$x" } }, bearer = { tokens = ["t"] } }
 [[site.route]]
-path = "/c"
+prefix = "/c"
 respond = { status = 200 }
 auth = { basic = { users = { u = "$argon2id$x" }, htpasswd = "/tmp/x.htpasswd" } }
 [[site.route]]
-path = "/d"
+prefix = "/d"
 respond = { status = 200 }
 auth = { basic = {} }
 "#,
@@ -1532,15 +1917,15 @@ auth = { basic = {} }
 [[site]]
 hosts = ["x"]
 [[site.route]]
-path = "/g"
+prefix = "/g"
 respond = {{ status = 200 }}
 auth = {{ basic = {{ htpasswd = {:?} }} }}
 [[site.route]]
-path = "/b"
+prefix = "/b"
 respond = {{ status = 200 }}
 auth = {{ basic = {{ htpasswd = {:?} }} }}
 [[site.route]]
-path = "/m"
+prefix = "/m"
 respond = {{ status = 200 }}
 auth = {{ basic = {{ htpasswd = "{}" }} }}
 "#,
@@ -1572,11 +1957,11 @@ auth = {{ basic = {{ htpasswd = "{}" }} }}
 [[site]]
 hosts = ["x"]
 [[site.route]]
-path = "/a"
+prefix = "/a"
 respond = { status = 200 }
 auth = { bearer = {} }
 [[site.route]]
-path = "/b"
+prefix = "/b"
 respond = { status = 200 }
 auth = { api_key = { location = "header", name = "", keys = [] } }
 "#,
@@ -1605,11 +1990,11 @@ auth = { api_key = { location = "header", name = "", keys = [] } }
 [[site]]
 hosts = ["x"]
 [[site.route]]
-path = "/a"
+prefix = "/a"
 respond = { status = 200 }
 rate_limit = { key = "bogus", rate = "100/s" }
 [[site.route]]
-path = "/b"
+prefix = "/b"
 respond = { status = 200 }
 rate_limit = { key = "ip", rate = "0/s" }
 "#,
@@ -1633,15 +2018,15 @@ rate_limit = { key = "ip", rate = "0/s" }
 [[site]]
 hosts = ["x"]
 [[site.route]]
-path = "/a"
+prefix = "/a"
 respond = { status = 200 }
 cors = {}
 [[site.route]]
-path = "/b"
+prefix = "/b"
 respond = { status = 200 }
 cors = { origins = ["re:(broken"] }
 [[site.route]]
-path = "/c"
+prefix = "/c"
 respond = { status = 200 }
 cors = { origins = ["*"], credentials = true }
 "#,
@@ -1708,19 +2093,19 @@ unavailable = { status = 42 }
 [[site]]
 hosts = ["x"]
 [[site.route]]
-path = "/a"
+prefix = "/a"
 proxy = { upstream = ["http://u"] }
 [[site.route]]
-path = "/b"
+prefix = "/b"
 proxy = { upstream = [], rewrite = { strip_prefix = "/a", regex = { pattern = "x", replace = "y" } } }
 [[site.route]]
-path = "/c"
+prefix = "/c"
 proxy = { upstream = ["http://u"], rewrite = { regex = { pattern = "(", replace = "y" } } }
 [[site.route]]
-path = "/d"
+prefix = "/d"
 proxy = { upstream = ["http://u"], rewrite = { strip_prefix = "noslash" } }
 [[site.route]]
-path = "/e"
+prefix = "/e"
 proxy = { upstream = ["http://u"], retries = { budget_fraction = 1.5 } }
 "#,
         );
@@ -1749,18 +2134,23 @@ proxy = { upstream = ["http://u"], retries = { budget_fraction = 1.5 } }
             "site[\"x\"].route[4].retries.budget_fraction",
             "between 0 and 1"
         ));
-        assert!(has_err(
-            &cfg,
-            "site[\"x\"].route[4].proxy.retries",
-            "in [0, 1]"
-        ));
+        // exactly one budget_fraction diagnostic, not two
+        assert_eq!(
+            errors(&cfg)
+                .iter()
+                .filter(|d| d.path.contains("route[4]") && d.message.contains("budget_fraction"))
+                .count(),
+            1,
+            "{:?}",
+            errors(&cfg)
+        );
         // inline URL list is checked per-url
         let cfg = parse_test_config(
             r#"
 [[site]]
 hosts = ["x"]
 [[site.route]]
-path = "/f"
+prefix = "/f"
 proxy = { upstream = ["bogus"] }
 "#,
         );
@@ -1795,11 +2185,11 @@ max_object_bytes = "0B"
 [[site]]
 hosts = ["x"]
 [[site.route]]
-path = "/a"
+prefix = "/a"
 respond = { status = 200 }
 cache = { store = "missing" }
 [[site.route]]
-path = "/b"
+prefix = "/b"
 respond = { status = 200 }
 cache = { store = "unusedpath" }
 auth = { api_key = { location = "query", name = "k", keys = ["x"] } }
@@ -1829,7 +2219,7 @@ auth = { api_key = { location = "query", name = "k", keys = ["x"] } }
 [[site]]
 hosts = ["x"]
 [[site.route]]
-path = "/a"
+prefix = "/a"
 respond = { status = 200 }
 compress = { algorithms = ["br", "deflate"] }
 "#,

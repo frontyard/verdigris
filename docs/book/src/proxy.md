@@ -4,9 +4,7 @@
 [upstream.app]
 servers = ["http://app1:9000", "http://app2:9000"]
 lb = "least_conn"                  # round_robin | least_conn | ip_hash
-
-[upstream.app.timeouts]
-max_connections = 256
+max_connections = 256              # per-member connection cap
 
 [upstream.app.health.passive]
 failures = 3
@@ -54,9 +52,9 @@ list. Inside a route, `proxy.upstream` accepts the same three shapes:
 ## Headers
 
 Request headers can be set/cleared per route under
-`proxy.request_headers` (`headers` is accepted as an alias); response
-headers under `route.response_headers`. `Host` is rewritten to the
-member authority when `pass_host = true` (the default); set it `false`
-to pass the client's original `Host` through. Hop-by-hop headers are
+`proxy.request_headers`; response headers under `route.response_headers`.
+`Host` is rewritten to the member authority by default
+(`host_header = "upstream"`); set `host_header = "original"` to pass the
+client's `Host` through. Hop-by-hop headers are
 stripped; `X-Forwarded-For` is appended when the peer is trusted
 (otherwise replaced) and `X-Forwarded-Proto` reflects the inbound scheme.

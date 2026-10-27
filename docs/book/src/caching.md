@@ -18,6 +18,8 @@ cache = { store = "main", ttl = "5m",
           stale_while_revalidate = "30s", stale_if_error = "5m" }
 ```
 
+A bare `cache = "main"` enables the store with default settings.
+
 ## Semantics
 
 Honours `Cache-Control`/`Expires` on responses, request directives
