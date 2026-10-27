@@ -13,10 +13,12 @@ workflow publishes the matching section as the GitHub release notes.
 
 ### Build & CI
 
-- **CodSpeed perf tracking** — `codspeed.yml` benchmarks per-request
-  hot paths (`benches/hot_paths.rs`: path normalization, host/route
-  matching, cache-key construction, config parse) in simulation mode,
-  posting regression reports on every PR.
+- **CodSpeed perf tracking** — `codspeed.yml` benchmarks the
+  per-request pipeline in simulation mode (`benches/hot_paths.rs`:
+  normalization, host/route matching incl. condition-rejection climbs
+  and regex fallback, client-IP resolution, upstream pick, cache key +
+  RAM lookup, forwarded-header rewrite, response decoration, config
+  parse as control), posting regression reports on every PR.
 
 ### Fixed
 

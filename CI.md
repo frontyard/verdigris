@@ -82,9 +82,13 @@ on pushes to `main`.
 Runs `benches/hot_paths.rs` via `cargo codspeed` on every PR in
 **simulation mode** — instruction-count measurement that's
 deterministic on shared runners, so small regressions surface as
-signal rather than walltime noise. The benches cover per-request hot
-paths: `normalize_path`, host/route matching, cache-key construction,
-plus config parsing as a control. Results post as a CodSpeed check +
+signal rather than walltime noise. The benches cover the per-request
+pipeline end to end: path normalization, host + route matching
+(first-try hit, condition-rejection climb, regex fallback, query
+conditions), client-IP resolution, upstream pick, cache key + RAM hit,
+forwarded-header rewrite, response decoration (security headers,
+compression negotiation), request-ID generation, plus config parsing
+as a control. Results post as a CodSpeed check +
 comment; tracked over time at codspeed.io. Requires the CodSpeed
 GitHub App installed on the repo; public repos need no token.
 
