@@ -32,6 +32,8 @@ format = "json"            # or "pretty"
 output = "/var/log/verd/access.log"   # or "stdout" / "stderr"
 filter = 'path != "/healthz" && status != 404'
 sample = 0.25              # deterministic fraction
+# access = "/var/log/verd/access.log" is the same thing when the rest
+# is default — access = false disables logging entirely
 ```
 
 Fields: `ts` (RFC 3339 UTC), `req_id`, `client_ip`, `method`, `host`,

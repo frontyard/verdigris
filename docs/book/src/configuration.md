@@ -41,17 +41,34 @@ ergonomic conveniences apply broadly:
   prefix = "/api"
   proxy = "http://app:9000"                 # { upstream = "…" }
   rate_limit = "100/s"                      # { rate = "100/s", key = "ip" }
+  # rate_limit = { rate = "100/s" }         # same — `key` defaults to "ip"
   compress = true                           # default compression on
 
   [[site.route]]
   prefix = "/files"
   static = "/srv/www"                       # { root = "/srv/www" }
   cache = "mem"                             # { store = "mem" }
+
+  [[site.route]]
+  prefix = "/gone"
+  respond = 410                             # { status = 410, body = "" }
   ```
 
-  The closed shorthand list and the "two forms per field" cap live in
-  `docs/config-grammar.md`; the per-field types are in the
-  [reference](./reference.md).
+  More one-liners in the same spirit: `retries = 3` (a
+  `max_per_request` count), `unavailable = 503` (the no-healthy-member
+  status), `health = "/hc"` on an upstream (an `active` probe),
+  `log.access = "/var/log/x.log"` (just the output destination), and
+  `host_header = { value = "…" }` (verbatim even when the value spells
+  a keyword like `"upstream"`).
+
+  Sites get the same catch-all treatment as `root`/`proxy`:
+  `site.respond` and `site.redirect` materialize an implicit `/` route
+  — a whole site becomes `redirect = "https://apex.example{path}"` for
+  the www → apex case. At most one catch-all shorthand per site.
+
+  The closed shorthand list and the cap — at most two shorthand forms
+  beside the table — live in `docs/config-grammar.md`; the per-field
+  types are in the [reference](./reference.md).
 
 Network fields (`ip_allow`, `ip_deny`, `trusted_proxies`,
 `rate_limit.exempt`) take CIDRs *or* bare IPs — `"10.0.0.1"` parses as
@@ -59,8 +76,12 @@ the host route `10.0.0.1/32`.
 
 Disabled blocks: every inheritable middleware block understands
 `enabled = false`, which opts a route out of a site-level (or global)
-default. `security = false`, `cache = false`, `compress = false`, and
-`log.access = false` also take the bare spelling.
+default — and all of them take the bare spelling too: `auth = false`,
+`cors = false`, `rate_limit = false`, `response_headers = false`,
+`security = false`, `cache = false`, `compress = false`,
+`log.access = false`. `server_header = false` omits the `Server`
+header (as does `""`). A bare `false` carries no settings and never
+warns; stray keys inside a disabled *table* do.
 
 ## Durations
 

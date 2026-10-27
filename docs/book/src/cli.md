@@ -16,7 +16,7 @@
 
 | Flag | Env var | Applies to | Effect |
 | --- | --- | --- | --- |
-| `-c, --config PATH` | `VERD_CONFIG` | `run`, `validate`, `config`, `fmt` | Config file path. Without it, `verd` searches `./verd.toml` and `/etc/verd/verd.toml`. |
+| `-c, --config PATH` | `VERD_CONFIG` | `run`, `validate`, `config`, `fmt` | Config file path. Without it, `verd` searches `./verd.toml` and `/etc/verd/verd.toml`. `-c -` reads the config from stdin — `include` and `${file:…}` resolve against the current directory and sources report `<stdin>` (`verd fmt -c -` prints the formatted document to stdout; `--check`/`--diff` compare instead). |
 | `--watch` | — | `run` | Reload config when it changes on disk (in addition to `POST /reload`). Observes the parent directories of every loaded source — the config file, `include`d files, `include` dirs/globs, and `${file:…}` secret files — so atomic renames, editor save-swaps, k8s `..data` swaps, and newly dropped-in `*.toml` include fragments all trigger a reload. Events on unrelated files in those directories (e.g. a log file written next to the config) are ignored. The watched set is re-derived after each reload. |
 | `--format FMT` | — | `validate` | `text` (default) prints diagnostics on stderr; `json` prints a machine-readable report on stdout — always `{ valid, strict, diagnostics, sources }`, plus `"error"` on load/dry-build failures. |
 | `--format FMT` | — | `config` | `toml` (default) prints canonical TOML; `json` prints the same redacted JSON the admin `/config` endpoint serves. |

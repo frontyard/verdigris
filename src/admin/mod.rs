@@ -14,6 +14,7 @@ use axum::routing::{get, post};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 
+use crate::config::model::AdminTls;
 use crate::server::{Reload, Runtime, Shared};
 
 /// Router state: the swap point plus the reload request channel.
@@ -350,9 +351,16 @@ pub async fn serve(
     })?;
 
     let acceptor = match &rt.config.admin.tls {
-        Some(m) => {
-            let ck = crate::tls::manual::load_pair(m)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+        Some(t) => {
+            let ck = match t {
+                AdminTls::Manual(m) => crate::tls::manual::load_pair(m)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?,
+                AdminTls::SelfSigned => {
+                    let hosts = vec!["localhost".to_string(), addr.ip().to_string()];
+                    crate::tls::selfsigned::generate(&hosts)
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?
+                }
+            };
             let resolver = Arc::new(crate::tls::resolver::CertResolver::default());
             resolver.set_default(ck);
             let mut sc = rustls::ServerConfig::builder()

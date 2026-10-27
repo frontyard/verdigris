@@ -20,22 +20,6 @@ workflow publishes the matching section as the GitHub release notes.
   public DNS propagation, and retracts them after validation. This
   enables wildcard certificates (`hosts = ["*.example.com"]`) and
   issuance on hosts with no ACME-reachable ports at all.
-
-### Build & CI
-
-- **Doc snippets gated on every PR** — `ci.yml`'s `generated docs in
-  sync` job now runs `docs/check-snippets.py`; previously it only ran
-  in `docs.yml` on `docs/**` changes, so a `src/config`-only PR could
-  break book/README TOML snippets with no check firing.
-- **CodSpeed perf tracking** — `codspeed.yml` benchmarks the
-  per-request pipeline in simulation mode (`benches/hot_paths.rs`:
-  normalization, host/route matching incl. condition-rejection climbs
-  and regex fallback, client-IP resolution, upstream pick, cache key +
-  RAM lookup, forwarded-header rewrite, response decoration, config
-  parse as control), posting regression reports on every PR.
-
-### Added
-
 - **Route shorthand values** — `route.cache` accepts a bare store name
   (`cache = "main"`), `route.compress` accepts `compress = true`,
   and `route.proxy` accepts an upstream name, URL, or URL list —
@@ -54,6 +38,10 @@ workflow publishes the matching section as the GitHub release notes.
   `docs/config-grammar.md` freezes the accepted field shapes, shorthand
   parity rules, scalar-vs-list policy, off-switches, and diagnostic
   conventions; `surface_audit` tests assert each invariant behaviorally.
+- **Config ergonomics review** — `docs/config-ergonomics-review.md`
+  audits the whole `verd.toml` surface against the grammar invariants
+  and records proposed parity fixes, new-form candidates, and
+  deliberately-rejected spellings, prioritized for implementation.
 - **`[log]` server logging is now wired** — `log.level`, `log.format`
   and `log.output` actually configure the server log (they were parsed
   and documented but never applied). Level resolves `--log-level` /
@@ -126,6 +114,47 @@ workflow publishes the matching section as the GitHub release notes.
 - **`did you mean` for named references** — unknown `upstream` names
   and `cache.store` values suggest the closest defined name, or list
   the defined ones.
+- **Bare `false` for the remaining middleware blocks** —
+  `auth = false`, `cors = false`, `rate_limit = false`, and
+  `response_headers = false` work at site and route scope (a bare
+  `false` carries no settings and produces no dead-config warning);
+  `server_header = false` omits the `Server` header.
+- **`admin.listen = ":port"`** — the wildcard spelling matches
+  `server.listen` entries; the non-loopback `admin.token` rule still
+  applies.
+- **`rate_limit` table `key` defaults to `"ip"`** —
+  `rate_limit = { rate = "10/s" }` no longer errors for a missing key.
+- **More scalar shorthands** — `retries = 3` (`max_per_request`),
+  `respond = 404`, `upstream.*.unavailable = 503`,
+  `log.access = "/path"` (the output destination), `upstream.*.health =
+  "/path"` (an `active` probe), and `host_header = { value = "…" }`
+  (sent verbatim even when the value spells a keyword like
+  `"upstream"`).
+- **`site.respond` / `site.redirect`** — catch-all respond/redirect
+  shorthands accepting every `route.respond`/`route.redirect` shape;
+  `root`, `proxy`, `respond`, `redirect` remain mutually exclusive.
+  A whole site can now be `redirect = "https://apex.example{path}"`.
+- **`admin.tls = "self_signed"`** — a generated localhost certificate
+  for the admin listener (development convenience); `{ cert, key }`
+  stays the production form.
+- **`-c -` / `VERD_CONFIG=-`** — `run`, `validate`, `config`, and `fmt`
+  read the root document from stdin; `include` and `${file:}` resolve
+  against the current directory and sources report `<stdin>`. `verd
+  fmt -c -` prints the formatted document to stdout instead of writing
+  a file.
+
+### Build & CI
+
+- **Doc snippets gated on every PR** — `ci.yml`'s `generated docs in
+  sync` job now runs `docs/check-snippets.py`; previously it only ran
+  in `docs.yml` on `docs/**` changes, so a `src/config`-only PR could
+  break book/README TOML snippets with no check firing.
+- **CodSpeed perf tracking** — `codspeed.yml` benchmarks the
+  per-request pipeline in simulation mode (`benches/hot_paths.rs`:
+  normalization, host/route matching incl. condition-rejection climbs
+  and regex fallback, client-IP resolution, upstream pick, cache key +
+  RAM lookup, forwarded-header rewrite, response decoration, config
+  parse as control), posting regression reports on every PR.
 
 ### Changed
 

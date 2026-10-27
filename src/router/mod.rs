@@ -217,6 +217,20 @@ pub fn build(config: &cfg::Config, mw: &middleware::Factory) -> Result<HostIndex
                 ..Default::default()
             });
         }
+        if let Some(resp) = &site_cfg.respond {
+            route_cfgs.push(cfg::RouteConfig {
+                prefix: Some("/".into()),
+                respond: Some(resp.clone()),
+                ..Default::default()
+            });
+        }
+        if let Some(redir) = &site_cfg.redirect {
+            route_cfgs.push(cfg::RouteConfig {
+                prefix: Some("/".into()),
+                redirect: Some(redir.clone()),
+                ..Default::default()
+            });
+        }
 
         let mut routes = Vec::new();
         let empty_match = cfg::MatchConditions::default();

@@ -33,40 +33,66 @@ where one field dominates the table — they are a closed set:
 | Field | Accepted forms | Expands to |
 | --- | --- | --- |
 | `server.listen` | `"ip:port"`/`":port"` \| `{ addr, tls }` | `ListenAddr` |
+| `admin.listen` | `"ip:port"`/`":port"` | `SocketAddr` |
+| `admin.tls` | `"self_signed"` \| `{cert,key}` | `AdminTls` |
+| `server.server_header` | `false` \| `"value"` | `String` (`""` = omit) |
 | `site.proxy` | `upstream` shapes \| table | `ProxyHandler{upstream,…}` |
+| `site.respond` | `"text"` \| `404` \| table | `RespondHandler` |
+| `site.redirect` | `"url"` \| table | `RedirectHandler{to,…}` |
 | `route.proxy` | `upstream` shapes \| table | `ProxyHandler{upstream,…}` |
 | `route.proxy.upstream` | name \| URL \| `[urls]` | `UpstreamRef` |
 | `route.static` | `"root"` \| table | `StaticHandler{root,…}` |
 | `route.redirect` | `"url"` \| table | `RedirectHandler{to,…}` |
-| `route.respond` | `"text"` \| table | `RespondHandler{body,…}` |
-| `route.rate_limit` | `"100/s"` \| table | `RateLimitConfig{key:"ip",…}` |
+| `route.respond` | `"text"` \| `404` \| table | `RespondHandler{body,…}` |
+| `site.auth`/`route.auth` | `false` \| table | `AuthConfig{enabled,…}` |
+| `site.cors`/`route.cors` | `false` \| table | `CorsConfig{enabled,…}` |
+| `site.response_headers`/`route.response_headers` | `false` \| table | `HeaderOps{enabled,…}` |
+| `site.rate_limit`/`route.rate_limit` | `false` \| `"100/s"` \| table | `RateLimitConfig{key:"ip",…}` |
 | `route.cache` | `false` \| `"store"` \| table | `RouteCache{store,…}` |
 | `route.compress` | `true`/`false` \| table | `CompressConfig` |
 | `site.security`/`route.security` | `false` \| table | `RouteSecurity{enabled,…}` |
-| `proxy.retries` | `false`/`true` \| table | `RetryPolicy` |
+| `proxy.retries` | `false`/`true` \| `3` \| table | `RetryPolicy` |
+| `proxy.host_header` | `"kw"`/verbatim \| `{ value }` | `HostHeader` |
+| `upstream.unavailable` | `503` \| table | `UnavailableResponse{status}` |
+| `upstream.health` | `"/path"` \| table | `HealthCheck{active:{path}}` |
 | `upstream.dns` | `"60s"` \| table | `UpstreamDns{grace}` |
 | `upstream.health.active` | `"/path"` \| table | `ActiveHealth{path,…}` |
 | `upstream.health.passive` | `5` \| table | `PassiveHealth{failures,…}` |
 | `upstream.servers` entry | `"url"` \| `{url,weight,backup}` | `UpstreamServer` |
 | `rewrite.replace_prefix` | `{ from, to }` | `PrefixPair` (map only) |
 | `site.tls` | `"off"∣"auto"∣"self_signed"` \| `{cert,key}` | `SiteTls` |
-| `log.access` | `false` \| table | `AccessLog{enabled,…}` |
+| `log.access` | `false` \| `"output"` \| table | `AccessLog{enabled,…}` |
 | `acme.directory` | `"letsencrypt"`/`"letsencrypt-staging"` \| URL | resolved URL |
 
 Every shorthand has an `*Schema`/`repr` untagged wrapper for schemars
 and a `deserialize_with` adapter — the `opt_route_cache`/`opt_compress`
-pattern. No fourth spelling per field, ever: two forms is the cap.
-`server.listen`'s `":port"` spelling is an address-level nicety inside
-the string form, not a third form; `acme.directory` aliases resolve to
-their URL at load (one canonical value, no second shape).
+pattern. The cap is two *shorthand* forms beside the table, not two
+forms total: `route.cache` (`false | "store" | table`), `route.respond`
+(`404 | "text" | table`), `rate_limit` (`false | "100/s" | table`),
+`proxy.retries` (`bool | 3 | table`) and `log.access`
+(`false | "output" | table`) each carry two shorthands. No field grows
+a fourth spelling.
+`server.listen`'s/`admin.listen`'s `":port"` spelling is an
+address-level nicety inside the string form, not a third form;
+`acme.directory` aliases resolve to their URL at load (one canonical
+value, no second shape).
+
+`upstream.health` is the one *parent*-field shorthand — `"/path"`
+targets `health.active`. No other grouping field gets one: `active`
+is overwhelmingly the common case and a `timeouts = "30s"` style
+shorthand would invite arbitrary parent sugar.
 
 **Parity.** Where site-level and route-level fields share semantics,
 each accepts the same forms: `site.proxy` accepts every `route.proxy`
 shape including the full `{ upstream, … }` table (the implicit
-catch-all route carries the whole handler); the site-level middleware
-defaults (`site.auth`, `site.cors`, `site.rate_limit`, `site.cache`,
-`site.compress`, `site.response_headers`) accept exactly the route
-forms — `site.rate_limit = "100/s"` works just like the route's.
+catch-all route carries the whole handler); `site.respond`/`site.
+redirect` accept every `route.respond`/`route.redirect` shape; the
+site-level middleware defaults (`site.auth`, `site.cors`,
+`site.rate_limit`, `site.cache`, `site.compress`,
+`site.response_headers`) accept exactly the route forms —
+`site.rate_limit = "100/s"` works just like the route's. At most one
+site catch-all shorthand (`root`, `proxy`, `respond`, `redirect`) may
+be set — they are mutually exclusive.
 
 ## Scalar-vs-list
 
@@ -100,11 +126,15 @@ here why not: `log.access` (`false` or `{ enabled = false }`),
 (`false` ⇒ disabled table).
 
 Route middleware blocks (`auth`, `cors`, `rate_limit`, `cache`,
-`compress`, `response_headers`) carry `enabled = true` by default;
-`enabled = false` is the opt-out that suppresses an inherited
-site-level default. `site.security`/`route.security` take the bare
-`false` spelling as well as `{ enabled = false }`. Settings left
-inside a disabled block are dead config and `verd validate` warns.
+`compress`, `response_headers`, `security`) carry `enabled = true` by
+default; `enabled = false` is the opt-out that suppresses an inherited
+site-level default. The bare `false` spelling works for all of them —
+`auth = false`, `cors = false`, `rate_limit = false`,
+`response_headers = false`, `security = false` — and produces no
+dead-config warning (a bare `false` carries no settings). Settings
+left inside a disabled *table* are dead config and `verd validate`
+warns. `server.server_header` takes `false` as its omit spelling
+(`""` also omits).
 
 `server.listen` has no `enabled` — an empty list already means "no
 sockets" and the validator requires at least one listener anyway.
@@ -119,8 +149,8 @@ catch-alls. Resolution:
 
 - A route's own block wins whole-block (no field merge) — except
   `response_headers`, whose `set`/`add` maps union with route keys
-  winning and whose `remove` concatenates, and `security`, which
-  merges field-wise global → site → route.
+  winning and whose `remove` concatenates, and `security`, `timeouts`
+  and `limits`, which merge field-wise global → site → route.
 - `enabled = false` at route scope opts out of the inherited block.
 - A site `rate_limit` builds **one shared limiter** — every route that
   inherits it draws from the same buckets. A route's own `rate_limit`

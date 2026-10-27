@@ -23,7 +23,7 @@ what GitHub shows):
 `cargo test --all-targets`, `cargo clippy --all-targets -- -D warnings`,
 `cargo fmt --check`, `cargo deny check`. `docs/book/src/reference.md` is
 generated — regenerate with `cargo run -- schema | python3
-docs/gen-reference.py`, never edit by hand.
+docs/gen-reference.py > docs/book/src/reference.md`, never edit by hand.
 
 ## Config surface changes
 

@@ -162,11 +162,22 @@ impl WatchPlan {
 /// deserialize → validate.
 pub fn load(path: &Path) -> Result<Loaded, LoadError> {
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    load_inner(&path, None)
+}
+
+/// Load a root document read from stdin (`verd … -c -`). It is
+/// displayed as `<stdin>`; `include` and `${file:}` resolve against the
+/// current directory since stdin has no directory of its own.
+pub fn load_stdin(text: &str) -> Result<Loaded, LoadError> {
+    load_inner(Path::new("<stdin>"), Some(text))
+}
+
+fn load_inner(path: &Path, root_text: Option<&str>) -> Result<Loaded, LoadError> {
     let mut report = LoadReport::default();
-    let (value, origins) = load_document(&path, 0, &mut report)?;
+    let (value, origins) = load_document(path, 0, &mut report, root_text)?;
     let config: Config = serde_path_to_error::deserialize(value).map_err(|e| {
         LoadError::Schema(
-            path.clone(),
+            path.to_path_buf(),
             format!(
                 "{}: {}",
                 normalize_serde_path(&e.path().to_string()),
@@ -703,10 +714,11 @@ fn load_document(
     path: &Path,
     depth: usize,
     report: &mut LoadReport,
+    root_text: Option<&str>,
 ) -> Result<(toml::Value, std::collections::HashMap<String, PathBuf>), LoadError> {
     let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     report.stack.push(canon.clone());
-    let out = load_document_impl(&canon, depth, report);
+    let out = load_document_impl(&canon, depth, report, root_text);
     report.stack.pop();
     if out.is_ok() {
         report.done.insert(canon);
@@ -718,6 +730,7 @@ fn load_document_impl(
     path: &Path,
     depth: usize,
     report: &mut LoadReport,
+    root_text: Option<&str>,
 ) -> Result<(toml::Value, std::collections::HashMap<String, PathBuf>), LoadError> {
     if depth > MAX_INCLUDE_DEPTH {
         return Err(LoadError::IncludeDepth(
@@ -725,11 +738,20 @@ fn load_document_impl(
             MAX_INCLUDE_DEPTH,
         ));
     }
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| LoadError::Io(path.to_path_buf(), e.to_string()))?;
+    // `root_text` carries the stdin document for `-c -`; it applies to
+    // the root call only — includes always come from the filesystem.
+    let owned;
+    let text: &str = match root_text {
+        Some(t) => t,
+        None => {
+            owned = std::fs::read_to_string(path)
+                .map_err(|e| LoadError::Io(path.to_path_buf(), e.to_string()))?;
+            &owned
+        }
+    };
     report.sources.push(path.to_path_buf());
     let mut value: toml::Value =
-        toml::from_str(&text).map_err(|e| LoadError::Syntax(path.to_path_buf(), e.to_string()))?;
+        toml::from_str(text).map_err(|e| LoadError::Syntax(path.to_path_buf(), e.to_string()))?;
     let base_dir = path.parent().unwrap_or(Path::new("."));
     let interp = interpolate::interpolate(&mut value, base_dir)
         .map_err(|e| LoadError::Interpolate(path.to_path_buf(), e))?;
@@ -763,7 +785,7 @@ fn load_document_impl(
     // failure is not an interpolation artifact (`${…}` inside a typed
     // field never parses raw).
     if let Err(e) = serde_path_to_error::deserialize::<toml::Value, Config>(value.clone()) {
-        let msg = match toml::from_str::<Config>(&text) {
+        let msg = match toml::from_str::<Config>(text) {
             Err(raw)
                 if raw
                     .span()
@@ -801,7 +823,7 @@ fn load_document_impl(
             if report.done.contains(&fcanon) {
                 continue;
             }
-            let (frag, frag_origins) = load_document(&fcanon, depth + 1, report)?;
+            let (frag, frag_origins) = load_document(&fcanon, depth + 1, report, None)?;
             // array positions shift on merge — rebase fragment leaf
             // paths onto merged indices so `origins` names the right
             // file for merged-config diagnostics
@@ -2624,6 +2646,140 @@ response_headers = { enabled = false }
                     .period,
                 std::time::Duration::from_secs(30)
             );
+        }
+
+        #[test]
+        fn ergonomics_review_forms() {
+            // bare `false` for the inherited middleware blocks, site+route
+            let l = load_str(
+                "[[site]]\nhosts = [\"x\"]\nauth = false\ncors = false\nrate_limit = false\nresponse_headers = false\n[[site.route]]\nrespond = { status = 200 }\nauth = false\ncors = false\nrate_limit = false\nresponse_headers = false",
+            )
+            .unwrap();
+            let s = &l.config.site[0];
+            assert!(!s.auth.as_ref().unwrap().enabled);
+            assert!(!s.cors.as_ref().unwrap().enabled);
+            assert!(!s.rate_limit.as_ref().unwrap().enabled);
+            assert!(!s.response_headers.as_ref().unwrap().enabled);
+            let r = &s.route[0];
+            assert!(!r.auth.as_ref().unwrap().enabled);
+            assert!(!r.cors.as_ref().unwrap().enabled);
+            assert!(!r.rate_limit.as_ref().unwrap().enabled);
+            assert!(!r.response_headers.as_ref().unwrap().enabled);
+            // a bare `false` carries no settings — no dead-config warn
+            assert!(
+                !l.diagnostics
+                    .iter()
+                    .any(|d| d.message.contains("settings are ignored"))
+            );
+
+            // admin.listen = ":port" → wildcard, same as server.listen
+            let l = load_str("[admin]\nlisten = \":2019\"\ntoken = \"t\"").unwrap();
+            assert_eq!(l.config.admin.listen.to_string(), "0.0.0.0:2019");
+
+            // rate_limit table `key` defaults to "ip"
+            let l = load_str(
+                "[[site]]\nroot = \"/tmp\"\n[[site.route]]\nrate_limit = { rate = \"10/s\" }",
+            )
+            .unwrap();
+            assert_eq!(
+                l.config.site[0].route[0].rate_limit.as_ref().unwrap().key,
+                "ip"
+            );
+
+            // server_header = false omits; "off" keeps parsing
+            let l = load_str("[server]\nserver_header = false").unwrap();
+            assert_eq!(l.config.server.server_header, "");
+            let l = load_str("[server]\nserver_header = \"off\"").unwrap();
+            assert_eq!(l.config.server.server_header, "off");
+            match load_str("[server]\nserver_header = true") {
+                Err(LoadError::Schema(_, _)) => {}
+                Err(e) => panic!("expected Schema, got {e}"),
+                Ok(_) => panic!("server_header = true should fail"),
+            }
+
+            // retries = 3 → { max_per_request = 3 }
+            let l = load_str(
+                "[[site]]\n[[site.route]]\n[site.route.proxy]\nupstream = \"http://x:1\"\nretries = 3",
+            )
+            .unwrap();
+            assert_eq!(
+                l.config.site[0].route[0]
+                    .proxy
+                    .as_ref()
+                    .unwrap()
+                    .retries
+                    .max_per_request,
+                3
+            );
+
+            // respond = 404 → { status = 404, body = "" } at route+site
+            let l = load_str("[[site]]\n[[site.route]]\nprefix = \"/\"\nrespond = 404").unwrap();
+            let r = l.config.site[0].route[0].respond.as_ref().unwrap();
+            assert_eq!((r.status, r.body.as_str()), (404, ""));
+            let l = load_str("[[site]]\nhosts = [\"x\"]\nrespond = \"ok\"").unwrap();
+            assert_eq!(l.config.site[0].respond.as_ref().unwrap().body, "ok");
+
+            // site.redirect → catch-all redirect shorthand
+            let l =
+                load_str("[[site]]\nhosts = [\"www.x\"]\nredirect = \"https://x{path}\"").unwrap();
+            assert_eq!(
+                l.config.site[0].redirect.as_ref().unwrap().to.as_deref(),
+                Some("https://x{path}")
+            );
+
+            // upstream.unavailable = 503 → { status = 503 }
+            let l = load_str("[upstream.u]\nservers = \"x:1\"\nunavailable = 503").unwrap();
+            assert_eq!(l.config.upstream["u"].unavailable.status, 503);
+
+            // log.access = "/path" → { output }; "stderr" is also a dest
+            let l = load_str("[log]\naccess = \"/var/log/v.log\"").unwrap();
+            assert_eq!(l.config.log.access.output, "/var/log/v.log");
+            let l = load_str("[log]\naccess = \"stderr\"").unwrap();
+            assert_eq!(l.config.log.access.output, "stderr");
+
+            // upstream.health = "/path" → { active = { path } }
+            let l = load_str("[upstream.u]\nservers = \"x:1\"\nhealth = \"/hc\"").unwrap();
+            assert_eq!(
+                l.config.upstream["u"].health.active.as_ref().unwrap().path,
+                "/hc"
+            );
+
+            // admin.tls = "self_signed"
+            let l =
+                load_str("[admin]\nlisten = \"127.0.0.1:2019\"\ntls = \"self_signed\"").unwrap();
+            assert!(matches!(
+                l.config.admin.tls,
+                Some(model::AdminTls::SelfSigned)
+            ));
+
+            // host_header = { value = "upstream" } → deliberate verbatim,
+            // not the keyword
+            let l = load_str(
+                "[[site]]\n[[site.route]]\n[site.route.proxy]\nupstream = \"http://x:1\"\nhost_header = { value = \"upstream\" }",
+            )
+            .unwrap();
+            assert_eq!(
+                l.config.site[0].route[0]
+                    .proxy
+                    .as_ref()
+                    .unwrap()
+                    .host_header,
+                model::HostHeader::Verbatim("upstream".into())
+            );
+        }
+
+        #[test]
+        fn load_stdin_reads_root_from_text() {
+            // `verd … -c -` — the root doc comes from `text`, shown as
+            // `<stdin>`; includes resolve against the CWD
+            let l = load_stdin("[[site]]\nhosts = [\"x\"]\nroot = \"/tmp\"\n").unwrap();
+            assert_eq!(l.config.site[0].hosts, vec!["x".to_string()]);
+            assert_eq!(l.sources, vec![PathBuf::from("<stdin>")]);
+            match load_stdin("[[site]]\nroot = \"/tmp\"\nbogus_key = 1\n") {
+                Err(LoadError::Schema(p, _)) => assert_eq!(p, PathBuf::from("<stdin>")),
+                Err(e) => panic!("expected Schema, got {e}"),
+                Ok(_) => panic!("unknown field should fail"),
+            }
         }
 
         #[test]

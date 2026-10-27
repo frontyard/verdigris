@@ -5,9 +5,10 @@ separate HTTP service from the data plane.
 
 ```toml
 [admin]
-listen = "127.0.0.1:2019"
+listen = "127.0.0.1:2019"    # ":2019" binds all interfaces
 token = "${ADMIN_TOKEN}"     # mandatory when listen is not loopback
 tls = { cert = "admin.pem", key = "admin.key" }   # optional
+# tls = "self_signed"        # or a generated localhost cert for dev
 ```
 
 | Endpoint | Description |

@@ -344,7 +344,7 @@ impl Proxy {
             let host_out = match &self.host_header {
                 cfg::HostHeader::Upstream => member.url.authority(),
                 cfg::HostHeader::Original => orig_host.clone(),
-                cfg::HostHeader::Custom(v) => v.clone(),
+                cfg::HostHeader::Custom(v) | cfg::HostHeader::Verbatim(v) => v.clone(),
             };
             if let Ok(v) = HeaderValue::from_str(&host_out) {
                 headers.insert(HOST, v);

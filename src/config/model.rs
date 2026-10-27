@@ -69,14 +69,19 @@ fn access_or_off<'de, D: serde::Deserializer<'de>>(d: D) -> Result<AccessLog, D:
     #[serde(untagged)]
     enum Repr {
         Flag(bool),
+        Dest(String),
         Full(AccessLog),
     }
     Ok(
-        match Repr::deserialize(d)
-            .map_err(|_| serde::de::Error::custom("access must be a bool or a table"))?
-        {
+        match Repr::deserialize(d).map_err(|_| {
+            serde::de::Error::custom("access must be a bool, an output string, or a table")
+        })? {
             Repr::Flag(enabled) => AccessLog {
                 enabled,
+                ..Default::default()
+            },
+            Repr::Dest(output) => AccessLog {
+                output,
                 ..Default::default()
             },
             Repr::Full(a) => a,
@@ -154,17 +159,22 @@ fn retries_or_off<'de, D: serde::Deserializer<'de>>(d: D) -> Result<RetryPolicy,
     #[serde(untagged)]
     enum Repr {
         Flag(bool),
+        Count(u8),
         Full(RetryPolicy),
     }
     Ok(
-        match Repr::deserialize(d)
-            .map_err(|_| serde::de::Error::custom("retries must be a bool or a table"))?
-        {
+        match Repr::deserialize(d).map_err(|_| {
+            serde::de::Error::custom("retries must be a bool, a retry count, or a table")
+        })? {
             Repr::Flag(false) => RetryPolicy {
                 max_per_request: 0,
                 ..Default::default()
             },
             Repr::Flag(true) => RetryPolicy::default(),
+            Repr::Count(n) => RetryPolicy {
+                max_per_request: n,
+                ..Default::default()
+            },
             Repr::Full(r) => r,
         },
     )
@@ -215,12 +225,18 @@ fn opt_respond<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<RespondH
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum Repr {
+        Code(u16),
         Body(String),
         Full(RespondHandler),
     }
-    let r = Option::<Repr>::deserialize(d)
-        .map_err(|_| serde::de::Error::custom("respond must be a body string or a table"))?;
+    let r = Option::<Repr>::deserialize(d).map_err(|_| {
+        serde::de::Error::custom("respond must be a status code, a body string, or a table")
+    })?;
     Ok(r.map(|r| match r {
+        Repr::Code(status) => RespondHandler {
+            status,
+            ..Default::default()
+        },
         Repr::Body(body) => RespondHandler {
             body,
             ..Default::default()
@@ -237,19 +253,21 @@ fn opt_rate_limit<'de, D: serde::Deserializer<'de>>(
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum Repr {
+        Off(bool),
         Rate(String),
         Full(RateLimitConfig),
     }
-    let r = Option::<Repr>::deserialize(d)
-        .map_err(|_| serde::de::Error::custom("rate_limit must be a rate string or a table"))?;
+    let r = Option::<Repr>::deserialize(d).map_err(|_| {
+        serde::de::Error::custom("rate_limit must be false, a rate string, or a table")
+    })?;
     Ok(match r {
+        Some(Repr::Off(b)) => Some(RateLimitConfig {
+            enabled: b,
+            ..Default::default()
+        }),
         Some(Repr::Rate(s)) => Some(RateLimitConfig {
-            enabled: true,
-            key: "ip".into(),
             rate: Some(RateSpec::parse(&s).map_err(serde::de::Error::custom)?),
-            burst: None,
-            exempt: Vec::new(),
-            dry_run: false,
+            ..Default::default()
         }),
         Some(Repr::Full(r)) => Some(r),
         None => None,
@@ -295,6 +313,90 @@ pub enum RouteSecuritySchema {
     Off(bool),
     /// Table form: per-header overrides.
     Full(Box<RouteSecurity>),
+}
+
+/// `auth` accepts `false` — opt a route out of an inherited site
+/// `auth` — or a table. Same convention as the other inherited blocks.
+fn opt_auth<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<AuthConfig>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Off(bool),
+        Full(AuthConfig),
+    }
+    Ok(Option::<Repr>::deserialize(d)?.map(|r| match r {
+        Repr::Off(b) => AuthConfig {
+            enabled: b,
+            ..Default::default()
+        },
+        Repr::Full(a) => a,
+    }))
+}
+
+/// Schema shape for `auth` — `false` or a table.
+#[derive(JsonSchema)]
+#[schemars(untagged)]
+pub enum AuthConfigSchema {
+    /// `auth = false` — no authentication on this site/route.
+    Off(bool),
+    /// Table form.
+    Full(Box<AuthConfig>),
+}
+
+/// `cors` accepts `false` (opt out of inherited CORS handling) or a table.
+fn opt_cors<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<CorsConfig>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Off(bool),
+        Full(CorsConfig),
+    }
+    Ok(Option::<Repr>::deserialize(d)?.map(|r| match r {
+        Repr::Off(b) => CorsConfig {
+            enabled: b,
+            ..Default::default()
+        },
+        Repr::Full(c) => c,
+    }))
+}
+
+/// Schema shape for `cors` — `false` or a table.
+#[derive(JsonSchema)]
+#[schemars(untagged)]
+pub enum CorsConfigSchema {
+    /// `cors = false` — no CORS handling on this site/route.
+    Off(bool),
+    /// Table form.
+    Full(Box<CorsConfig>),
+}
+
+/// `response_headers` accepts `false` (opt out of the inherited ops)
+/// or a table.
+fn opt_header_ops<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<HeaderOps>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Off(bool),
+        Full(HeaderOps),
+    }
+    Ok(Option::<Repr>::deserialize(d)?.map(|r| match r {
+        Repr::Off(b) => HeaderOps {
+            enabled: b,
+            ..Default::default()
+        },
+        Repr::Full(h) => h,
+    }))
+}
+
+/// Schema shape for `response_headers` — `false` or a table.
+#[derive(JsonSchema)]
+#[schemars(untagged)]
+pub enum HeaderOpsSchema {
+    /// `response_headers = false` — no header manipulation on this
+    /// site/route.
+    Off(bool),
+    /// Table form.
+    Full(Box<HeaderOps>),
 }
 
 /// `route.proxy` accepts an upstream reference — cluster name, URL, or
@@ -374,9 +476,10 @@ pub struct ServerConfig {
     #[schemars(with = "Vec<String>")]
     #[serde(deserialize_with = "cidr::deserialize")]
     pub trusted_proxies: Vec<ipnet::IpNet>,
-    /// Value of the `Server` response header. `""` omits it (the
-    /// empty-disables convention); `"off"` is a readable alias for the
-    /// same thing.
+    /// Value of the `Server` response header. `false` or `""` omits it
+    /// (the empty-disables convention).
+    #[serde(deserialize_with = "server_header_value")]
+    #[schemars(with = "ServerHeaderSchema")]
     pub server_header: String,
     /// Maximum concurrent connections across all listeners.
     pub max_connections: usize,
@@ -496,6 +599,43 @@ fn parse_listen_addr(s: &str) -> Result<SocketAddr, String> {
         None => s,
     };
     s.parse::<SocketAddr>().map_err(|e| e.to_string())
+}
+
+/// `admin.listen` accepts `"IP:port"` and `":port"` (wildcard) strings —
+/// same grammar as `server.listen` entries.
+fn listen_addr<'de, D: serde::Deserializer<'de>>(d: D) -> Result<SocketAddr, D::Error> {
+    let s = String::deserialize(d)?;
+    parse_listen_addr(&s).map_err(serde::de::Error::custom)
+}
+
+/// `server_header` accepts a header-value string or `false` — `false`
+/// omits the header, same as `""`.
+fn server_header_value<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Off(bool),
+        Value(String),
+    }
+    match Repr::deserialize(d)
+        .map_err(|_| serde::de::Error::custom("server_header must be a string or false"))?
+    {
+        Repr::Value(s) => Ok(s),
+        Repr::Off(false) => Ok(String::new()),
+        Repr::Off(true) => Err(serde::de::Error::custom(
+            "server_header = true is meaningless — use false, \"\", or a value string",
+        )),
+    }
+}
+
+/// Schema shape for `server_header` — `false` or a string.
+#[derive(JsonSchema)]
+#[schemars(untagged)]
+pub enum ServerHeaderSchema {
+    /// `server_header = false` — omit the `Server` response header.
+    Off(bool),
+    /// Header value (`""` also omits).
+    Value(String),
 }
 
 impl<'de> Deserialize<'de> for ListenAddr {
@@ -743,16 +883,69 @@ pub struct AdminConfig {
     /// `listen`, `token`, and `tls` are then ignored.
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// `IP:port` to bind. Use loopback unless remote administration is needed.
+    /// `IP:port` to bind — `":port"` expands to the wildcard
+    /// `0.0.0.0:port`, same as `server.listen` entries. Use loopback
+    /// unless remote administration is needed.
+    #[serde(deserialize_with = "listen_addr")]
     #[schemars(with = "String")]
     pub listen: SocketAddr,
     /// Bearer token required on all admin requests. Mandatory when `listen`
     /// is not a loopback address; use `${VAR}` interpolation to keep it out
     /// of the file.
     pub token: Option<String>,
-    /// Optional TLS for the admin listener (recommended when bound beyond
-    /// localhost).
-    pub tls: Option<ManualTls>,
+    /// Optional TLS for the admin listener (recommended when bound
+    /// beyond localhost): `"self_signed"` or a `{ cert, key }` table.
+    #[schemars(with = "Option<AdminTlsSchema>")]
+    pub tls: Option<AdminTls>,
+}
+
+/// TLS mode for the admin listener.
+#[derive(Debug, Clone)]
+pub enum AdminTls {
+    /// `admin.tls = "self_signed"` — a generated certificate for
+    /// `localhost` and the listen address (development convenience).
+    SelfSigned,
+    /// PEM pair.
+    Manual(ManualTls),
+}
+
+impl<'de> Deserialize<'de> for AdminTls {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Mode(String),
+            Manual(ManualTls),
+        }
+        match Repr::deserialize(d).map_err(|_| {
+            serde::de::Error::custom("admin.tls must be \"self_signed\" or a { cert, key } table")
+        })? {
+            Repr::Mode(m) if m == "self_signed" => Ok(Self::SelfSigned),
+            Repr::Mode(m) => Err(serde::de::Error::custom(format!(
+                "admin.tls mode {m:?} is not supported — use \"self_signed\" or a {{ cert, key }} table"
+            ))),
+            Repr::Manual(m) => Ok(Self::Manual(m)),
+        }
+    }
+}
+
+impl Serialize for AdminTls {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::SelfSigned => s.serialize_str("self_signed"),
+            Self::Manual(m) => m.serialize(s),
+        }
+    }
+}
+
+/// Schema shape for `admin.tls` — `"self_signed"` or a table.
+#[derive(JsonSchema)]
+#[schemars(untagged)]
+pub enum AdminTlsSchema {
+    /// `"self_signed"` — generated localhost certificate.
+    Mode(String),
+    /// PEM pair.
+    Full(ManualTls),
 }
 
 impl Default for AdminConfig {
@@ -1033,7 +1226,10 @@ pub struct UpstreamConfig {
     pub servers: Vec<UpstreamServer>,
     /// Load balancing algorithm.
     pub lb: LoadBalancing,
-    /// Health checking.
+    /// Health checking; `health = "/healthz"` enables active probes on
+    /// that path (same as `health.active = "/healthz"`).
+    #[serde(deserialize_with = "health_or_active")]
+    #[schemars(with = "HealthCheckSchema")]
     pub health: HealthCheck,
     /// Per-upstream timeouts.
     pub timeouts: UpstreamTimeouts,
@@ -1047,7 +1243,10 @@ pub struct UpstreamConfig {
     pub dns: UpstreamDns,
     /// TLS options for `https://` upstreams.
     pub tls: UpstreamTls,
-    /// Response when no upstream in the cluster is healthy.
+    /// Response when no upstream in the cluster is healthy —
+    /// `unavailable = 503` or a table.
+    #[serde(deserialize_with = "unavailable_or_table")]
+    #[schemars(with = "UnavailableSchema")]
     pub unavailable: UnavailableResponse,
 }
 
@@ -1089,6 +1288,36 @@ impl Default for UnavailableResponse {
     }
 }
 
+/// `unavailable` accepts a status code (`unavailable = 503`) or a table.
+fn unavailable_or_table<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<UnavailableResponse, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Code(u16),
+        Full(UnavailableResponse),
+    }
+    Ok(
+        match Repr::deserialize(d)
+            .map_err(|_| serde::de::Error::custom("unavailable must be a status code or a table"))?
+        {
+            Repr::Code(status) => UnavailableResponse { status, body: None },
+            Repr::Full(u) => u,
+        },
+    )
+}
+
+/// Schema shape for `unavailable` — a status code or a table.
+#[derive(JsonSchema)]
+#[schemars(untagged)]
+pub enum UnavailableSchema {
+    /// `unavailable = 503` — this status with a default body.
+    Code(u16),
+    /// Full table form.
+    Full(UnavailableResponse),
+}
+
 /// Load balancing algorithm.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -1103,6 +1332,43 @@ pub enum LoadBalancing {
     /// Hash the client IP so it consistently reaches the same upstream.
     #[serde(alias = "ip-hash")]
     IpHash,
+}
+
+/// `health` accepts a probe-path string (`health = "/healthz"`, an
+/// `active` shorthand) or a table — the only parent-field shorthand, on
+/// the grounds that `active` is overwhelmingly the common case.
+fn health_or_active<'de, D: serde::Deserializer<'de>>(d: D) -> Result<HealthCheck, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Path(String),
+        Full(HealthCheck),
+    }
+    Ok(
+        match Repr::deserialize(d)
+            .map_err(|_| serde::de::Error::custom("health must be a path string or a table"))?
+        {
+            Repr::Path(path) => HealthCheck {
+                active: Some(ActiveHealth {
+                    path,
+                    ..Default::default()
+                }),
+                passive: None,
+            },
+            Repr::Full(h) => h,
+        },
+    )
+}
+
+/// Schema shape for `health` — a probe path or a table.
+#[derive(JsonSchema)]
+#[schemars(untagged)]
+pub enum HealthCheckSchema {
+    /// `health = "/healthz"` — active probes on this path, default
+    /// settings.
+    Path(String),
+    /// Full table form.
+    Full(HealthCheck),
 }
 
 /// Health check configuration: active probes and passive failure tracking.
@@ -1378,12 +1644,29 @@ pub struct SiteConfig {
     #[serde(deserialize_with = "opt_proxy")]
     #[schemars(with = "Option<ProxySchema>")]
     pub proxy: Option<ProxyHandler>,
+    /// Shorthand for a catch-all respond route — same accepted forms as
+    /// `route.respond` (`"text"`, `404`, or a table). Mutually exclusive
+    /// with `root`/`proxy`/`redirect`.
+    #[serde(deserialize_with = "opt_respond")]
+    #[schemars(with = "Option<RespondSchema>")]
+    pub respond: Option<RespondHandler>,
+    /// Shorthand for a catch-all redirect route — same accepted forms as
+    /// `route.redirect` (`"https://…"` or a table). Mutually exclusive
+    /// with `root`/`proxy`/`respond`.
+    #[serde(deserialize_with = "opt_redirect")]
+    #[schemars(with = "Option<RedirectSchema>")]
+    pub redirect: Option<RedirectHandler>,
     /// Routes, evaluated in order of specificity, not declaration order.
     pub route: Vec<RouteConfig>,
     /// Default auth for every route in this site; a route's own `auth`
-    /// replaces it and `auth = { enabled = false }` opts out.
+    /// replaces it and `auth = false` opts out.
+    #[serde(deserialize_with = "opt_auth")]
+    #[schemars(with = "Option<AuthConfigSchema>")]
     pub auth: Option<AuthConfig>,
-    /// Default CORS handling; a route's `cors` replaces it.
+    /// Default CORS handling; a route's `cors` replaces it and
+    /// `cors = false` opts out.
+    #[serde(deserialize_with = "opt_cors")]
+    #[schemars(with = "Option<CorsConfigSchema>")]
     pub cors: Option<CorsConfig>,
     /// Site-wide rate limit — one shared limiter for every route that
     /// inherits it, so `key = "ip"` limits each client across the whole
@@ -1404,7 +1687,10 @@ pub struct SiteConfig {
     #[schemars(with = "Option<CompressConfigSchema>")]
     pub compress: Option<CompressConfig>,
     /// Response header ops merged into every route's: `set`/`add` maps
-    /// union (route keys win), `remove` concatenates.
+    /// union (route keys win), `remove` concatenates. `response_headers =
+    /// false` is a no-op.
+    #[serde(deserialize_with = "opt_header_ops")]
+    #[schemars(with = "Option<HeaderOpsSchema>")]
     pub response_headers: Option<HeaderOps>,
     /// Client CIDRs allowed site-wide; a route's `ip_allow` can only
     /// narrow this — both non-empty lists must pass.
@@ -1481,14 +1767,20 @@ pub struct RouteConfig {
     #[schemars(with = "Vec<String>")]
     #[serde(deserialize_with = "cidr::deserialize")]
     pub ip_deny: Vec<ipnet::IpNet>,
-    /// Authentication configuration.
+    /// Authentication configuration; `auth = false` disables it,
+    /// including any inherited site default.
+    #[serde(deserialize_with = "opt_auth")]
+    #[schemars(with = "Option<AuthConfigSchema>")]
     pub auth: Option<AuthConfig>,
     /// Rate limiting: a rate string (`rate_limit = "100/s"`, per-IP
     /// key) or a table.
     #[serde(deserialize_with = "opt_rate_limit")]
     #[schemars(with = "Option<RateLimitSchema>")]
     pub rate_limit: Option<RateLimitConfig>,
-    /// CORS handling.
+    /// CORS handling; `cors = false` disables it, including any
+    /// inherited site default.
+    #[serde(deserialize_with = "opt_cors")]
+    #[schemars(with = "Option<CorsConfigSchema>")]
     pub cors: Option<CorsConfig>,
     /// Response caching: a store name (`cache = "main"`) or a table.
     #[serde(deserialize_with = "opt_route_cache")]
@@ -1498,7 +1790,10 @@ pub struct RouteConfig {
     #[serde(deserialize_with = "opt_compress")]
     #[schemars(with = "Option<CompressConfigSchema>")]
     pub compress: Option<CompressConfig>,
-    /// Response header manipulation applied to this route's responses.
+    /// Response header manipulation applied to this route's responses;
+    /// `response_headers = false` disables it.
+    #[serde(deserialize_with = "opt_header_ops")]
+    #[schemars(with = "Option<HeaderOpsSchema>")]
     pub response_headers: Option<HeaderOps>,
     /// Per-route security-header overrides; `security = false`
     /// suppresses all security headers on this route.
@@ -1646,9 +1941,10 @@ pub struct ProxyHandler {
     pub retries: RetryPolicy,
     /// Which `Host` the upstream sees: `"upstream"` (default) rewrites it
     /// to the upstream authority, `"original"` passes the client `Host`
-    /// through, any other value is sent verbatim.
+    /// through, any other value is sent verbatim. `{ value = "…" }`
+    /// forces verbatim even when the value spells a keyword.
     #[serde(default)]
-    #[schemars(with = "String")]
+    #[schemars(with = "HostHeaderSchema")]
     pub host_header: HostHeader,
 }
 
@@ -1662,16 +1958,60 @@ pub enum HostHeader {
     Original,
     /// Send this value verbatim (a `host[:port]` override).
     Custom(String),
+    /// `{ value = "…" }` form — verbatim like `Custom`, but provenance
+    /// marks it as deliberate so a value spelling a keyword doesn't trip
+    /// the typo warning.
+    Verbatim(String),
+}
+
+/// `{ value = "…" }` host_header table form — always verbatim, never
+/// keyword-resolved.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HostHeaderTable {
+    value: String,
 }
 
 impl<'de> Deserialize<'de> for HostHeader {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        match String::deserialize(d)?.as_str() {
-            "upstream" => Ok(Self::Upstream),
-            "original" => Ok(Self::Original),
-            v => Ok(Self::Custom(v.to_string())),
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Kw(String),
+            Table(HostHeaderTable),
+        }
+        match Repr::deserialize(d).map_err(|_| {
+            serde::de::Error::custom("host_header must be a string or { value = \"…\" }")
+        })? {
+            Repr::Kw(v) => Ok(match v.as_str() {
+                "upstream" => Self::Upstream,
+                "original" => Self::Original,
+                _ => Self::Custom(v),
+            }),
+            // escape hatch: a table sends `value` verbatim, even when it
+            // spells a keyword (`{ value = "upstream" }` is a literal
+            // Host header, not the rewrite mode)
+            Repr::Table(t) => Ok(Self::Verbatim(t.value)),
         }
     }
+}
+
+/// Schema shape for `host_header` — a string or `{ value = "…" }`.
+#[derive(JsonSchema)]
+#[schemars(untagged)]
+pub enum HostHeaderSchema {
+    /// `"upstream"`, `"original"`, or a verbatim value.
+    Kw(String),
+    /// `{ value = "…" }` — always verbatim, never keyword-resolved.
+    Table(HostHeaderValue),
+}
+
+/// `{ value = "…" }` host_header table form.
+#[derive(JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct HostHeaderValue {
+    /// Sent verbatim as the upstream `Host` header.
+    pub value: String,
 }
 
 impl Serialize for HostHeader {
@@ -1679,7 +2019,7 @@ impl Serialize for HostHeader {
         s.serialize_str(match self {
             Self::Upstream => "upstream",
             Self::Original => "original",
-            Self::Custom(v) => v,
+            Self::Custom(v) | Self::Verbatim(v) => v,
         })
     }
 }
@@ -1953,8 +2293,8 @@ pub struct RateLimitConfig {
     pub enabled: bool,
     /// What the limit applies to: `ip`, `identity` (authenticated identity),
     /// `route`, or `header:<Name>` for an arbitrary header value.
-    /// Required when enabled.
-    #[serde(default)]
+    /// Defaults to `ip`.
+    #[serde(default = "default_key_ip")]
     pub key: String,
     /// Sustained rate, e.g. `100/s`, `600/m`, `10000/h`. Required when
     /// enabled.
@@ -1971,6 +2311,23 @@ pub struct RateLimitConfig {
     /// Log-only mode: never reject, but emit metrics/logs as if it would.
     #[serde(default)]
     pub dry_run: bool,
+}
+
+fn default_key_ip() -> String {
+    "ip".into()
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            key: default_key_ip(),
+            rate: None,
+            burst: None,
+            exempt: Vec::new(),
+            dry_run: false,
+        }
+    }
 }
 
 /// CORS configuration.
@@ -2182,6 +2539,8 @@ pub enum CompressConfigSchema {
 pub enum RetryPolicySchema {
     /// `retries = false` — disable; `true` enables defaults.
     Flag(bool),
+    /// `retries = 3` — retry budget per request, rest defaults.
+    Count(u8),
     /// Full table form.
     Full(RetryPolicy),
 }
@@ -2192,6 +2551,9 @@ pub enum RetryPolicySchema {
 pub enum AccessLogSchema {
     /// `access = false` — disable access logging; `true` enables it.
     Flag(bool),
+    /// `access = "/var/log/app.log"` — enable, writing to this output
+    /// (`stdout`/`stderr` also work).
+    Dest(String),
     /// Full table form.
     Full(AccessLog),
 }
@@ -2260,6 +2622,8 @@ pub enum RedirectSchema {
 #[derive(JsonSchema)]
 #[schemars(untagged)]
 pub enum RespondSchema {
+    /// `respond = 404` — empty-body status response.
+    Code(u16),
     /// `"text"` — a 200 response with this body.
     Body(String),
     /// Full table form.
@@ -2270,6 +2634,8 @@ pub enum RespondSchema {
 #[derive(JsonSchema)]
 #[schemars(untagged)]
 pub enum RateLimitSchema {
+    /// `rate_limit = false` — no rate limiting on this site/route.
+    Off(bool),
     /// `"100/s"` — per-IP limit at this rate.
     Rate(String),
     /// Full table form.

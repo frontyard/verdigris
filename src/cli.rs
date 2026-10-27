@@ -1,7 +1,7 @@
 //! Command line interface: `verd run | validate | config | version | fmt | schema`.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 
@@ -271,6 +271,19 @@ fn resolve_config_path(explicit: Option<PathBuf>) -> Result<PathBuf, Vec<PathBuf
     Err(candidates.to_vec())
 }
 
+/// `verd … -c -` reads the root document from stdin (`VERD_CONFIG=-`
+/// works the same). `include` and `${file:}` resolve against the
+/// current directory.
+fn load_root(path: &Path) -> Result<crate::config::Loaded, crate::config::LoadError> {
+    if path.as_os_str() != "-" {
+        return crate::config::load(path);
+    }
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut text)
+        .map_err(|e| crate::config::LoadError::Io(PathBuf::from("<stdin>"), e.to_string()))?;
+    crate::config::load_stdin(&text)
+}
+
 fn missing_config_error(tried: &[PathBuf]) -> ExitCode {
     eprintln!("error: no configuration file found");
     eprintln!();
@@ -296,7 +309,7 @@ fn cmd_run(config: Option<PathBuf>, watch: bool, log_level: Option<&str>) -> Exi
         Ok(path) => path,
         Err(tried) => return missing_config_error(&tried),
     };
-    let loaded = match crate::config::load(&path) {
+    let loaded = match load_root(&path) {
         Ok(loaded) => loaded,
         Err(e) => {
             eprintln!("error: {e}");
@@ -513,7 +526,7 @@ fn cmd_validate(
         Err(tried) => return missing_config_error(&tried),
     };
     let json = matches!(format, ValidateFormat::Json);
-    let loaded = match crate::config::load(&path) {
+    let loaded = match load_root(&path) {
         Ok(loaded) => loaded,
         Err(e) => {
             if json {
@@ -622,7 +635,7 @@ fn cmd_config(config: Option<PathBuf>, format: ConfigFormat) -> ExitCode {
         Ok(path) => path,
         Err(tried) => return missing_config_error(&tried),
     };
-    let loaded = match crate::config::load(&path) {
+    let loaded = match load_root(&path) {
         Ok(loaded) => loaded,
         Err(e) => {
             eprintln!("error: {e}");
@@ -686,7 +699,7 @@ tls = "off"          # "auto" for ACME certificates on a public name
 
 [[site.route]]
 prefix = "/"
-respond = { status = 200, body = "hello from verd\n" }
+respond = "hello from verd\n"  # 200 with this body; `404` or a table also work
 
 # …or serve a directory with the `root` shorthand instead of routes:
 # root = "./public"
@@ -736,7 +749,7 @@ fn cmd_fmt(config: Option<PathBuf>, check: bool, diff: bool, all: bool) -> ExitC
     let files = if all {
         // `--all` formats the whole include tree — the loader reports
         // the exact file set, deduplicated
-        match crate::config::load(&path) {
+        match load_root(&path) {
             Ok(loaded) => loaded.sources,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -760,6 +773,9 @@ fn cmd_fmt(config: Option<PathBuf>, check: bool, diff: bool, all: bool) -> ExitC
 /// Format (or check) one file; returns false when `--check` finds drift
 /// or the file cannot be parsed.
 fn fmt_one(path: &std::path::Path, check: bool, diff: bool) -> bool {
+    if path.as_os_str() == "-" {
+        return fmt_stdin(check, diff);
+    }
     if check {
         return match std::fs::read_to_string(path)
             .map_err(|e| e.to_string())
@@ -794,6 +810,37 @@ fn fmt_one(path: &std::path::Path, check: bool, diff: bool) -> bool {
             false
         }
     }
+}
+
+/// `verd fmt -` — read stdin, print the formatted document to stdout.
+/// `--check`/`--diff` compare instead of printing.
+fn fmt_stdin(check: bool, diff: bool) -> bool {
+    let stdin_path = std::path::Path::new("<stdin>");
+    let mut original = String::new();
+    if let Err(e) = std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut original) {
+        eprintln!("error: <stdin>: {e}");
+        return false;
+    }
+    let formatted = match crate::config::fmt::format_str(&original) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("error: <stdin>: {e}");
+            return false;
+        }
+    };
+    if check {
+        if original == formatted {
+            return true;
+        }
+        if diff {
+            print_diff(stdin_path, &original, &formatted);
+        } else {
+            eprintln!("<stdin>: not formatted");
+        }
+        return false;
+    }
+    print!("{formatted}");
+    true
 }
 
 /// Minimal line diff for `fmt --diff` — LCS over lines; config files

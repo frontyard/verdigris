@@ -194,9 +194,6 @@ root = "/var/www/example"
 hosts = ["www.example.com"]
 tls = "auto"
 redirect_host = "example.com"     # http://www… → https://example.com…
-
-[[site.route]]
-prefix = "/"
 redirect = { to = "https://example.com{path}{query}", status = 308 }
 ```
 

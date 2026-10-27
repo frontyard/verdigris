@@ -493,14 +493,29 @@ fn check_sites(ctx: &mut Ctx, cfg: &Config) {
                 );
             }
         }
-        if site.root.is_some() && site.proxy.is_some() {
+        let shorthands = [
+            site.root.is_some(),
+            site.proxy.is_some(),
+            site.respond.is_some(),
+            site.redirect.is_some(),
+        ]
+        .into_iter()
+        .filter(|b| *b)
+        .count();
+        if shorthands > 1 {
             ctx.error(
                 site_path.clone(),
-                "site.root and site.proxy are mutually exclusive shorthands; use explicit routes",
+                "site.root, site.proxy, site.respond and site.redirect are mutually exclusive shorthands; use explicit routes",
             );
         }
         if let Some(up) = &site.proxy {
             check_proxy(ctx, cfg, &format!("{site_path}.proxy"), up);
+        }
+        if let Some(redir) = &site.redirect {
+            check_redirect(ctx, &site_path, redir);
+        }
+        if let Some(resp) = &site.respond {
+            check_respond(ctx, &site_path, resp);
         }
         for (j, route) in site.route.iter().enumerate() {
             check_route(ctx, cfg, &site_path, j, site, route);
@@ -798,82 +813,11 @@ fn check_route(
     }
 
     if let Some(redir) = &route.redirect {
-        let targets = [
-            redir.to.is_some(),
-            redir.host.is_some(),
-            redir.scheme.is_some(),
-        ]
-        .into_iter()
-        .filter(|b| *b)
-        .count();
-        if targets != 1 {
-            ctx.error(path.clone(), "redirect sets exactly one of to/host/scheme");
-        }
-        if ![301, 302, 303, 307, 308].contains(&redir.status) {
-            ctx.error(
-                path.clone(),
-                format!(
-                    "redirect status {} must be 301, 302, 303, 307, or 308",
-                    redir.status
-                ),
-            );
-        }
-        if let Some(scheme) = &redir.scheme
-            && scheme != "http"
-            && scheme != "https"
-        {
-            ctx.error(
-                path.clone(),
-                format!("redirect scheme {scheme:?} must be http or https"),
-            );
-        }
-        if let Some(h) = &redir.host {
-            check_host_target(ctx, format!("{path}.redirect.host"), h, "");
-        }
-        if let Some(to) = &redir.to {
-            check_placeholder_tokens(ctx, &format!("{path}.redirect.to"), to);
-            // audit the literal parts — placeholders become their values
-            // at request time, so stub them first. Spaces parse as
-            // header values but break Location semantically.
-            let stubbed = placeholder_re().replace_all(to, "x");
-            if stubbed.chars().any(|c| c.is_whitespace() || c.is_control()) {
-                ctx.error(
-                    format!("{path}.redirect.to"),
-                    format!("{to:?} contains whitespace or control characters — Location would be broken"),
-                );
-            } else if !(to.starts_with('/') || to.starts_with('{') || to.contains("://")) {
-                ctx.warn(
-                    format!("{path}.redirect.to"),
-                    format!(
-                        "{to:?} has no scheme and does not start with '/' — it emits a relative-path redirect; use \"https://{to}\" for a URL or {{ host = {to:?} }} for a host redirect"
-                    ),
-                );
-            }
-        }
+        check_redirect(ctx, &path, redir);
     }
 
     if let Some(resp) = &route.respond {
-        check_placeholder_tokens(ctx, &format!("{path}.respond.body"), &resp.body);
-        if !(100..=599).contains(&resp.status) {
-            ctx.error(
-                path.clone(),
-                format!("respond status {} is not a valid HTTP status", resp.status),
-            );
-        }
-        // reflected-request placeholders + text/html = XSS by config
-        let htmlish = resp.headers.iter().any(|(k, v)| {
-            k.eq_ignore_ascii_case("content-type") && v.to_ascii_lowercase().contains("text/html")
-        });
-        if htmlish
-            && ["{path}", "{host}", "{query}", "{method}"]
-                .iter()
-                .any(|p| resp.body.contains(p))
-        {
-            ctx.warn(
-                format!("{path}.respond"),
-                "respond body substitutes request data under a text/html content-type — reflected content without escaping; use text/plain",
-            );
-        }
+        check_respond(ctx, &path, resp);
     }
 
     let eff_auth = route
@@ -1104,9 +1048,102 @@ fn check_upstream_ref(ctx: &mut Ctx, cfg: &Config, path: &str, upstream: &Upstre
     }
 }
 
+/// Shared redirect checks — `path` is the owning route or site; field
+/// paths are `{path}.redirect.*`.
+fn check_redirect(ctx: &mut Ctx, path: &str, redir: &RedirectHandler) {
+    let targets = [
+        redir.to.is_some(),
+        redir.host.is_some(),
+        redir.scheme.is_some(),
+    ]
+    .into_iter()
+    .filter(|b| *b)
+    .count();
+    if targets != 1 {
+        ctx.error(
+            path.to_owned(),
+            "redirect sets exactly one of to/host/scheme",
+        );
+    }
+    if ![301, 302, 303, 307, 308].contains(&redir.status) {
+        ctx.error(
+            path.to_owned(),
+            format!(
+                "redirect status {} must be 301, 302, 303, 307, or 308",
+                redir.status
+            ),
+        );
+    }
+    if let Some(scheme) = &redir.scheme
+        && scheme != "http"
+        && scheme != "https"
+    {
+        ctx.error(
+            path.to_owned(),
+            format!("redirect scheme {scheme:?} must be http or https"),
+        );
+    }
+    if let Some(h) = &redir.host {
+        check_host_target(ctx, format!("{path}.redirect.host"), h, "");
+    }
+    if let Some(to) = &redir.to {
+        check_placeholder_tokens(ctx, &format!("{path}.redirect.to"), to);
+        // audit the literal parts — placeholders become their values
+        // at request time, so stub them first. Spaces parse as
+        // header values but break Location semantically.
+        let stubbed = placeholder_re().replace_all(to, "x");
+        if stubbed.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            ctx.error(
+                format!("{path}.redirect.to"),
+                format!(
+                    "{to:?} contains whitespace or control characters — Location would be broken"
+                ),
+            );
+        } else if !(to.starts_with('/') || to.starts_with('{') || to.contains("://")) {
+            ctx.warn(
+                format!("{path}.redirect.to"),
+                format!(
+                    "{to:?} has no scheme and does not start with '/' — it emits a relative-path redirect; use \"https://{to}\" for a URL or {{ host = {to:?} }} for a host redirect"
+                ),
+            );
+        }
+    }
+}
+
+/// Shared respond checks — `path` is the owning route or site; field
+/// paths are `{path}.respond.*`.
+fn check_respond(ctx: &mut Ctx, path: &str, resp: &RespondHandler) {
+    check_placeholder_tokens(ctx, &format!("{path}.respond.body"), &resp.body);
+    if !(100..=599).contains(&resp.status) {
+        ctx.error(
+            path.to_owned(),
+            format!("respond status {} is not a valid HTTP status", resp.status),
+        );
+    }
+    // reflected-request placeholders + text/html = XSS by config
+    let htmlish = resp.headers.iter().any(|(k, v)| {
+        k.eq_ignore_ascii_case("content-type") && v.to_ascii_lowercase().contains("text/html")
+    });
+    if htmlish
+        && ["{path}", "{host}", "{query}", "{method}"]
+            .iter()
+            .any(|p| resp.body.contains(p))
+    {
+        ctx.warn(
+            format!("{path}.respond"),
+            "respond body substitutes request data under a text/html content-type — reflected content without escaping; use text/plain",
+        );
+    }
+}
+
 fn check_proxy(ctx: &mut Ctx, cfg: &Config, path: &str, proxy: &ProxyHandler) {
     check_proxy_retries(ctx, path, &proxy.retries);
-    if let HostHeader::Custom(v) = &proxy.host_header {
+    let custom = match &proxy.host_header {
+        HostHeader::Custom(v) => Some((v, true)),
+        HostHeader::Verbatim(v) => Some((v, false)),
+        _ => None,
+    };
+    if let Some((v, warn_typos)) = custom {
         // must read like a host[:port] and survive as a header value
         check_host_target(
             ctx,
@@ -1115,16 +1152,18 @@ fn check_proxy(ctx: &mut Ctx, cfg: &Config, path: &str, proxy: &ProxyHandler) {
             ", \"upstream\", or \"original\"",
         );
         // a custom value is sent verbatim — a keyword typo silently does
-        // the wrong thing
-        for kw in ["upstream", "original"] {
-            if crate::config::levenshtein(&v.to_lowercase(), kw) <= 2 {
-                ctx.warn(
-                    format!("{path}.proxy.host_header"),
-                    format!(
-                        "{v:?} looks like a typo of the {kw:?} keyword — a custom value is sent verbatim"
-                    ),
-                );
-                break;
+        // the wrong thing (Verbatim is deliberate: `{ value = "…" }`)
+        if warn_typos {
+            for kw in ["upstream", "original"] {
+                if crate::config::levenshtein(&v.to_lowercase(), kw) <= 2 {
+                    ctx.warn(
+                        format!("{path}.proxy.host_header"),
+                        format!(
+                            "{v:?} looks like a typo of the {kw:?} keyword — a custom value is sent verbatim"
+                        ),
+                    );
+                    break;
+                }
             }
         }
     }
@@ -1282,8 +1321,10 @@ fn looks_like_bcrypt(s: &str) -> bool {
 
 fn check_rate_limit(ctx: &mut Ctx, path: &str, rl: &RateLimitConfig) {
     if !rl.enabled {
-        // opt-out marker: flag settings that silently do nothing
-        if !rl.key.is_empty()
+        // opt-out marker: flag settings that silently do nothing — a
+        // `key` equal to the default ("ip") counts as unset so a bare
+        // `rate_limit = false` stays quiet
+        if !(rl.key.is_empty() || rl.key == "ip")
             || rl.rate.is_some()
             || rl.burst.is_some()
             || !rl.exempt.is_empty()
@@ -1642,7 +1683,7 @@ fn check_admin(ctx: &mut Ctx, cfg: &Config) {
             );
         }
     }
-    if let Some(m) = &a.tls {
+    if let Some(crate::config::model::AdminTls::Manual(m)) = &a.tls {
         for (field, p) in [("cert", &m.cert), ("key", &m.key)] {
             if !p.is_file() {
                 ctx.warn(
