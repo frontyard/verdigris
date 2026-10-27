@@ -77,6 +77,17 @@ fuzz build is caught before the PR smoke or batch run finds it.
 Builds the book on PRs (catches broken docs); deploys to GitHub Pages
 on pushes to `main`.
 
+### `codspeed.yml` — perf regression
+
+Runs `benches/hot_paths.rs` via `cargo codspeed` on every PR in
+**simulation mode** — instruction-count measurement that's
+deterministic on shared runners, so small regressions surface as
+signal rather than walltime noise. The benches cover per-request hot
+paths: `normalize_path`, host/route matching, cache-key construction,
+plus config parsing as a control. Results post as a CodSpeed check +
+comment; tracked over time at codspeed.io. Requires the CodSpeed
+GitHub App installed on the repo; public repos need no token.
+
 ### Devin Review — AI review
 
 Not a workflow — Devin's GitHub App ignores `/devin review` comments
@@ -138,8 +149,9 @@ detects the version bump → pushes `vX.Y.Z` + dispatches `release.yml`.
 
 ## Deliberately not (yet) covered
 
-- **PR perf regression** — the remaining structural gap; CodSpeed or a
-  base-vs-head `bench/run.sh` compare is the candidate.
+- **End-to-end throughput regression** — `hot_paths` covers per-request
+  work but not wrk-level throughput; a base-vs-head `bench/run.sh`
+  compare remains the candidate if that's ever needed.
 - **Sanitizers/Miri on the main crate** — one sanctioned `unsafe`
   (mmap); fuzzers already run under ASan/UBSan.
 - **`cargo vet`, `loom`, `minimal-versions`, Semgrep, hadolint, taplo**

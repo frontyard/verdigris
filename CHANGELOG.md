@@ -11,6 +11,13 @@ workflow publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
+### Build & CI
+
+- **CodSpeed perf tracking** — `codspeed.yml` benchmarks per-request
+  hot paths (`benches/hot_paths.rs`: path normalization, host/route
+  matching, cache-key construction, config parse) in simulation mode,
+  posting regression reports on every PR.
+
 ### Fixed
 
 - **Release flow no longer leaves `llms-full.txt` stale** — the file

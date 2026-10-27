@@ -1,0 +1,43 @@
+name: CodSpeed
+
+# Per-request hot-path benchmarks (benches/hot_paths.rs) tracked over
+# time — instruction-count simulation mode is deterministic on shared
+# runners (unlike walltime), so small regressions show up as signal,
+# not noise. Results land on the PR as a CodSpeed check + comment.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  benchmarks:
+    name: hot paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read # checkout — CodSpeed's GitHub App posts results,
+      # so no token/permission is needed beyond this
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: codspeed
+      # taiki-e/install-action has no cargo-codspeed manifest — install
+      # the pinned version from crates.io instead
+      - run: cargo install cargo-codspeed --locked --version 6.0.0
+      - run: cargo codspeed build
+      - uses: CodSpeedHQ/action@78102a468f96d8e0ccb92d0ec49425753fc42062 # v5.6.0
+        with:
+          mode: simulation # deterministic instruction counts on shared runners
+          run: cargo codspeed run
+          # token not required — public repo uploads are open
