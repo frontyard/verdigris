@@ -7,12 +7,115 @@ prints the merged, interpolated effective configuration (secrets
 redacted); `verd fmt` normalizes whitespace in place preserving
 comments; `verd schema` prints the generated JSON Schema.
 
+## Field forms
+
+Every field accepts exactly one shape — a scalar (`workers = 4`), a
+string list (`hosts = ["a", "b"]`), a table (`proxy = { upstream =
+"x" }`), or a list of tables (`[[site.route]]`). On top of that, two
+ergonomic conveniences apply broadly:
+
+- **Scalar sugar** — most list fields also accept a single bare value:
+  `ip_allow = "10.0.0.0/8"` means `["10.0.0.0/8"]`. `include` is the
+  deliberate exception (always a list).
+- **Shorthands** — fields with one dominant setting accept a short
+  form that expands to the table with defaults:
+
+  ```toml
+  [server]
+  listen = [":8080"]                        # all interfaces
+
+  [cache.mem]
+
+  [[site]]
+  hosts = ["example.com"]
+
+  [[site.route]]
+  prefix = "/old"
+  redirect = "https://new.example{path}"   # { to = "…", status = 308 }
+
+  [[site.route]]
+  prefix = "/ping"
+  respond = "pong"                          # { status = 200, body = "pong" }
+
+  [[site.route]]
+  prefix = "/api"
+  proxy = "http://app:9000"                 # { upstream = "…" }
+  rate_limit = "100/s"                      # { rate = "100/s", key = "ip" }
+  compress = true                           # default compression on
+
+  [[site.route]]
+  prefix = "/files"
+  static = "/srv/www"                       # { root = "/srv/www" }
+  cache = "mem"                             # { store = "mem" }
+  ```
+
+  The closed shorthand list and the "two forms per field" cap live in
+  `docs/config-grammar.md`; the per-field types are in the
+  [reference](./reference.md).
+
+Network fields (`ip_allow`, `ip_deny`, `trusted_proxies`,
+`rate_limit.exempt`) take CIDRs *or* bare IPs — `"10.0.0.1"` parses as
+the host route `10.0.0.1/32`.
+
+Disabled blocks: every inheritable middleware block understands
+`enabled = false`, which opts a route out of a site-level (or global)
+default. `security = false`, `cache = false`, `compress = false`, and
+`log.access = false` also take the bare spelling.
+
 ## Durations
 
 Every duration field is a quoted string in humantime form — `"30s"`,
 `"5m"`, `"2h"`, `"180d"` (`ms`, `us`, `ns`, `w`, `M`, `y` work too).
 Bare integers are rejected: write the unit explicitly (`hsts_max_age =
 "180d"`, not `180`).
+
+## Match conditions
+
+A route's `[route.match]` table adds conditions beyond the path:
+`methods`, `headers`, and `query` maps. Values match exactly, or as a
+regular expression when prefixed with `re:`:
+
+```toml
+[[site.route]]
+prefix = "/api"
+[site.route.match]
+methods = ["GET", "HEAD"]
+headers = { "x-internal" = "" , "x-env" = "re:^prod-" }
+query = { "debug" = "1" }
+```
+
+An empty-string value means *presence-only* — `"x-internal" = ""`
+matches any request that carries the header (to match a literally
+empty value, use `re:^$`). Conditions only *filter* a route; they
+never change which route wins on path specificity.
+
+## Placeholders
+
+`redirect.to`/`host`/`scheme` and `respond.body` substitute request
+attributes written `{name}`:
+
+| Placeholder | Value |
+| --- | --- |
+| `{path}` | request path (leading `/`) |
+| `{host}` | request Host (normalized, port stripped) |
+| `{query}` | raw query string including the leading `?` — empty when absent |
+| `{method}` | request method |
+| `{scheme}` | `http` or `https` |
+
+The set is closed — any other `{…}` text passes through literally
+(and `verd validate` warns, since it's usually a typo). Redirect
+templates re-encode `{path}` before it lands in `Location`, so
+`redirect = "https://new.example{path}"` is safe to copy-paste.
+
+## Diagnostics
+
+`verd validate` reports errors and warnings with the field path and
+the file that set it (`site["name"].route[0]`, `upstream.api.servers[1]`).
+Errors mean *will not work*; warnings mean *works, but probably not
+what you meant* — dead config inside a disabled block, a catch-all
+CIDR, a hostname-shaped redirect target. `--strict` promotes warnings
+to failures for CI. `--format json` emits the same report as one
+object; the shape is documented under [Command line](./cli.md).
 
 ## Includes
 
@@ -22,9 +125,11 @@ Split large configs across files:
 include = ["conf.d", "extra-*.toml"]
 ```
 
-`include` accepts files, directories (`*.toml` directly inside,
+``include` accepts files, directories (`*.toml` directly inside,
 sorted), and glob patterns (`*` matches any characters in the file
-name). A named file or directory that doesn't exist is an error; a
+name), and its entries interpolate like any other string —
+`include = ["${VERD_EXTRA}"]` is valid. A named file or directory
+that doesn't exist is an error; a
 glob that matches nothing is silently ignored, so `conf.d/*.toml` can
 be populated later. Tables merge recursively — `[[site]]` entries append,
 `[upstream.*]` and `[cache.*]` tables merge by name — and **arrays

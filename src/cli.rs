@@ -59,11 +59,15 @@ enum Command {
         force: bool,
     },
     /// Print the effective configuration (merged, interpolated, fully
-    /// defaulted) as TOML. Secret values are redacted.
+    /// defaulted). Secret values are redacted.
     Config {
         /// Path to the configuration file.
         #[arg(short, long, env = "VERD_CONFIG", value_name = "PATH")]
         config: Option<PathBuf>,
+
+        /// Output format: TOML or JSON.
+        #[arg(long, value_enum, default_value_t = ConfigFormat::Toml)]
+        format: ConfigFormat,
     },
     /// Print version and build information.
     Version,
@@ -76,6 +80,10 @@ enum Command {
         /// Exit non-zero if the file is not formatted instead of writing it.
         #[arg(long)]
         check: bool,
+
+        /// Print a line-level diff of the pending changes (implies --check).
+        #[arg(long)]
+        diff: bool,
 
         /// Also format every file reachable through `include`.
         #[arg(long)]
@@ -101,9 +109,14 @@ pub fn run() -> ExitCode {
             strict,
         } => cmd_validate(config, cli.log_level.as_deref(), format, strict),
         Command::Init { output, force } => cmd_init(output, force),
-        Command::Config { config } => cmd_config(config),
+        Command::Config { config, format } => cmd_config(config, format),
         Command::Version => cmd_version(),
-        Command::Fmt { config, check, all } => cmd_fmt(config, check, all),
+        Command::Fmt {
+            config,
+            check,
+            diff,
+            all,
+        } => cmd_fmt(config, check, diff, all),
         Command::Schema { output } => cmd_schema(output),
     }
 }
@@ -114,6 +127,15 @@ enum ValidateFormat {
     /// Human-readable diagnostics on stderr.
     Text,
     /// Machine-readable report on stdout.
+    Json,
+}
+
+/// `verd config --format` output modes.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum ConfigFormat {
+    /// TOML — the format config is written in.
+    Toml,
+    /// JSON — same shape as the admin `/config` endpoint.
     Json,
 }
 
@@ -497,7 +519,13 @@ fn cmd_validate(
             if json {
                 println!(
                     "{}",
-                    serde_json::json!({ "valid": false, "error": e.to_string() })
+                    serde_json::json!({
+                        "valid": false,
+                        "strict": strict,
+                        "diagnostics": [],
+                        "sources": [],
+                        "error": e.to_string(),
+                    })
                 );
             } else {
                 eprintln!("error: {e}");
@@ -516,9 +544,10 @@ fn cmd_validate(
                 "{}",
                 serde_json::json!({
                     "valid": false,
-                    "error": msg,
+                    "strict": strict,
                     "diagnostics": diags,
                     "sources": sources,
+                    "error": msg,
                 })
             );
         } else {
@@ -588,7 +617,7 @@ fn cmd_validate(
     }
 }
 
-fn cmd_config(config: Option<PathBuf>) -> ExitCode {
+fn cmd_config(config: Option<PathBuf>, format: ConfigFormat) -> ExitCode {
     let path = match resolve_config_path(config) {
         Ok(path) => path,
         Err(tried) => return missing_config_error(&tried),
@@ -604,7 +633,11 @@ fn cmd_config(config: Option<PathBuf>) -> ExitCode {
     if !loaded.is_valid() {
         return ExitCode::FAILURE;
     }
-    match crate::config::dump(&loaded.config) {
+    let rendered = match format {
+        ConfigFormat::Toml => crate::config::dump(&loaded.config),
+        ConfigFormat::Json => crate::config::dump_json(&loaded.config),
+    };
+    match rendered {
         Ok(text) => {
             println!("{text}");
             ExitCode::SUCCESS
@@ -693,7 +726,9 @@ fn cmd_init(output: PathBuf, force: bool) -> ExitCode {
     }
 }
 
-fn cmd_fmt(config: Option<PathBuf>, check: bool, all: bool) -> ExitCode {
+fn cmd_fmt(config: Option<PathBuf>, check: bool, diff: bool, all: bool) -> ExitCode {
+    // --diff implies --check: show the drift, never write
+    let check = check || diff;
     let path = match resolve_config_path(config) {
         Ok(path) => path,
         Err(tried) => return missing_config_error(&tried),
@@ -713,7 +748,7 @@ fn cmd_fmt(config: Option<PathBuf>, check: bool, all: bool) -> ExitCode {
     };
     let mut ok = true;
     for file in &files {
-        ok &= fmt_one(file, check);
+        ok &= fmt_one(file, check, diff);
     }
     if ok {
         ExitCode::SUCCESS
@@ -724,7 +759,7 @@ fn cmd_fmt(config: Option<PathBuf>, check: bool, all: bool) -> ExitCode {
 
 /// Format (or check) one file; returns false when `--check` finds drift
 /// or the file cannot be parsed.
-fn fmt_one(path: &std::path::Path, check: bool) -> bool {
+fn fmt_one(path: &std::path::Path, check: bool, diff: bool) -> bool {
     if check {
         return match std::fs::read_to_string(path)
             .map_err(|e| e.to_string())
@@ -734,8 +769,12 @@ fn fmt_one(path: &std::path::Path, check: bool) -> bool {
                     .map_err(|e| e.to_string())
             }) {
             Ok((original, formatted)) if original == formatted => true,
-            Ok(_) => {
-                eprintln!("{}: not formatted", path.display());
+            Ok((original, formatted)) => {
+                if diff {
+                    print_diff(path, &original, &formatted);
+                } else {
+                    eprintln!("{}: not formatted", path.display());
+                }
                 false
             }
             Err(e) => {
@@ -754,6 +793,61 @@ fn fmt_one(path: &std::path::Path, check: bool) -> bool {
             eprintln!("error: {e}");
             false
         }
+    }
+}
+
+/// Minimal line diff for `fmt --diff` — LCS over lines; config files
+/// are small enough that O(n·m) memory is fine, so no dependency.
+fn print_diff(path: &std::path::Path, old: &str, new: &str) {
+    let a: Vec<&str> = old.lines().collect();
+    let b: Vec<&str> = new.lines().collect();
+    let (n, m) = (a.len(), b.len());
+    let mut dp = vec![vec![0usize; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            dp[i][j] = if a[i] == b[j] {
+                dp[i + 1][j + 1] + 1
+            } else {
+                dp[i + 1][j].max(dp[i][j + 1])
+            };
+        }
+    }
+    println!("--- {}", path.display());
+    println!("+++ {} (formatted)", path.display());
+    // backtrack into ops, then emit with 2 lines of unchanged context
+    let mut ops: Vec<(char, &str)> = Vec::new();
+    let (mut i, mut j) = (0, 0);
+    while i < n && j < m {
+        if a[i] == b[j] {
+            ops.push((' ', a[i]));
+            (i, j) = (i + 1, j + 1);
+        } else if dp[i + 1][j] >= dp[i][j + 1] {
+            ops.push(('-', a[i]));
+            i += 1;
+        } else {
+            ops.push(('+', b[j]));
+            j += 1;
+        }
+    }
+    ops.extend(a[i..].iter().map(|l| ('-', *l)));
+    ops.extend(b[j..].iter().map(|l| ('+', *l)));
+    let mut elided = false;
+    for (k, (mark, line)) in ops.iter().enumerate() {
+        if *mark == ' ' {
+            let near = ops[k.saturating_sub(2)..k]
+                .iter()
+                .chain(&ops[k + 1..(k + 3).min(ops.len())])
+                .any(|(mk, _)| *mk != ' ');
+            if !near {
+                if !elided {
+                    println!(" ...");
+                }
+                elided = true;
+                continue;
+            }
+        }
+        elided = false;
+        println!("{mark}{line}");
     }
 }
 
@@ -852,11 +946,18 @@ mod tests {
             Command::Fmt {
                 config: None,
                 check: true,
+                diff: false,
                 all: true
             }
         ));
         let cli = Cli::try_parse_from(["verd", "config", "-c", "x.toml"]).unwrap();
-        assert!(matches!(cli.command, Command::Config { config: Some(_) }));
+        assert!(matches!(
+            cli.command,
+            Command::Config {
+                config: Some(_),
+                format: ConfigFormat::Toml
+            }
+        ));
         let cli = Cli::try_parse_from(["verd", "schema", "-o", "s.json"]).unwrap();
         assert!(matches!(cli.command, Command::Schema { output: Some(_) }));
         let cli = Cli::try_parse_from(["verd", "--log-level", "debug", "version"]).unwrap();
@@ -986,15 +1087,24 @@ root = "/tmp"
 
         // sloppy spacing fails --check and is normalized in write mode
         let cfg = write_cfg(&dir, "[[site]]\nhosts=[\"x\"]   \n");
-        assert_eq!(cmd_fmt(Some(cfg.clone()), true, false), ExitCode::FAILURE);
-        assert_eq!(cmd_fmt(Some(cfg.clone()), false, false), ExitCode::SUCCESS);
-        assert_eq!(cmd_fmt(Some(cfg.clone()), true, false), ExitCode::SUCCESS);
+        assert_eq!(
+            cmd_fmt(Some(cfg.clone()), true, false, false),
+            ExitCode::FAILURE
+        );
+        assert_eq!(
+            cmd_fmt(Some(cfg.clone()), false, false, false),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(
+            cmd_fmt(Some(cfg.clone()), true, false, false),
+            ExitCode::SUCCESS
+        );
 
         // missing file → error; malformed → check-mode error
         let ghost = dir.path().join("ghost.toml");
-        assert_eq!(cmd_fmt(Some(ghost), false, false), ExitCode::FAILURE);
+        assert_eq!(cmd_fmt(Some(ghost), false, false, false), ExitCode::FAILURE);
         let bad = write_cfg(&dir, "[[[\n");
-        assert_eq!(cmd_fmt(Some(bad), true, false), ExitCode::FAILURE);
+        assert_eq!(cmd_fmt(Some(bad), true, false, false), ExitCode::FAILURE);
     }
 
     #[test]
@@ -1007,15 +1117,21 @@ root = "/tmp"
         let cfg = write_cfg(&dir, "include = [\"conf.d\"]\n[log]\nlevel=\"info\"\n");
 
         // --check reports drift in both files
-        assert_eq!(cmd_fmt(Some(cfg.clone()), true, true), ExitCode::FAILURE);
+        assert_eq!(
+            cmd_fmt(Some(cfg.clone()), true, false, true),
+            ExitCode::FAILURE
+        );
         // write mode formats every source
-        assert_eq!(cmd_fmt(Some(cfg.clone()), false, true), ExitCode::SUCCESS);
+        assert_eq!(
+            cmd_fmt(Some(cfg.clone()), false, false, true),
+            ExitCode::SUCCESS
+        );
         assert!(
             std::fs::read_to_string(&frag)
                 .unwrap()
                 .contains("hosts = [\"x\"]")
         );
-        assert_eq!(cmd_fmt(Some(cfg), true, true), ExitCode::SUCCESS);
+        assert_eq!(cmd_fmt(Some(cfg), true, false, true), ExitCode::SUCCESS);
     }
 
     #[test]

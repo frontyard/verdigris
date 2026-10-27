@@ -35,7 +35,7 @@ Server-wide settings.
 | `max_connections` | integer | `65536` | Maximum concurrent connections across all listeners. |
 | `max_connections_per_ip` | integer | `256` | Maximum concurrent connections per client IP address. |
 | `security` | SecurityConfig | `{"content_type_options": true, "cross_domain_policy": "", "csp": null, "enabled": true, "frame_options": "DENY", "hsts": true, "hsts_max_age": "180d", "hsts_subdomains": false, "referrer_policy": "strict-origin-when-cross-origin"}` | Baseline security response headers applied to every route. |
-| `server_header` | string | `"verd"` | Value of the `Server` response header; `"off"` or `""` omits it. |
+| `server_header` | string | `"verd"` | Value of the `Server` response header. `""` omits it (the empty-disables convention); `"off"` is a readable alias for the same thing. |
 | `trusted_proxies` | [string] | `[]` | CIDRs whose `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`, `X-Real-IP` and `Forwarded` headers are trusted. Empty: trust none. |
 
 
@@ -67,7 +67,7 @@ Logging configuration.
 
 | field | type | default | description |
 |---|---|---|---|
-| `access` | AccessLog | `{"enabled": true, "filter": null, "format": "json", "output": "stdout", "sample": 1.0}` | Access log settings. |
+| `access` | AccessLogSchema | `{"enabled": true, "filter": null, "format": "json", "output": "stdout", "sample": 1.0}` | Access log settings; `access = false` disables access logging. |
 | `format` | LogFormat | `"json"` | Server log format: `json` or `pretty`. |
 | `level` | string | `"info"` | Server (diagnostic) log level: error, warn, info, debug, trace. |
 | `output` | string | `"stderr"` | Server log destination: `stdout`, `stderr`, or a file path. |
@@ -128,14 +128,25 @@ A virtual site: a set of hosts with routes and optional TLS.
 
 | field | type | default | description |
 |---|---|---|---|
+| `auth` | AuthConfig \| null | `null` | Default auth for every route in this site; a route's own `auth` replaces it and `auth = { enabled = false }` opts out. |
+| `cache` | RouteCacheSchema \| null | `null` | Default response cache: a store name or a table, like `route.cache`. |
+| `compress` | CompressConfigSchema \| null | `null` | Default response compression: `true` for defaults or a table, like `route.compress`. |
+| `cors` | CorsConfig \| null | `null` | Default CORS handling; a route's `cors` replaces it. |
 | `default` | boolean | `false` | Serve requests whose Host matches no site. |
 | `hosts` | [string] | `[]` | Hostnames served by this site. Exact names and `*.example.com` wildcards. May be empty only when `default = true`. |
+| `ip_allow` | [string] | `[]` | Client CIDRs allowed site-wide; a route's `ip_allow` can only narrow this — both non-empty lists must pass. |
+| `ip_deny` | [string] | `[]` | Client CIDRs denied site-wide; unioned with each route's `ip_deny`. |
+| `limits` | LimitOverrides \| null | `null` | Site-wide request-limit overrides, applied between the global `limits` and each route's own `limits`. |
 | `name` | string \| null | `null` | Optional display name used in logs, metrics and the admin API. |
 | `proxy` | UpstreamRef \| null | `null` | Shorthand for a catch-all reverse proxy route: a named upstream (`"app"`), an upstream URL (`"http://app:9000"`), or a list of URLs. |
+| `rate_limit` | RateLimitSchema \| null | `null` | Site-wide rate limit — one shared limiter for every route that inherits it, so `key = "ip"` limits each client across the whole site and `key = "route"` is one bucket site-wide. A route's own `rate_limit` gets a fresh limiter. Same string/table forms as `route.rate_limit`. |
 | `redirect_host` | string \| null | `null` | Host the HTTPS redirect points at; defaults to the request's Host. Useful for `www → apex` style consolidation across schemes. |
 | `redirect_https` | boolean \| null | `null` | Redirect plaintext HTTP to HTTPS when TLS is enabled; defaults on. Set explicitly `false` only to serve a TLS site on plain HTTP. |
+| `response_headers` | HeaderOps \| null | `null` | Response header ops merged into every route's: `set`/`add` maps union (route keys win), `remove` concatenates. |
 | `root` | string \| null | `null` | Shorthand for a catch-all static file route rooted here. |
 | `route` | [RouteConfig] | `[]` | Routes, evaluated in order of specificity, not declaration order. |
+| `security` | RouteSecurity \| null | `null` | Site-wide security-header overrides, applied between the global `server.security` and each route's `security`. |
+| `timeouts` | TimeoutOverrides \| null | `null` | Site-wide timeout overrides, applied between the global `timeouts` and each route's own `timeouts`. |
 | `tls` | SiteTls | `"auto"` | TLS mode: `"auto"` (ACME), `{cert, key}`, `"self_signed"`, or `"off"`. |
 | `trusted_proxies` | array \| null | `null` | Per-site override of the trusted proxy CIDR list. |
 
@@ -169,13 +180,13 @@ One route: a matcher, one handler, and middleware.
 | `prefix` | string \| null | `null` | Match paths starting with this prefix. Prefix matching is segment-aware: `/api` matches `/api` and `/api/…` but not `/apix`. |
 | `priority` | integer | `0` | Priority among routes that tie on specificity. Higher wins. |
 | `proxy` | ProxySchema \| null | `null` | Reverse proxy: an upstream reference (`"name"`/`"url"`/`[urls]`, like `site.proxy`) or a full table. |
-| `rate_limit` | RateLimitConfig \| null | `null` | Rate limiting. |
-| `redirect` | RedirectHandler \| null | `null` | Redirect handler. |
+| `rate_limit` | RateLimitSchema \| null | `null` | Rate limiting: a rate string (`rate_limit = "100/s"`, per-IP key) or a table. |
+| `redirect` | RedirectSchema \| null | `null` | Redirect handler: a target URL (`redirect = "https://…"`) or a table. |
 | `regex` | string \| null | `null` | Match paths against this regular expression. Evaluated last; a regex route never overrides a prefix route. |
-| `respond` | RespondHandler \| null | `null` | Fixed response handler. |
+| `respond` | RespondSchema \| null | `null` | Fixed response handler: a body string (`respond = "text"`) or a table. |
 | `response_headers` | HeaderOps \| null | `null` | Response header manipulation applied to this route's responses. |
 | `security` | RouteSecurity \| null | `null` | Per-route security-header overrides. |
-| `static` | StaticHandler \| null | `null` | Serve static files. |
+| `static` | StaticSchema \| null | `null` | Serve static files: a root path (`static = "/srv/www"`) or a table. |
 | `timeouts` | TimeoutOverrides \| null | `null` | Per-route timeout overrides (e.g. `0s` deadline for SSE/WebSocket). |
 
 
@@ -203,7 +214,7 @@ Fixed response handler.
 
 | field | type | default | description |
 |---|---|---|---|
-| `body` | string | `""` | Response body (text). `{path}`, `{host}`, `{method}` substitute from the request. |
+| `body` | string | `""` | Response body (text). `{path}`, `{host}`, `{query}` (leading `?` included), `{method}`, `{scheme}` substitute from the request. |
 | `headers` | object | `{}` | Extra response headers — e.g. `content-type = "text/plain"`; the body is text, so pick a non-HTML type when placeholders are used. |
 | `status` | integer | `200` | Status code. |
 
@@ -216,7 +227,7 @@ Redirect handler.
 | `host` | string \| null | `null` | Redirect to the same path on another host (and optional port). |
 | `scheme` | string \| null | `null` | Redirect to another scheme, e.g. `https`. |
 | `status` | integer | `308` | Status code: 301, 302, 307 (preserves method+body), or 308. |
-| `to` | string \| null | `null` | Redirect to a fixed URL template. `{host}`, `{path}`, `{query}` are substituted from the request. |
+| `to` | string \| null | `null` | Redirect to a fixed URL template. `{host}`, `{path}`, `{query}` (leading `?` included), `{method}`, `{scheme}` substitute from the request. |
 
 ## `ProxyHandler`
 
@@ -224,9 +235,9 @@ Reverse proxy handler.
 
 | field | type | default | description |
 |---|---|---|---|
-| `host_header` | HostHeader | `"upstream"` | Which `Host` the upstream sees. |
+| `host_header` | string | `"upstream"` | Which `Host` the upstream sees: `"upstream"` (default) rewrites it to the upstream authority, `"original"` passes the client `Host` through, any other value is sent verbatim. |
 | `request_headers` | HeaderOps \| null | `null` | Request header manipulation applied before forwarding upstream. |
-| `retries` | RetryPolicy | `{"budget_fraction": 0.2, "max_per_request": 2}` | Retry policy for idempotent requests on connection failure. |
+| `retries` | RetryPolicySchema | `{"budget_fraction": 0.2, "max_per_request": 2}` | Retry policy for idempotent requests on connection failure. `retries = false` disables retries entirely. |
 | `rewrite` | Rewrite \| null | `null` | Path rewriting before forwarding. |
 | `upstream` | UpstreamRef **required** |  | Named upstream (`upstream.name`) or an inline list of upstream URLs. |
 
@@ -246,11 +257,11 @@ A named cluster of upstream servers.
 
 | field | type | default | description |
 |---|---|---|---|
-| `dns` | UpstreamDns | `{"grace": "1m"}` | DNS re-resolution behaviour for hostname upstreams. |
+| `dns` | UpstreamDnsSchema | `{"grace": "1m"}` | DNS re-resolution behaviour for hostname upstreams: a duration (`"60s"`, the record-loss grace period) or a table. |
 | `health` | HealthCheck | `{"active": null, "passive": null}` | Health checking. |
 | `lb` | LoadBalancing | `"round_robin"` | Load balancing algorithm. |
 | `max_connections` | integer | `1024` | Max concurrent connections to a single upstream. |
-| `servers` | [string] | `[]` | Server URLs: `http://host:port`, `https://host:port`, or `h2c://` for cleartext HTTP/2 prior knowledge (typical for gRPC backends). |
+| `servers` | [UpstreamServerSchema] | `[]` | Server entries: a URL string or `{ url, weight, backup }` table — `http://host:port`, `https://host:port`, or `h2c://` for cleartext HTTP/2 prior knowledge (typical for gRPC backends). |
 | `timeouts` | UpstreamTimeouts | `{"connect": "5s", "idle": "90s", "response_header": "30s"}` | Per-upstream timeouts. |
 | `tls` | UpstreamTls | `{"ca": null, "sni": null, "verify": true}` | TLS options for `https://` upstreams. |
 | `unavailable` | UnavailableResponse | `{"body": null, "status": 502}` | Response when no upstream in the cluster is healthy. |
@@ -267,7 +278,7 @@ Health check configuration: active probes and passive failure tracking.
 
 | field | type | default | description |
 |---|---|---|---|
-| `active` | ActiveHealth \| null | `null` | Periodic probes; absent = no active checking. |
+| `active` | ActiveHealthSchema \| null | `null` | Periodic probes; absent = no active checking. A string is the probe path (`active = "/healthz"`) with default settings. |
 | `passive` | PassiveHealth \| null | `null` | Mark upstreams unhealthy after consecutive request failures. |
 
 ## `ActiveHealth`
@@ -309,6 +320,7 @@ Authentication configuration; exactly one method per route.
 | `api_key` | ApiKeyAuth \| null | `null` | API key in a header or query parameter. |
 | `basic` | BasicAuth \| null | `null` | HTTP Basic authentication. |
 | `bearer` | BearerAuth \| null | `null` | Bearer token authentication (`Authorization: Bearer <token>`). |
+| `enabled` | boolean | `true` | Set `false` to opt a route out of an inherited site `auth`. |
 
 ## `BasicAuth`
 
@@ -346,6 +358,7 @@ CORS configuration.
 | field | type | default | description |
 |---|---|---|---|
 | `credentials` | boolean | `false` | Allow credentials (cookies, Authorization). |
+| `enabled` | boolean | `true` | Set `false` to opt a route out of an inherited site `cors`. |
 | `expose` | [string] | `[]` | Headers exposed to browsers on real responses. |
 | `headers` | [string] | `[]` | Allowed request headers for preflight. |
 | `max_age` | string \| null | `null` | Preflight cache duration. |
@@ -360,9 +373,10 @@ Rate limiting.
 |---|---|---|---|
 | `burst` | integer \| null | `null` | Burst size; defaults to the per-second equivalent of `rate`. |
 | `dry_run` | boolean | `false` | Log-only mode: never reject, but emit metrics/logs as if it would. |
+| `enabled` | boolean | `true` | Set `false` to opt a route out of an inherited site `rate_limit`. |
 | `exempt` | [string] | `[]` | CIDRs exempt from limiting. |
-| `key` | string **required** |  | What the limit applies to: `ip`, `identity` (authenticated identity), `route`, or `header:<Name>` for an arbitrary header value. |
-| `rate` | RateSpec **required** |  | Sustained rate, e.g. `100/s`, `600/m`, `10000/h`. |
+| `key` | string | `""` | What the limit applies to: `ip`, `identity` (authenticated identity), `route`, or `header:<Name>` for an arbitrary header value. Required when enabled. |
+| `rate` | RateSpec \| null | `null` | Sustained rate, e.g. `100/s`, `600/m`, `10000/h`. Required when enabled. |
 
 ## `HeaderOps`
 
@@ -371,6 +385,7 @@ Header manipulation: `set` overwrites, `add` appends, `remove` deletes.
 | field | type | default | description |
 |---|---|---|---|
 | `add` | object | `{}` | Headers to add (append without removing existing values). |
+| `enabled` | boolean | `true` | Set `false` to opt a route out of an inherited site `response_headers`. |
 | `remove` | [string] | `[]` | Header names to remove. |
 | `set` | object | `{}` | Headers to set (replace any existing values). |
 
@@ -415,6 +430,7 @@ Response compression.
 | field | type | default | description |
 |---|---|---|---|
 | `algorithms` | [string] | `["br", "zstd", "gzip"]` | Enabled algorithms, negotiated by client `Accept-Encoding` q-values: `br`, `zstd`, `gzip`. Defaults to all. |
+| `enabled` | boolean | `true` | Set `false` to opt a route out of an inherited site `compress`. |
 | `level` | integer \| null | `null` | Compression level, algorithm-specific (brotli 0–11, gzip 0–9, zstd 1–19). Default is the algorithm's balanced level. |
 | `min_bytes` | ByteSize | `"1KiB"` | Don't compress responses smaller than this (when Content-Length is known). |
 | `types` | [string] | `["text/*", "application/json", "application/javascript", "application/xml", "application/wasm", "image/svg+xml", "font/ttf", "font/otf"]` | Content types eligible for compression; `*` suffixes allowed. |
@@ -426,10 +442,11 @@ Route cache configuration referencing a named `[cache.<store>]`.
 | field | type | default | description |
 |---|---|---|---|
 | `bypass` | CacheBypass | `{"authenticated": true, "cookies": [], "headers": [], "methods": [], "paths": []}` | Requests that bypass the cache. |
+| `enabled` | boolean | `true` | Set `false` to opt a route out of an inherited site `cache`. |
 | `negative_ttl` | string | `"10s"` | Short TTL used for error responses (negative caching). |
 | `stale_if_error` | string \| null | `null` | Serve stale on upstream error for this long. |
 | `stale_while_revalidate` | string \| null | `null` | Serve stale while revalidating in the background, for this long. |
-| `store` | string **required** |  | Name of a top-level cache store. |
+| `store` | string | `""` | Name of a top-level cache store. Required when enabled. |
 | `ttl` | string \| null | `null` | TTL override for responses without explicit freshness. Otherwise `Cache-Control`/`Expires` semantics apply. |
 | `vary_headers` | [string] | `[]` | Extra headers folded into the cache key (in addition to the response `Vary` header). |
 | `x_cache` | boolean | `true` | Emit the `X-Cache` response header. |
@@ -463,6 +480,11 @@ A named cache store.
 
 
 
+## `AccessLogSchema`
+
+Schema shape for `log.access` (`false` or a table).
+
+
 ## `AcmeChallenge`
 
 Which ACME challenge type to solve.
@@ -472,6 +494,11 @@ Which ACME challenge type to solve.
 
 DNS provider used to publish `_acme-challenge` TXT records for the
 `dns-01` challenge (`[acme.dns]`).
+
+
+## `ActiveHealthSchema`
+
+Schema shape for `upstream.health.active` (a probe path or a table).
 
 
 ## `ApiKeyLocation`
@@ -528,11 +555,6 @@ External Account Binding credentials.
 |---|---|---|---|
 | `key` | string **required** |  | Base64url-encoded HMAC key. |
 | `key_id` | string **required** |  | EAB key identifier. |
-
-## `HostHeader`
-
-Which `Host` value a proxied request carries upstream.
-
 
 ## `LimitOverrides`
 
@@ -593,6 +615,11 @@ Prefix replacement: `{ from = "/api", to = "/v1" }`.
 Schema shape for `route.proxy` (upstream shorthand or a table).
 
 
+## `RateLimitSchema`
+
+Schema shape for `route.rate_limit` (a rate or a table).
+
+
 ## `RateSpec`
 
 A rate like `100/s`, `600/m`, `10000/h`, `50000/day`. Units: `s`, `m`,
@@ -603,6 +630,11 @@ A rate like `100/s`, `600/m`, `10000/h`, `50000/day`. Units: `s`, `m`,
 | `period` | Duration **required** |  | Length of one period. |
 | `permits` | integer **required** |  | Number of permits granted per `period`. |
 
+## `RedirectSchema`
+
+Schema shape for `route.redirect` (a target URL or a table).
+
+
 ## `RegexRewrite`
 
 Regex path rewrite: `pattern` → `replace`.
@@ -612,9 +644,24 @@ Regex path rewrite: `pattern` → `replace`.
 | `pattern` | string **required** |  | Regular expression matched against the path. |
 | `replace` | string **required** |  | Replacement, may contain `$1`-style capture references. |
 
+## `RespondSchema`
+
+Schema shape for `route.respond` (a body string or a table).
+
+
+## `RetryPolicySchema`
+
+Schema shape for `proxy.retries` (`false` or a table).
+
+
 ## `RouteCacheSchema`
 
 Schema shape for `route.cache` (`"store-name"` or a table).
+
+
+## `StaticSchema`
+
+Schema shape for `route.static` (a root path or a table).
 
 
 ## `TimeoutOverrides`
@@ -645,6 +692,26 @@ DNS re-resolution for hostname upstreams.
 | field | type | default | description |
 |---|---|---|---|
 | `grace` | string | `"1m"` | After DNS records disappear, keep last-known-good addresses for this long before removing the upstream from rotation. |
+
+## `UpstreamDnsSchema`
+
+Schema shape for `upstream.dns` (a grace duration or a table).
+
+
+## `UpstreamServerEntry`
+
+`{ url, weight, backup }` entry form.
+
+| field | type | default | description |
+|---|---|---|---|
+| `backup` | boolean **required** |  | `true` marks a standby used only when no primary is healthy. Default false. |
+| `url` | string **required** |  | Server URL: `http://`, `https://`, or `h2c://`. |
+| `weight` | integer **required** |  | Relative selection weight (≥ 1). Default 1. |
+
+## `UpstreamServerSchema`
+
+Schema shape for one `upstream.*.servers` entry.
+
 
 ## `UpstreamTimeouts`
 

@@ -10,7 +10,7 @@
 //! insertion, request coalescing, freshening (304 → renewed metadata),
 //! and admin purge.
 
-mod disk;
+pub(crate) mod disk;
 pub mod entry;
 pub mod key;
 mod policy;
@@ -138,16 +138,19 @@ impl Cache {
                 out.insert(name.clone(), old.clone());
                 continue;
             }
+            // build errors name the field path — `verd validate` dry-build
+            // failures carry `cache.<name>` like upstream errors do
+            let named = |e: String| format!("cache.{name}: {e}");
             let store = match c.tier {
                 cfg::CacheTier::Ram => Store::Ram(Ram::new(c)),
                 _ if !mode.live() => {
-                    Disk::check_path(c)?;
+                    Disk::check_path(c).map_err(named)?;
                     Store::Ram(Ram::new(c))
                 }
-                cfg::CacheTier::Disk => Store::Disk(Disk::open_sync(c)?),
+                cfg::CacheTier::Disk => Store::Disk(Disk::open_sync(c).map_err(named)?),
                 cfg::CacheTier::Hybrid => Store::Hybrid {
                     ram: Ram::new(c),
-                    disk: Disk::open_sync(c)?,
+                    disk: Disk::open_sync(c).map_err(named)?,
                 },
             };
             out.insert(

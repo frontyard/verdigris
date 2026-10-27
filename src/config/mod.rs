@@ -164,8 +164,16 @@ pub fn load(path: &Path) -> Result<Loaded, LoadError> {
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let mut report = LoadReport::default();
     let (value, origins) = load_document(&path, 0, &mut report)?;
-    let config: Config = serde_path_to_error::deserialize(value)
-        .map_err(|e| LoadError::Schema(path.clone(), format!("{}: {}", e.path(), e.inner())))?;
+    let config: Config = serde_path_to_error::deserialize(value).map_err(|e| {
+        LoadError::Schema(
+            path.clone(),
+            format!(
+                "{}: {}",
+                normalize_serde_path(&e.path().to_string()),
+                e.inner()
+            ),
+        )
+    })?;
     let mut diagnostics = validate(&config);
     for d in &mut diagnostics {
         d.source = origin_for(&config, &origins, &d.path);
@@ -241,6 +249,57 @@ pub fn dump(cfg: &Config) -> Result<String, String> {
     let mut v = toml::Value::try_from(cfg).map_err(|e| e.to_string())?;
     redact_toml(&mut v, &mut Vec::new(), false);
     toml::to_string_pretty(&v).map_err(|e| e.to_string())
+}
+
+/// Serialize the effective configuration as JSON with secrets redacted —
+/// `verd config --format json` and the admin `/config` endpoint share
+/// this so the two redaction policies can't drift.
+pub fn dump_json(cfg: &Config) -> Result<String, String> {
+    let mut v = serde_json::to_value(cfg).map_err(|e| e.to_string())?;
+    redact_json(&mut v, &mut Vec::new(), false);
+    serde_json::to_string_pretty(&v).map_err(|e| e.to_string())
+}
+
+/// Recursively blank leaf values under secret-named keys — the JSON
+/// twin of `redact_toml`, shared by `verd config` and admin `/config`.
+pub(crate) fn redact_json(v: &mut serde_json::Value, path: &mut Vec<String>, under_secret: bool) {
+    match v {
+        serde_json::Value::Object(m) => {
+            for (k, val) in m.iter_mut() {
+                let secret = under_secret || secret_at(path, k, val.is_object());
+                path.push(k.clone());
+                redact_json(val, path, secret);
+                path.pop();
+            }
+        }
+        serde_json::Value::Array(a) => {
+            for val in a.iter_mut() {
+                redact_json(val, path, under_secret);
+            }
+        }
+        serde_json::Value::String(s) => {
+            if under_secret {
+                *s = "***".into();
+            } else if let Some(scheme_end) = s.find("://") {
+                // credentials embedded in URL userinfo:
+                // `scheme://user:pass@host` — the `url` key doesn't smell
+                // secret but the value is
+                let rest = &s[scheme_end + 3..];
+                let authority_end = rest.find('/').unwrap_or(rest.len());
+                let authority = &rest[..authority_end];
+                if let Some(at) = authority.rfind('@')
+                    && at > 0
+                {
+                    *s = format!("{}://***@{}", &s[..scheme_end], &authority[at + 1..]);
+                }
+            }
+        }
+        _ => {
+            if under_secret {
+                *v = serde_json::json!("***");
+            }
+        }
+    }
 }
 
 /// Recursively blank leaf values under secret-named keys, and scrub
@@ -712,7 +771,11 @@ fn load_document_impl(
             {
                 raw.to_string()
             }
-            _ => format!("{}: {}", e.path(), e.inner()),
+            _ => format!(
+                "{}: {}",
+                normalize_serde_path(&e.path().to_string()),
+                e.inner()
+            ),
         };
         return Err(LoadError::Schema(path.to_path_buf(), did_you_mean(&msg)));
     }
@@ -791,9 +854,29 @@ fn did_you_mean(msg: &str) -> String {
     format!("{msg}; did you mean `{best}`?")
 }
 
+/// serde paths render as `site.0.route.2`; the human-facing label
+/// style is `site[0].route[2]` — rewrite numeric `.N` segments so the
+/// two syntaxes never mix.
+pub(crate) fn normalize_serde_path(p: &str) -> String {
+    let mut out = String::with_capacity(p.len() + 8);
+    for seg in p.split('.') {
+        if !seg.is_empty() && seg.bytes().all(|b| b.is_ascii_digit()) {
+            out.push('[');
+            out.push_str(seg);
+            out.push(']');
+        } else {
+            if !out.is_empty() {
+                out.push('.');
+            }
+            out.push_str(seg);
+        }
+    }
+    out
+}
+
 /// Edit distance between two strings (unbounded — inputs are config
 /// keys, tens of bytes at most).
-fn levenshtein(a: &str, b: &str) -> usize {
+pub(crate) fn levenshtein(a: &str, b: &str) -> usize {
     let mut prev: Vec<usize> = (0..=b.len()).collect();
     for (i, ca) in a.chars().enumerate() {
         let mut cur = vec![i + 1];
@@ -2439,6 +2522,108 @@ response_headers = { enabled = false }
                 Err(e) => panic!("expected Schema, got {e}"),
                 Ok(_) => panic!("expected Schema, load succeeded"),
             }
+        }
+
+        #[test]
+        fn new_grammar_forms() {
+            // `security = false` → { enabled = false } at site and route
+            let l = load_str(
+                "[[site]]\nhosts = [\"x\"]\nsecurity = false\n[[site.route]]\nrespond = { status = 200 }\nsecurity = false",
+            )
+            .unwrap();
+            assert_eq!(
+                l.config.site[0].security.as_ref().unwrap().enabled,
+                Some(false)
+            );
+            assert_eq!(
+                l.config.site[0].route[0].security.as_ref().unwrap().enabled,
+                Some(false)
+            );
+
+            // bare IPs parse as host routes on every network field
+            let l = load_str(
+                "[[site]]\nroot = \"/tmp\"\nip_allow = \"10.0.0.1\"\ntrusted_proxies = \"127.0.0.1\"\n[[site.route]]\nip_deny = \"::1\"\nrate_limit = { rate = \"10/s\", exempt = \"10.0.0.2\" }",
+            )
+            .unwrap();
+            assert_eq!(l.config.site[0].ip_allow[0], "10.0.0.1/32".parse().unwrap());
+            assert_eq!(
+                l.config.site[0].trusted_proxies.as_ref().unwrap()[0],
+                "127.0.0.1/32".parse().unwrap()
+            );
+            assert_eq!(
+                l.config.site[0].route[0].ip_deny[0],
+                "::1/128".parse().unwrap()
+            );
+            assert_eq!(
+                l.config.site[0].route[0]
+                    .rate_limit
+                    .as_ref()
+                    .unwrap()
+                    .exempt[0],
+                "10.0.0.2/32".parse().unwrap()
+            );
+            match load_str("[[site]]\nroot = \"/tmp\"\nip_allow = \"10.0.0.300\"") {
+                Err(LoadError::Schema(_, _)) => {}
+                Err(e) => panic!("expected Schema, got {e}"),
+                Ok(_) => panic!("ip_allow = \"10.0.0.300\" should fail"),
+            }
+
+            // `listen = ":8080"` → wildcard; a bare `"8080"` stays an error
+            let l = load_str("[server]\nlisten = \":8080\"").unwrap();
+            assert_eq!(l.config.server.listen[0].addr.to_string(), "0.0.0.0:8080");
+            let l = load_str("[server]\nlisten = [{ addr = \":8080\", tls = true }]").unwrap();
+            assert_eq!(l.config.server.listen[0].addr.to_string(), "0.0.0.0:8080");
+            match load_str("[server]\nlisten = \"8080\"") {
+                Err(LoadError::Schema(_, _)) => {}
+                Err(e) => panic!("expected Schema, got {e}"),
+                Ok(_) => panic!("listen = \"8080\" should fail"),
+            }
+
+            // acme.directory aliases resolve to their URL at load
+            let l = load_str("[acme]\ndirectory = \"letsencrypt-staging\"").unwrap();
+            assert_eq!(
+                l.config.acme.directory,
+                "https://acme-staging-v02.api.letsencrypt.org/directory"
+            );
+            let l = load_str("[acme]\ndirectory = \"letsencrypt\"").unwrap();
+            assert_eq!(
+                l.config.acme.directory,
+                "https://acme-v02.api.letsencrypt.org/directory"
+            );
+
+            // site.proxy accepts the full table form, not just a ref
+            let l = load_str(
+                "[[site]]\nhosts = [\"x\"]\nproxy = { upstream = \"http://127.0.0.1:9\", host_header = \"original\" }",
+            )
+            .unwrap();
+            let p = l.config.site[0].proxy.as_ref().unwrap();
+            assert_eq!(p.host_header, model::HostHeader::Original);
+
+            // `passive = 5` → { failures = 5, default cooldown }
+            let l = load_str("[upstream.u]\nservers = \"x:1\"\nhealth = { passive = 5 }").unwrap();
+            assert_eq!(
+                l.config.upstream["u"]
+                    .health
+                    .passive
+                    .as_ref()
+                    .unwrap()
+                    .failures,
+                5
+            );
+
+            // rates accept arbitrary periods — "10/30s" is ten per 30s
+            let l = load_str("[[site]]\nroot = \"/tmp\"\n[[site.route]]\nrate_limit = \"10/30s\"")
+                .unwrap();
+            assert_eq!(
+                l.config.site[0].route[0]
+                    .rate_limit
+                    .as_ref()
+                    .unwrap()
+                    .rate
+                    .unwrap()
+                    .period,
+                std::time::Duration::from_secs(30)
+            );
         }
 
         #[test]

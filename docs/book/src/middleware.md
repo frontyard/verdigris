@@ -30,7 +30,9 @@ rate_limit = { rate = "10/s", key = "route" }   # replaces, doesn't merge
 - A route block **replaces** the site block wholesale — except
   `response_headers` (`set`/`add` union, route keys win; `remove`
   concatenates) and `security`, which merge field-wise.
-- `enabled = false` opts a route out of an inherited block.
+- `enabled = false` opts a route out of an inherited block; `security`
+  additionally accepts the bare `security = false` spelling (it has no
+  other dominant field).
 - A site-level `rate_limit` builds **one shared limiter** across all
   routes that inherit it — `key = "ip"` limits each client site-wide.
 - IP ACLs **tighten only**: denies union, and a request must pass both

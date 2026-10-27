@@ -233,7 +233,7 @@ tls = "auto"
 
 [[site.route]]
 prefix = "/ws"
-proxy = { upstream = "http://127.0.0.1:4000" }
+proxy = "http://127.0.0.1:4000"
 timeouts = { request_deadline = "0s", send = "0s" }
 ```
 
@@ -257,7 +257,7 @@ tls = "auto"
 
 [[site.route]]
 prefix = "/"
-proxy = { upstream = "http://10.0.0.5:3000" }
+proxy = "http://10.0.0.5:3000"
 ip_allow = ["10.0.0.0/8", "192.168.0.0/16"]
 auth = { basic = { realm = "ops",
                    users = { oncall = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$3nGf8u5Z2p2mJx0yq9Rk3g" } } }
@@ -281,7 +281,7 @@ auth = { basic = { realm = "ops",
 
 [[site.route]]
 prefix = "/"
-proxy = { upstream = "http://10.0.0.5:3000" }
+proxy = "http://10.0.0.5:3000"
 
 [[site.route]]
 prefix = "/healthz"
@@ -307,7 +307,7 @@ tls = "auto"
 
 [[site.route]]
 prefix = "/v1"
-proxy = { upstream = "api" }
+proxy = "api"
 rate_limit = { key = "ip", rate = "100/m", burst = 25 }
 cors = { origins = ["https://app.example.com"],
          methods = ["GET", "POST", "OPTIONS"],
@@ -349,7 +349,7 @@ tls = "auto"
 
 [[site.route]]
 prefix = "/"
-proxy = { upstream = "app" }
+proxy = "app"
 cache = { store = "main", stale_while_revalidate = "30s",
           stale_if_error = "1h" }
 ```

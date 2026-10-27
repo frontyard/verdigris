@@ -213,13 +213,7 @@ pub fn build(config: &cfg::Config, mw: &middleware::Factory) -> Result<HostIndex
         if let Some(up) = &site_cfg.proxy {
             route_cfgs.push(cfg::RouteConfig {
                 prefix: Some("/".into()),
-                proxy: Some(cfg::ProxyHandler {
-                    upstream: up.clone(),
-                    rewrite: None,
-                    request_headers: None,
-                    retries: cfg::RetryPolicy::default(),
-                    host_header: cfg::HostHeader::Upstream,
-                }),
+                proxy: Some(up.clone()),
                 ..Default::default()
             });
         }

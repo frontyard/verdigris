@@ -10,7 +10,7 @@ use std::time::Duration;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::config::values::{ByteSize, RateSpec, duration, one_or_many};
+use crate::config::values::{ByteSize, RateSpec, cidr, duration, one_or_many};
 
 fn default_true() -> bool {
     true
@@ -105,6 +105,29 @@ fn dns_or_grace<'de, D: serde::Deserializer<'de>>(d: D) -> Result<UpstreamDns, D
 }
 
 /// `upstream.health.active` accepts a probe path (`"/healthz"`) or a table.
+/// `upstream.*.health.passive` accepts a failure count (`passive = 5`)
+/// or a full table.
+fn opt_passive_health<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<PassiveHealth>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Failures(u32),
+        Full(PassiveHealth),
+    }
+    let r = Option::<Repr>::deserialize(d).map_err(|_| {
+        serde::de::Error::custom("health.passive must be a failure count or a table")
+    })?;
+    Ok(r.map(|r| match r {
+        Repr::Failures(failures) => PassiveHealth {
+            failures,
+            ..Default::default()
+        },
+        Repr::Full(p) => p,
+    }))
+}
+
 fn opt_active_health<'de, D: serde::Deserializer<'de>>(
     d: D,
 ) -> Result<Option<ActiveHealth>, D::Error> {
@@ -233,6 +256,47 @@ fn opt_rate_limit<'de, D: serde::Deserializer<'de>>(
     })
 }
 
+/// `acme.directory` accepts a directory URL or a short alias —
+/// `"letsencrypt"` (production) and `"letsencrypt-staging"`. Aliases
+/// resolve to the URL at load so the effective config is canonical.
+fn directory_or_alias<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let s = String::deserialize(d)?;
+    Ok(match s.to_ascii_lowercase().as_str() {
+        "letsencrypt" => "https://acme-v02.api.letsencrypt.org/directory".into(),
+        "letsencrypt-staging" => "https://acme-staging-v02.api.letsencrypt.org/directory".into(),
+        _ => s,
+    })
+}
+
+/// `security` accepts `false` (off-switch for inherited headers) or a
+/// table — the same convention as other inherited middleware blocks.
+fn opt_security<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<RouteSecurity>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Off(bool),
+        Full(RouteSecurity),
+    }
+    Ok(Option::<Repr>::deserialize(d)?.map(|r| match r {
+        Repr::Off(b) => RouteSecurity {
+            enabled: Some(b),
+            ..Default::default()
+        },
+        Repr::Full(s) => s,
+    }))
+}
+
+/// Schema shape for `security` — `false` or a table.
+#[derive(JsonSchema)]
+#[schemars(untagged)]
+pub enum RouteSecuritySchema {
+    /// `security = false` — suppress all security headers on this
+    /// site/route, including inherited ones.
+    Off(bool),
+    /// Table form: per-header overrides.
+    Full(Box<RouteSecurity>),
+}
+
 /// `route.proxy` accepts an upstream reference — cluster name, URL, or
 /// list of URLs, same as `site.proxy` — or a full table.
 fn opt_proxy<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<ProxyHandler>, D::Error> {
@@ -308,7 +372,7 @@ pub struct ServerConfig {
     /// CIDRs whose `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`,
     /// `X-Real-IP` and `Forwarded` headers are trusted. Empty: trust none.
     #[schemars(with = "Vec<String>")]
-    #[serde(deserialize_with = "one_or_many::deserialize")]
+    #[serde(deserialize_with = "cidr::deserialize")]
     pub trusted_proxies: Vec<ipnet::IpNet>,
     /// Value of the `Server` response header. `""` omits it (the
     /// empty-disables convention); `"off"` is a readable alias for the
@@ -407,15 +471,31 @@ pub struct RouteSecurity {
     pub cross_domain_policy: Option<String>,
 }
 
-/// A single listen socket: an `"ip:port"` string or an
+/// A single listen socket: an `"ip:port"` or `":port"` string or an
 /// `{ addr = "ip:port", tls = true }` table.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct ListenAddr {
-    /// `IP:port` to bind, e.g. `0.0.0.0:80` or `[::]:443`.
+    /// `IP:port` to bind, e.g. `0.0.0.0:80`, `":8080"` (wildcard) or
+    /// `[::]:443`.
     #[schemars(with = "String")]
     pub addr: SocketAddr,
     /// Terminate TLS on this listener.
     pub tls: bool,
+}
+
+/// `":8080"` reads as all-interfaces wildcard — prepend `0.0.0.0`.
+/// A bare `"8080"` stays an error: guessing the host intent is worse
+/// than asking for it.
+fn parse_listen_addr(s: &str) -> Result<SocketAddr, String> {
+    let owned;
+    let s = match s.strip_prefix(':') {
+        Some(rest) => {
+            owned = format!("0.0.0.0:{rest}");
+            &owned
+        }
+        None => s,
+    };
+    s.parse::<SocketAddr>().map_err(|e| e.to_string())
 }
 
 impl<'de> Deserialize<'de> for ListenAddr {
@@ -424,32 +504,39 @@ impl<'de> Deserialize<'de> for ListenAddr {
         #[serde(deny_unknown_fields)]
         struct Table {
             #[serde(default)]
-            addr: Option<SocketAddr>,
+            addr: Option<String>,
             #[serde(default)]
             tls: bool,
         }
         #[derive(Deserialize)]
         #[serde(untagged)]
         enum Repr {
-            Addr(SocketAddr),
+            Addr(String),
             Table(Table),
         }
         match Repr::deserialize(d).map_err(|_| {
             serde::de::Error::custom(
-                "listen entries must be \"ip:port\" strings or { addr, tls } tables",
+                "listen entries must be \"ip:port\" or \":port\" strings or { addr, tls } tables",
             )
         })? {
-            Repr::Addr(addr) => Ok(Self { addr, tls: false }),
+            Repr::Addr(s) => Ok(Self {
+                addr: parse_listen_addr(&s).map_err(serde::de::Error::custom)?,
+                tls: false,
+            }),
             Repr::Table(t) => Ok(Self {
                 // `tls = true` alone implies the HTTPS port — ending up
                 // serving TLS on :80 is never what the operator meant.
-                addr: t.addr.unwrap_or_else(|| {
-                    if t.tls {
-                        SocketAddr::from(([0, 0, 0, 0], 443))
-                    } else {
-                        ListenAddr::default().addr
-                    }
-                }),
+                addr: t
+                    .addr
+                    .map(|s| parse_listen_addr(&s).map_err(serde::de::Error::custom))
+                    .transpose()?
+                    .unwrap_or_else(|| {
+                        if t.tls {
+                            SocketAddr::from(([0, 0, 0, 0], 443))
+                        } else {
+                            ListenAddr::default().addr
+                        }
+                    }),
                 tls: t.tls,
             }),
         }
@@ -460,7 +547,7 @@ impl<'de> Deserialize<'de> for ListenAddr {
 #[derive(JsonSchema)]
 #[schemars(untagged)]
 pub enum ListenAddrSchema {
-    /// `"ip:port"` — a plaintext listener.
+    /// `"ip:port"` or `":port"` (all interfaces) — a plaintext listener.
     Addr(String),
     /// `{ addr = "ip:port", tls = true }` — both optional.
     Full {
@@ -695,9 +782,11 @@ pub struct ManualTls {
 pub struct AcmeConfig {
     /// Contact email for the ACME account.
     pub email: Option<String>,
-    /// ACME directory URL. Use the Let's Encrypt staging directory
-    /// (`https://acme-staging-v02.api.letsencrypt.org/directory`) while
-    /// testing to avoid production rate limits.
+    /// ACME directory URL, or an alias: `"letsencrypt"` and
+    /// `"letsencrypt-staging"` (use the staging directory while testing
+    /// to avoid production rate limits). Aliases resolve to their URL
+    /// at load.
+    #[serde(deserialize_with = "directory_or_alias")]
     pub directory: String,
     /// Directory holding the account key and issued certificates. Must be
     /// writable; persists across restarts.
@@ -1025,7 +1114,10 @@ pub struct HealthCheck {
     #[serde(deserialize_with = "opt_active_health")]
     #[schemars(with = "Option<ActiveHealthSchema>")]
     pub active: Option<ActiveHealth>,
-    /// Mark upstreams unhealthy after consecutive request failures.
+    /// Mark upstreams unhealthy after consecutive request failures;
+    /// `passive = 5` is `{ failures = 5 }` with the default cooldown.
+    #[serde(deserialize_with = "opt_passive_health")]
+    #[schemars(with = "Option<PassiveHealthSchema>")]
     pub passive: Option<PassiveHealth>,
 }
 
@@ -1281,8 +1373,11 @@ pub struct SiteConfig {
     /// Shorthand for a catch-all static file route rooted here.
     pub root: Option<PathBuf>,
     /// Shorthand for a catch-all reverse proxy route: a named upstream
-    /// (`"app"`), an upstream URL (`"http://app:9000"`), or a list of URLs.
-    pub proxy: Option<UpstreamRef>,
+    /// (`"app"`), an upstream URL (`"http://app:9000"`), a list of URLs,
+    /// or a full proxy table like `route.proxy`.
+    #[serde(deserialize_with = "opt_proxy")]
+    #[schemars(with = "Option<ProxySchema>")]
+    pub proxy: Option<ProxyHandler>,
     /// Routes, evaluated in order of specificity, not declaration order.
     pub route: Vec<RouteConfig>,
     /// Default auth for every route in this site; a route's own `auth`
@@ -1314,12 +1409,12 @@ pub struct SiteConfig {
     /// Client CIDRs allowed site-wide; a route's `ip_allow` can only
     /// narrow this — both non-empty lists must pass.
     #[schemars(with = "Vec<String>")]
-    #[serde(deserialize_with = "one_or_many::deserialize")]
+    #[serde(deserialize_with = "cidr::deserialize")]
     pub ip_allow: Vec<ipnet::IpNet>,
     /// Client CIDRs denied site-wide; unioned with each route's
     /// `ip_deny`.
     #[schemars(with = "Vec<String>")]
-    #[serde(deserialize_with = "one_or_many::deserialize")]
+    #[serde(deserialize_with = "cidr::deserialize")]
     pub ip_deny: Vec<ipnet::IpNet>,
     /// Site-wide timeout overrides, applied between the global
     /// `timeouts` and each route's own `timeouts`.
@@ -1328,11 +1423,14 @@ pub struct SiteConfig {
     /// `limits` and each route's own `limits`.
     pub limits: Option<LimitOverrides>,
     /// Site-wide security-header overrides, applied between the global
-    /// `server.security` and each route's `security`.
+    /// `server.security` and each route's `security`. `security = false`
+    /// suppresses all of them for the whole site.
+    #[serde(deserialize_with = "opt_security")]
+    #[schemars(with = "Option<RouteSecuritySchema>")]
     pub security: Option<RouteSecurity>,
     /// Per-site override of the trusted proxy CIDR list.
     #[schemars(with = "Option<Vec<String>>")]
-    #[serde(deserialize_with = "one_or_many::option::deserialize")]
+    #[serde(deserialize_with = "cidr::option::deserialize")]
     pub trusted_proxies: Option<Vec<ipnet::IpNet>>,
 }
 
@@ -1377,11 +1475,11 @@ pub struct RouteConfig {
 
     /// Client CIDRs allowed; others get 403.
     #[schemars(with = "Vec<String>")]
-    #[serde(deserialize_with = "one_or_many::deserialize")]
+    #[serde(deserialize_with = "cidr::deserialize")]
     pub ip_allow: Vec<ipnet::IpNet>,
     /// Client CIDRs denied; they get 403 before allow rules.
     #[schemars(with = "Vec<String>")]
-    #[serde(deserialize_with = "one_or_many::deserialize")]
+    #[serde(deserialize_with = "cidr::deserialize")]
     pub ip_deny: Vec<ipnet::IpNet>,
     /// Authentication configuration.
     pub auth: Option<AuthConfig>,
@@ -1402,7 +1500,10 @@ pub struct RouteConfig {
     pub compress: Option<CompressConfig>,
     /// Response header manipulation applied to this route's responses.
     pub response_headers: Option<HeaderOps>,
-    /// Per-route security-header overrides.
+    /// Per-route security-header overrides; `security = false`
+    /// suppresses all security headers on this route.
+    #[serde(deserialize_with = "opt_security")]
+    #[schemars(with = "Option<RouteSecuritySchema>")]
     pub security: Option<RouteSecurity>,
     /// Per-route timeout overrides (e.g. `0s` deadline for SSE/WebSocket).
     pub timeouts: Option<TimeoutOverrides>,
@@ -1457,7 +1558,8 @@ pub struct MatchConditions {
     #[serde(deserialize_with = "one_or_many::deserialize")]
     pub methods: Vec<String>,
     /// Required request headers. Values match exactly, or as regex when
-    /// prefixed with `re:`.
+    /// prefixed with `re:`. A value of `""` requires only presence —
+    /// same rule as `query` (match an empty value with `re:^$`).
     pub headers: BTreeMap<String, String>,
     /// Required query parameters (`key` must equal or regex-match the value).
     /// A value of `""` requires only presence.
@@ -1703,7 +1805,7 @@ pub struct RedirectHandler {
     pub host: Option<String>,
     /// Redirect to another scheme, e.g. `https`.
     pub scheme: Option<String>,
-    /// Status code: 301, 302, 307 (preserves method+body), or 308.
+    /// Status code: 301, 302, 303, 307 (preserves method+body), or 308.
     pub status: u16,
 }
 
@@ -1864,7 +1966,7 @@ pub struct RateLimitConfig {
     /// CIDRs exempt from limiting.
     #[serde(default)]
     #[schemars(with = "Vec<String>")]
-    #[serde(deserialize_with = "one_or_many::deserialize")]
+    #[serde(deserialize_with = "cidr::deserialize")]
     pub exempt: Vec<ipnet::IpNet>,
     /// Log-only mode: never reject, but emit metrics/logs as if it would.
     #[serde(default)]
@@ -2112,6 +2214,16 @@ pub enum ActiveHealthSchema {
     Path(String),
     /// Full table form.
     Full(ActiveHealth),
+}
+
+/// Schema shape for `upstream.*.health.passive` (a count or a table).
+#[derive(JsonSchema)]
+#[schemars(untagged)]
+pub enum PassiveHealthSchema {
+    /// `5` — mark unhealthy after this many consecutive failures.
+    Failures(u32),
+    /// Full table form.
+    Full(PassiveHealth),
 }
 
 /// Schema shape for `route.proxy` (upstream shorthand or a table).

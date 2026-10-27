@@ -32,8 +32,8 @@ where one field dominates the table — they are a closed set:
 
 | Field | Accepted forms | Expands to |
 | --- | --- | --- |
-| `server.listen` | `"ip:port"` \| `{ addr, tls }` | `ListenAddr` |
-| `site.proxy` | name \| URL \| `[urls]` | `UpstreamRef` |
+| `server.listen` | `"ip:port"`/`":port"` \| `{ addr, tls }` | `ListenAddr` |
+| `site.proxy` | `upstream` shapes \| table | `ProxyHandler{upstream,…}` |
 | `route.proxy` | `upstream` shapes \| table | `ProxyHandler{upstream,…}` |
 | `route.proxy.upstream` | name \| URL \| `[urls]` | `UpstreamRef` |
 | `route.static` | `"root"` \| table | `StaticHandler{root,…}` |
@@ -42,22 +42,29 @@ where one field dominates the table — they are a closed set:
 | `route.rate_limit` | `"100/s"` \| table | `RateLimitConfig{key:"ip",…}` |
 | `route.cache` | `false` \| `"store"` \| table | `RouteCache{store,…}` |
 | `route.compress` | `true`/`false` \| table | `CompressConfig` |
+| `site.security`/`route.security` | `false` \| table | `RouteSecurity{enabled,…}` |
 | `proxy.retries` | `false`/`true` \| table | `RetryPolicy` |
 | `upstream.dns` | `"60s"` \| table | `UpstreamDns{grace}` |
 | `upstream.health.active` | `"/path"` \| table | `ActiveHealth{path,…}` |
+| `upstream.health.passive` | `5` \| table | `PassiveHealth{failures,…}` |
 | `upstream.servers` entry | `"url"` \| `{url,weight,backup}` | `UpstreamServer` |
 | `rewrite.replace_prefix` | `{ from, to }` | `PrefixPair` (map only) |
 | `site.tls` | `"off"∣"auto"∣"self_signed"` \| `{cert,key}` | `SiteTls` |
 | `log.access` | `false` \| table | `AccessLog{enabled,…}` |
+| `acme.directory` | `"letsencrypt"`/`"letsencrypt-staging"` \| URL | resolved URL |
 
 Every shorthand has an `*Schema`/`repr` untagged wrapper for schemars
 and a `deserialize_with` adapter — the `opt_route_cache`/`opt_compress`
 pattern. No fourth spelling per field, ever: two forms is the cap.
+`server.listen`'s `":port"` spelling is an address-level nicety inside
+the string form, not a third form; `acme.directory` aliases resolve to
+their URL at load (one canonical value, no second shape).
 
 **Parity.** Where site-level and route-level fields share semantics,
-each accepts the same forms: `route.proxy` accepts every
-`site.proxy`/`upstream` shape; the site-level middleware defaults
-(`site.auth`, `site.cors`, `site.rate_limit`, `site.cache`,
+each accepts the same forms: `site.proxy` accepts every `route.proxy`
+shape including the full `{ upstream, … }` table (the implicit
+catch-all route carries the whole handler); the site-level middleware
+defaults (`site.auth`, `site.cors`, `site.rate_limit`, `site.cache`,
 `site.compress`, `site.response_headers`) accept exactly the route
 forms — `site.rate_limit = "100/s"` works just like the route's.
 
@@ -71,6 +78,11 @@ Simple string/scalar lists accept a single value as `["v"]` via the
 `static.index`, `static.try_files`, `*.remove` header lists
 (`response_headers.remove`, `proxy.request_headers.remove`),
 `trusted_proxies`, `vary_headers`.
+
+Network fields additionally accept **bare IPs** — `"10.0.0.1"` parses
+as the host route `10.0.0.1/32` (`::1` as `/128`). This covers
+`ip_allow`, `ip_deny`, `trusted_proxies`, and `rate_limit.exempt`; a
+`/prefix` remains valid everywhere.
 
 Exceptions (deliberate, strict):
 
@@ -90,8 +102,9 @@ here why not: `log.access` (`false` or `{ enabled = false }`),
 Route middleware blocks (`auth`, `cors`, `rate_limit`, `cache`,
 `compress`, `response_headers`) carry `enabled = true` by default;
 `enabled = false` is the opt-out that suppresses an inherited
-site-level default. Settings left inside a disabled block are dead
-config and `verd validate` warns.
+site-level default. `site.security`/`route.security` take the bare
+`false` spelling as well as `{ enabled = false }`. Settings left
+inside a disabled block are dead config and `verd validate` warns.
 
 `server.listen` has no `enabled` — an empty list already means "no
 sockets" and the validator requires at least one listener anyway.
@@ -138,7 +151,7 @@ unknown `{...}` text passes through literally.
 ## Diagnostics
 
 - Load errors name the file (fragment, not just the main file), the
-  field path (`site.0.route.2`), and file:line when the failure isn't
+  field path (`site[0].route[2]`), and file:line when the failure isn't
   an interpolation artifact.
 - Semantic diagnostics carry the same fragment provenance — a bad
   field in `tls.toml` says `tls.toml`, not `verd.toml`.

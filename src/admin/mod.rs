@@ -173,47 +173,11 @@ async fn show_config(State(state): State<Arc<AdminState>>) -> Json<Value> {
     Json(v)
 }
 
-/// Recursively blank leaf values under secret-named keys — same policy
-/// as `verd config` (`config::secret_at`) — and scrub `user:pass@`
-/// credentials embedded in URL strings.
+/// Recursively blank leaf values under secret-named keys — shared
+/// implementation in `config::redact_json` so this endpoint and
+/// `verd config --format json` apply the same policy.
 fn redact(v: &mut Value, path: &mut Vec<String>, under_secret: bool) {
-    match v {
-        Value::Object(m) => {
-            for (k, val) in m.iter_mut() {
-                let secret = under_secret || crate::config::secret_at(path, k, val.is_object());
-                path.push(k.clone());
-                redact(val, path, secret);
-                path.pop();
-            }
-        }
-        Value::Array(a) => {
-            for val in a.iter_mut() {
-                redact(val, path, under_secret);
-            }
-        }
-        Value::String(s) => {
-            if under_secret {
-                *s = "***".into();
-            } else if let Some(scheme_end) = s.find("://") {
-                // credentials embedded in URL userinfo:
-                // `scheme://user:pass@host` — the `url` key doesn't smell
-                // secret but the value is
-                let rest = &s[scheme_end + 3..];
-                let authority_end = rest.find('/').unwrap_or(rest.len());
-                let authority = &rest[..authority_end];
-                if let Some(at) = authority.rfind('@')
-                    && at > 0
-                {
-                    *s = format!("{}://***@{}", &s[..scheme_end], &authority[at + 1..]);
-                }
-            }
-        }
-        _ => {
-            if under_secret {
-                *v = json!("***");
-            }
-        }
-    }
+    crate::config::redact_json(v, path, under_secret);
 }
 
 /// Cluster/member status snapshot.

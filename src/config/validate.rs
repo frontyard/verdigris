@@ -85,8 +85,230 @@ pub fn validate(cfg: &Config) -> Vec<Diagnostic> {
     check_acme(&mut ctx, cfg);
     check_timeouts_limits(&mut ctx, cfg);
     check_log(&mut ctx, cfg);
+    check_global_security(&mut ctx, cfg);
 
     ctx.diags
+}
+
+/// A `host`/`redirect_host`-style value: hostname, optionally `host:port`.
+/// Anything else produces a `Location`/`Host` header that fails
+/// `HeaderValue` encoding at request time — silently.
+fn check_host_target(ctx: &mut Ctx, path: String, v: &str, extra: &str) {
+    if v.is_empty()
+        || v.contains("://")
+        || v.contains('/')
+        || v.chars().any(char::is_whitespace)
+        || http::HeaderValue::from_str(v).is_err()
+    {
+        ctx.error(
+            path,
+            format!(
+                "{v:?} is not a valid Host value — use a hostname (optionally host:port){extra}"
+            ),
+        );
+    }
+}
+
+/// `{ident}`-looking tokens in `redirect.to`/`respond.body` templates.
+/// The placeholder set is closed; anything else passes through
+/// literally at request time — almost always a typo, but possibly
+/// intentional text, so warn rather than error.
+fn check_placeholder_tokens(ctx: &mut Ctx, path: &str, template: &str) {
+    const KNOWN: [&str; 5] = ["path", "host", "query", "method", "scheme"];
+    let mut seen = HashSet::new();
+    for cap in placeholder_re().captures_iter(template) {
+        let name = cap[1].to_string();
+        if !KNOWN.contains(&name.as_str()) && seen.insert(name.clone()) {
+            ctx.warn(
+                path.to_string(),
+                format!(
+                    "unknown placeholder {{{name}}} in {template:?} — the closed set is {{path}}, {{host}}, {{query}}, {{method}}, {{scheme}}; other text passes through literally"
+                ),
+            );
+        }
+    }
+}
+
+/// `{{path}}`-style tokens: `{` + identifier + `}` — letter/underscore
+/// only, so `{"json": "…"}` and `{ css }` braces are not flagged.
+fn placeholder_re() -> &'static Regex {
+    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\{([A-Za-z_]+)\}").expect("static regex"))
+}
+
+/// Security-header token sets, shared by the global `[security]` table
+/// and `RouteSecurity` overrides. Values are emitted verbatim — an
+/// out-of-set token is dead config, and an unparseable one is silently
+/// dropped at request time. Empty means "emit nothing" at every layer.
+fn check_security_tokens(
+    ctx: &mut Ctx,
+    path: &str,
+    frame_options: Option<&str>,
+    referrer_policy: Option<&str>,
+    csp: Option<&str>,
+    cross_domain_policy: Option<&str>,
+) {
+    const REFERRER_POLICIES: [&str; 8] = [
+        "no-referrer",
+        "no-referrer-when-downgrade",
+        "origin",
+        "origin-when-cross-origin",
+        "same-origin",
+        "strict-origin",
+        "strict-origin-when-cross-origin",
+        "unsafe-url",
+    ];
+    const CROSS_DOMAIN_POLICIES: [&str; 4] = ["none", "master-only", "by-content-type", "all"];
+    let token_set =
+        |v: &str, set: &[&str]| v.is_empty() || set.contains(&v.to_ascii_lowercase().as_str());
+    if let Some(v) = frame_options
+        && !v.is_empty()
+    {
+        if http::HeaderValue::from_str(v).is_err() {
+            ctx.error(
+                format!("{path}.frame_options"),
+                format!("{v:?} is not a valid header value"),
+            );
+        } else if !token_set(v, &["deny", "sameorigin"]) {
+            ctx.error(
+                format!("{path}.frame_options"),
+                format!(
+                    "{v:?} — X-Frame-Options accepts DENY or SAMEORIGIN (\"\" disables the header)"
+                ),
+            );
+        }
+    }
+    if let Some(v) = referrer_policy
+        && !v.is_empty()
+    {
+        if http::HeaderValue::from_str(v).is_err() {
+            ctx.error(
+                format!("{path}.referrer_policy"),
+                format!("{v:?} is not a valid header value"),
+            );
+        } else if !token_set(v, &REFERRER_POLICIES) {
+            ctx.error(
+                format!("{path}.referrer_policy"),
+                format!("{v:?} is not a Referrer-Policy token (\"\" disables the header)"),
+            );
+        }
+    }
+    if let Some(v) = csp
+        && !v.is_empty()
+        && http::HeaderValue::from_str(v).is_err()
+    {
+        ctx.error(
+            format!("{path}.csp"),
+            format!("{v:?} is not a valid header value"),
+        );
+    }
+    if let Some(v) = cross_domain_policy
+        && !v.is_empty()
+    {
+        if http::HeaderValue::from_str(v).is_err() {
+            ctx.error(
+                format!("{path}.cross_domain_policy"),
+                format!("{v:?} is not a valid header value"),
+            );
+        } else if !token_set(v, &CROSS_DOMAIN_POLICIES) {
+            ctx.error(
+                format!("{path}.cross_domain_policy"),
+                format!(
+                    "{v:?} — X-Permitted-Cross-Domain-Policies accepts none, master-only, by-content-type, or all (\"\" disables)"
+                ),
+            );
+        }
+    }
+}
+
+/// Global `[security]` — every field is concrete (`""` disables).
+fn check_global_security(ctx: &mut Ctx, cfg: &Config) {
+    let s = &cfg.server.security;
+    check_security_tokens(
+        ctx,
+        "server.security",
+        Some(&s.frame_options),
+        Some(&s.referrer_policy),
+        s.csp.as_deref(),
+        Some(&s.cross_domain_policy),
+    );
+}
+
+/// `RouteSecurity` overrides — `Some(v)` fields only; absent inherits.
+fn check_route_security(ctx: &mut Ctx, path: &str, s: &RouteSecurity) {
+    // `security = false` alone is fine — extra fields alongside it are
+    // dead config (parity with cache/compress disabled-block warnings)
+    if s.enabled == Some(false)
+        && (s.hsts.is_some()
+            || s.hsts_max_age.is_some()
+            || s.hsts_subdomains.is_some()
+            || s.content_type_options.is_some()
+            || s.frame_options.is_some()
+            || s.referrer_policy.is_some()
+            || s.csp.is_some()
+            || s.cross_domain_policy.is_some())
+    {
+        ctx.warn(
+            path.to_string(),
+            "settings are ignored — security is disabled",
+        );
+    }
+    check_security_tokens(
+        ctx,
+        path,
+        s.frame_options.as_deref(),
+        s.referrer_policy.as_deref(),
+        s.csp.as_deref(),
+        s.cross_domain_policy.as_deref(),
+    );
+}
+
+/// Warn when a CIDR list contains a `/0` entry — it matches every
+/// address of its family, which is almost never the intent in ACLs,
+/// exemptions, or proxy trust.
+fn check_catchall_nets(ctx: &mut Ctx, path: String, nets: &[ipnet::IpNet], msg: &str) {
+    if nets.iter().any(|n| n.prefix_len() == 0) {
+        ctx.warn(path, msg.to_string());
+    }
+}
+
+/// HTTP methods the validator treats as standard — `Method::from_bytes`
+/// accepts any token, so a closed-set check is the only way to catch
+/// `"GTE"`-style typos. Custom extension methods are legal; they get a
+/// warning, not an error.
+const STANDARD_METHODS: [&str; 9] = [
+    "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "CONNECT", "TRACE",
+];
+
+/// Method lists are matched verbatim at request time — an invalid
+/// token is dead config; an unusual-but-valid method is usually a typo.
+fn check_method(ctx: &mut Ctx, path: String, m: &str, allow_star: bool) {
+    if m == "*" && allow_star {
+        return;
+    }
+    if http::Method::from_bytes(m.as_bytes()).is_err() {
+        ctx.error(path, format!("invalid HTTP method {m:?}"));
+    } else if !STANDARD_METHODS.contains(&m) {
+        ctx.warn(
+            path,
+            format!(
+                "unusual HTTP method {m:?} — methods are matched exactly; a typo never matches"
+            ),
+        );
+    }
+}
+
+/// Rough DNS-name shape for `upstream.tls.sni` — labels of
+/// alphanumerics and interior hyphens; IPs pass via a separate check.
+fn looks_like_dns_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 253
+        && s.split('.').all(|l| {
+            !l.is_empty()
+                && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                && !l.starts_with('-')
+                && !l.ends_with('-')
+        })
 }
 
 fn check_listeners(ctx: &mut Ctx, cfg: &Config) {
@@ -120,6 +342,21 @@ fn check_listeners(ctx: &mut Ctx, cfg: &Config) {
             "per-IP limit exceeds the global connection limit",
         );
     }
+    // `""`/`"off"` omit the header; anything else is emitted verbatim —
+    // an invalid value would be silently dropped at build time
+    let sh = cfg.server.server_header.as_str();
+    if sh != "off" && !sh.is_empty() && http::HeaderValue::from_str(sh).is_err() {
+        ctx.error(
+            "server.server_header",
+            format!("{sh:?} is not a valid header value"),
+        );
+    }
+    check_catchall_nets(
+        ctx,
+        "server.trusted_proxies".to_string(),
+        &cfg.server.trusted_proxies,
+        "a /0 CIDR trusts X-Forwarded-* from every client — ACLs and ip-keyed rate limits become spoofable",
+    );
 }
 
 /// Label a site by `name`, else its first host (or `default`), falling
@@ -140,11 +377,27 @@ fn site_label(i: usize, site: &SiteConfig) -> String {
 fn check_sites(ctx: &mut Ctx, cfg: &Config) {
     let mut exact_hosts: HashMap<String, usize> = HashMap::new();
     let mut wildcards: HashMap<String, usize> = HashMap::new();
+    let mut names: HashMap<&str, usize> = HashMap::new();
     let mut default_count = 0usize;
     let mut any_tls = false;
 
     for (i, site) in cfg.site.iter().enumerate() {
         let site_path = site_label(i, site);
+        // `name` feeds the site["…"] diagnostic label AND the `route`
+        // metric id prefix `{name}.r{j}` — duplicates collide in both
+        if let Some(n) = &site.name
+            && names.insert(n.as_str(), i).is_some()
+        {
+            ctx.error(
+                site_path.clone(),
+                format!(
+                    "duplicate site name {n:?} — metric `route` labels and diagnostics collide"
+                ),
+            );
+        }
+        if let Some(h) = &site.redirect_host {
+            check_host_target(ctx, format!("{site_path}.redirect_host"), h, "");
+        }
         let path = format!("{site_path}.hosts");
         if site.hosts.is_empty() && !site.default {
             ctx.error(path, "site has no hosts and is not marked default");
@@ -247,7 +500,7 @@ fn check_sites(ctx: &mut Ctx, cfg: &Config) {
             );
         }
         if let Some(up) = &site.proxy {
-            check_upstream_ref(ctx, cfg, &format!("{site_path}.proxy"), up);
+            check_proxy(ctx, cfg, &format!("{site_path}.proxy"), up);
         }
         for (j, route) in site.route.iter().enumerate() {
             check_route(ctx, cfg, &site_path, j, site, route);
@@ -388,15 +641,36 @@ fn check_site_defaults(ctx: &mut Ctx, cfg: &Config, site_path: &str, site: &Site
     if let Some(ops) = &site.response_headers {
         check_header_ops(ctx, site_path, ops);
     }
+    if let Some(sec) = &site.security {
+        check_route_security(ctx, &format!("{site_path}.security"), sec);
+    }
+    check_catchall_nets(
+        ctx,
+        format!("{site_path}.ip_allow"),
+        &site.ip_allow,
+        "a /0 CIDR matches every client — the allowlist is a no-op",
+    );
+    check_catchall_nets(
+        ctx,
+        format!("{site_path}.ip_deny"),
+        &site.ip_deny,
+        "a /0 CIDR denies every client — all requests get 403",
+    );
 }
 
 fn check_trusted_proxies(ctx: &mut Ctx, _cfg: &Config, i: usize, site: &SiteConfig) {
-    if let Some(proxies) = &site.trusted_proxies
-        && proxies.is_empty()
-    {
-        ctx.warn(
+    if let Some(proxies) = &site.trusted_proxies {
+        if proxies.is_empty() {
+            ctx.warn(
+                format!("{}.trusted_proxies", site_label(i, site)),
+                "explicit empty list disables trusted proxies for this site",
+            );
+        }
+        check_catchall_nets(
+            ctx,
             format!("{}.trusted_proxies", site_label(i, site)),
-            "explicit empty list disables trusted proxies for this site",
+            proxies,
+            "a /0 CIDR trusts X-Forwarded-* from every client — ACLs and ip-keyed rate limits become spoofable",
         );
     }
 }
@@ -455,6 +729,11 @@ fn check_route(
         for method in &m.methods {
             if http::Method::from_bytes(method.as_bytes()).is_err() {
                 ctx.error(path.clone(), format!("invalid HTTP method {method:?}"));
+            } else if !STANDARD_METHODS.contains(&method.as_str()) {
+                ctx.warn(
+                    format!("{path}.match.methods"),
+                    format!("unusual HTTP method {method:?} — methods are matched exactly; a typo never matches"),
+                );
             }
         }
         check_patterns(ctx, &path, "headers", &m.headers);
@@ -530,11 +809,11 @@ fn check_route(
         if targets != 1 {
             ctx.error(path.clone(), "redirect sets exactly one of to/host/scheme");
         }
-        if ![301, 302, 307, 308].contains(&redir.status) {
+        if ![301, 302, 303, 307, 308].contains(&redir.status) {
             ctx.error(
                 path.clone(),
                 format!(
-                    "redirect status {} must be 301, 302, 307, or 308",
+                    "redirect status {} must be 301, 302, 303, 307, or 308",
                     redir.status
                 ),
             );
@@ -548,9 +827,33 @@ fn check_route(
                 format!("redirect scheme {scheme:?} must be http or https"),
             );
         }
+        if let Some(h) = &redir.host {
+            check_host_target(ctx, format!("{path}.redirect.host"), h, "");
+        }
+        if let Some(to) = &redir.to {
+            check_placeholder_tokens(ctx, &format!("{path}.redirect.to"), to);
+            // audit the literal parts — placeholders become their values
+            // at request time, so stub them first. Spaces parse as
+            // header values but break Location semantically.
+            let stubbed = placeholder_re().replace_all(to, "x");
+            if stubbed.chars().any(|c| c.is_whitespace() || c.is_control()) {
+                ctx.error(
+                    format!("{path}.redirect.to"),
+                    format!("{to:?} contains whitespace or control characters — Location would be broken"),
+                );
+            } else if !(to.starts_with('/') || to.starts_with('{') || to.contains("://")) {
+                ctx.warn(
+                    format!("{path}.redirect.to"),
+                    format!(
+                        "{to:?} has no scheme and does not start with '/' — it emits a relative-path redirect; use \"https://{to}\" for a URL or {{ host = {to:?} }} for a host redirect"
+                    ),
+                );
+            }
+        }
     }
 
     if let Some(resp) = &route.respond {
+        check_placeholder_tokens(ctx, &format!("{path}.respond.body"), &resp.body);
         if !(100..=599).contains(&resp.status) {
             ctx.error(
                 path.clone(),
@@ -613,6 +916,21 @@ fn check_route(
     if let Some(ops) = &route.response_headers {
         check_header_ops(ctx, &path, ops);
     }
+    if let Some(sec) = &route.security {
+        check_route_security(ctx, &format!("{path}.security"), sec);
+    }
+    check_catchall_nets(
+        ctx,
+        format!("{path}.ip_allow"),
+        &route.ip_allow,
+        "a /0 CIDR matches every client — the allowlist is a no-op",
+    );
+    check_catchall_nets(
+        ctx,
+        format!("{path}.ip_deny"),
+        &route.ip_deny,
+        "a /0 CIDR denies every client — all requests get 403",
+    );
 }
 
 /// Dead-config check for a disabled `response_headers` block — field
@@ -652,13 +970,36 @@ fn check_route_cache(ctx: &mut Ctx, cfg: &Config, path: &str, cache: &RouteCache
         return;
     }
     if !cfg.cache.contains_key(&cache.store) {
+        let suggestion = name_hint(&cache.store, cfg.cache.keys());
         ctx.error(
             format!("{path}.cache.store"),
             format!(
-                "unknown cache store {:?}; define [cache.{}]",
+                "unknown cache store {:?}{suggestion}; define [cache.{}]",
                 cache.store, cache.store
             ),
         );
+    }
+    // bypass entries are matched verbatim — typos are silently dead
+    for m in &cache.bypass.methods {
+        check_method(ctx, format!("{path}.cache.bypass.methods"), m, false);
+    }
+    for h in &cache.bypass.headers {
+        if http::HeaderName::from_bytes(h.as_bytes()).is_err() {
+            ctx.error(
+                format!("{path}.cache.bypass.headers"),
+                format!("invalid header name {h:?}"),
+            );
+        }
+    }
+    for c in &cache.bypass.cookies {
+        if c.chars()
+            .any(|ch| ch.is_whitespace() || ch.is_control() || matches!(ch, ',' | ';' | '='))
+        {
+            ctx.warn(
+                format!("{path}.cache.bypass.cookies"),
+                format!("{c:?} can never match a cookie name"),
+            );
+        }
     }
 }
 
@@ -711,6 +1052,26 @@ fn check_patterns(ctx: &mut Ctx, path: &str, kind: &str, pats: &BTreeMap<String,
     }
 }
 
+/// Suggest defined names for an unknown named reference — the closest
+/// within edit distance 2, else the full list so the fix is visible.
+fn name_hint<'a>(typo: &str, defined: impl Iterator<Item = &'a String>) -> String {
+    let names: Vec<&String> = defined.collect();
+    if names.is_empty() {
+        return String::new();
+    }
+    let typo_lc = typo.to_lowercase();
+    if let Some((d, n)) = names
+        .iter()
+        .map(|n| (crate::config::levenshtein(&typo_lc, &n.to_lowercase()), *n))
+        .min_by_key(|(d, _)| *d)
+        && d <= 2
+    {
+        return format!("; did you mean {n:?}?");
+    }
+    let list: Vec<String> = names.iter().map(|n| format!("{n:?}")).collect();
+    format!("; defined: {}", list.join(", "))
+}
+
 /// Validate an upstream reference (named cluster or inline URL list).
 fn check_upstream_ref(ctx: &mut Ctx, cfg: &Config, path: &str, upstream: &UpstreamRef) {
     match upstream {
@@ -723,9 +1084,12 @@ fn check_upstream_ref(ctx: &mut Ctx, cfg: &Config, path: &str, upstream: &Upstre
                 } else {
                     format!("or use a URL such as \"http://{name}:PORT\"")
                 };
+                let suggestion = name_hint(name, cfg.upstream.keys());
                 ctx.error(
                     path.to_string(),
-                    format!("unknown upstream {name:?}; define [upstream.{name}] {hint}"),
+                    format!(
+                        "unknown upstream {name:?}{suggestion}; define [upstream.{name}] {hint}"
+                    ),
                 );
             }
         }
@@ -744,18 +1108,24 @@ fn check_proxy(ctx: &mut Ctx, cfg: &Config, path: &str, proxy: &ProxyHandler) {
     check_proxy_retries(ctx, path, &proxy.retries);
     if let HostHeader::Custom(v) = &proxy.host_header {
         // must read like a host[:port] and survive as a header value
-        if v.is_empty()
-            || v.contains("://")
-            || v.contains('/')
-            || v.chars().any(char::is_whitespace)
-            || http::HeaderValue::from_str(v).is_err()
-        {
-            ctx.error(
-                format!("{path}.proxy.host_header"),
-                format!(
-                    "{v:?} is not a valid Host value — use a hostname (optionally host:port), \"upstream\", or \"original\""
-                ),
-            );
+        check_host_target(
+            ctx,
+            format!("{path}.proxy.host_header"),
+            v,
+            ", \"upstream\", or \"original\"",
+        );
+        // a custom value is sent verbatim — a keyword typo silently does
+        // the wrong thing
+        for kw in ["upstream", "original"] {
+            if crate::config::levenshtein(&v.to_lowercase(), kw) <= 2 {
+                ctx.warn(
+                    format!("{path}.proxy.host_header"),
+                    format!(
+                        "{v:?} looks like a typo of the {kw:?} keyword — a custom value is sent verbatim"
+                    ),
+                );
+                break;
+            }
         }
     }
     if let Some(ops) = &proxy.request_headers
@@ -801,6 +1171,16 @@ fn check_proxy(ctx: &mut Ctx, cfg: &Config, path: &str, proxy: &ProxyHandler) {
                 format!("{path}.proxy.rewrite.strip_prefix"),
                 format!("{p:?} must start with '/'"),
             );
+        }
+        if let Some(pp) = &rw.replace_prefix {
+            for (field, v) in [("from", &pp.from), ("to", &pp.to)] {
+                if !v.starts_with('/') {
+                    ctx.error(
+                        format!("{path}.proxy.rewrite.replace_prefix.{field}"),
+                        format!("{v:?} must start with '/' — paths always do"),
+                    );
+                }
+            }
         }
     }
 }
@@ -935,8 +1315,21 @@ fn check_rate_limit(ctx: &mut Ctx, path: &str, rl: &RateLimitConfig) {
                     rl.key
                 ),
             );
+        } else if let Some(h) = rl.key.strip_prefix("header:")
+            && http::HeaderName::from_bytes(h.as_bytes()).is_err()
+        {
+            ctx.error(
+                format!("{path}.rate_limit.key"),
+                format!("{h:?} is not a valid header name"),
+            );
         }
     }
+    check_catchall_nets(
+        ctx,
+        format!("{path}.rate_limit.exempt"),
+        &rl.exempt,
+        "a /0 CIDR exempts every client — rate limiting is effectively disabled",
+    );
     match rl.rate {
         None => ctx.error(
             format!("{path}.rate_limit.rate"),
@@ -973,12 +1366,21 @@ fn check_cors(ctx: &mut Ctx, path: &str, cors: &CorsConfig) {
         );
     }
     for origin in &cors.origins {
-        if let Some(pat) = origin.strip_prefix("re:")
-            && let Err(e) = Regex::new(pat)
-        {
+        if let Some(pat) = origin.strip_prefix("re:") {
+            if let Err(e) = Regex::new(pat) {
+                ctx.error(
+                    format!("{path}.cors.origins"),
+                    format!("invalid regex {origin:?}: {e}"),
+                );
+            }
+        } else if origin != "*" && !origin.starts_with("*.") && !origin.contains("://") {
+            // `Origin::Exact` compares the whole header value — a bare
+            // hostname can never equal `scheme://host`
             ctx.error(
                 format!("{path}.cors.origins"),
-                format!("invalid regex {origin:?}: {e}"),
+                format!(
+                    "origin {origin:?} has no scheme — exact origins look like \"https://{origin}\" and never match an Origin header otherwise"
+                ),
             );
         }
     }
@@ -986,6 +1388,27 @@ fn check_cors(ctx: &mut Ctx, path: &str, cors: &CorsConfig) {
         ctx.warn(
             format!("{path}.cors"),
             "credentials with wildcard origin is rejected by browsers; credentials are ignored for \"*\"",
+        );
+    }
+    // methods/headers/expose are joined verbatim into ACA-* response
+    // headers — a typo never matches and produces no diagnostic
+    for m in &cors.methods {
+        check_method(ctx, format!("{path}.cors.methods"), m, true);
+    }
+    for (field, names) in [("headers", &cors.headers), ("expose", &cors.expose)] {
+        for h in names {
+            if h != "*" && http::HeaderName::from_bytes(h.as_bytes()).is_err() {
+                ctx.error(
+                    format!("{path}.cors.{field}"),
+                    format!("invalid header name {h:?}"),
+                );
+            }
+        }
+    }
+    if cors.credentials && cors.expose.iter().any(|h| h == "*") {
+        ctx.warn(
+            format!("{path}.cors.expose"),
+            "\"*\" in expose is treated literally (not as a wildcard) when credentials are enabled",
         );
     }
 }
@@ -996,7 +1419,7 @@ fn referenced_upstreams(cfg: &Config) -> HashSet<&str> {
     cfg.site
         .iter()
         .flat_map(|s| {
-            s.proxy.iter().chain(
+            s.proxy.iter().map(|p| &p.upstream).chain(
                 s.route
                     .iter()
                     .filter_map(|r| r.proxy.as_ref().map(|p| &p.upstream)),
@@ -1053,6 +1476,23 @@ fn check_upstreams(ctx: &mut Ctx, cfg: &Config) {
                 "tls.verify = false disables upstream certificate verification — traffic to this upstream is MITM-able; prefer a custom ca or sni override",
             );
         }
+        if let Some(sni) = &up.tls.sni
+            && sni.parse::<std::net::IpAddr>().is_err()
+            && !looks_like_dns_name(sni)
+        {
+            ctx.error(
+                format!("{path}.tls.sni"),
+                format!("{sni:?} is not a valid DNS name or IP address"),
+            );
+        }
+        if let Some(ca) = &up.tls.ca
+            && !ca.is_file()
+        {
+            ctx.warn(
+                format!("{path}.tls.ca"),
+                format!("CA bundle {} does not exist", ca.display()),
+            );
+        }
         if let Some(active) = &up.health.active
             && !(100..=599).contains(&active.expect)
         {
@@ -1087,21 +1527,36 @@ fn check_proxy_retries(ctx: &mut Ctx, path: &str, retries: &crate::config::model
     }
 }
 
+/// Upstream URLs are authority-only — the same parse the cluster
+/// builder runs, surfaced here so the diagnostic carries a config path.
+/// The scheme/host pre-check keeps the precise messages the URI parser
+/// doesn't produce ("http://" is just "empty string" to it).
 fn check_upstream_url(ctx: &mut Ctx, path: &str, url: &str) {
     match url.split_once("://") {
         Some(("http" | "https" | "h2c", rest)) => {
-            let authority = rest.split('/').next().unwrap_or("");
-            if authority.is_empty() {
+            if rest
+                .split(['/', '?', '@'])
+                .next()
+                .unwrap_or_default()
+                .is_empty()
+            {
                 ctx.error(
                     path.to_string(),
                     format!("upstream URL {url:?} has no host"),
                 );
+                return;
             }
         }
-        _ => ctx.error(
-            path.to_string(),
-            format!("upstream URL {url:?} must have scheme http, https, or h2c"),
-        ),
+        _ => {
+            ctx.error(
+                path.to_string(),
+                format!("upstream URL {url:?} must have scheme http, https, or h2c"),
+            );
+            return;
+        }
+    }
+    if let Err(e) = crate::proxy::cluster::UpstreamUrl::parse(url) {
+        ctx.error(path.to_string(), e);
     }
 }
 
@@ -1138,6 +1593,8 @@ fn check_caches(ctx: &mut Ctx, cfg: &Config) {
                         path.clone(),
                         format!("disk_path required for tier = {:?}", store.tier),
                     );
+                } else if let Err(e) = crate::cache::disk::Disk::check_path(store) {
+                    ctx.error(format!("{path}.disk_path"), e);
                 }
                 if store.disk_bytes.0 == 0 {
                     ctx.error(
@@ -1221,6 +1678,44 @@ fn check_acme(ctx: &mut Ctx, cfg: &Config) {
         ctx.error(
             "acme.on_demand.allowed_hosts",
             "on-demand issuance requires an explicit allowlist (refusing to issue for arbitrary domains)",
+        );
+    }
+    for h in &od.allowed_hosts {
+        if h == "*"
+            || h.contains("://")
+            || h.contains('/')
+            || h.chars().any(char::is_whitespace)
+            || (h.starts_with('*') && !h.starts_with("*."))
+        {
+            ctx.error(
+                "acme.on_demand.allowed_hosts",
+                format!("invalid allowlist entry {h:?} — use hostnames or \"*.suffix\" patterns"),
+            );
+        } else if let Some(suffix) = h.strip_prefix("*.")
+            && !suffix.contains('.')
+        {
+            // `*.x` where x is a single label covers e.g. every `a.com`
+            // — the exact abuse the allowlist exists to prevent
+            ctx.warn(
+                "acme.on_demand.allowed_hosts",
+                format!(
+                    "{h:?} covers the entire {suffix:?} suffix — any `a.{suffix}` can trigger issuance; use a narrower suffix"
+                ),
+            );
+        }
+    }
+    if !od.enabled && (!od.allowed_hosts.is_empty() || od.rate.is_some()) {
+        ctx.warn(
+            "acme.on_demand",
+            "settings are ignored — acme.on_demand.enabled = false",
+        );
+    }
+    if let Some(cr) = &acme.ca_roots
+        && !cr.is_file()
+    {
+        ctx.warn(
+            "acme.ca_roots",
+            format!("CA bundle {} does not exist", cr.display()),
         );
     }
     if od.enabled && od.rate.is_none() {
@@ -1317,6 +1812,11 @@ fn check_log(ctx: &mut Ctx, cfg: &Config) {
     }
     if !(0.0..=1.0).contains(&cfg.log.access.sample) {
         ctx.error("log.access.sample", "must be within 0.0–1.0");
+    }
+    if let Some(f) = &cfg.log.access.filter
+        && let Err(e) = crate::observe::Filter::parse(f)
+    {
+        ctx.error("log.access.filter", format!("invalid filter {f:?}: {e}"));
     }
 }
 
@@ -1552,14 +2052,25 @@ set = { host = "other.internal" }
 hosts = ["x"]
 [[site.route]]
 prefix = "/old"
-redirect = { scheme = "https", status = 303 }
+redirect = { scheme = "https", status = 300 }
 "#,
         );
         assert!(
             errors(&cfg)
                 .iter()
-                .any(|d| d.message.contains("301, 302, 307, or 308"))
+                .any(|d| d.message.contains("301, 302, 303, 307, or 308"))
         );
+        // 303 (post/redirect/get) is accepted
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+prefix = "/old"
+redirect = { scheme = "https", status = 303 }
+"#,
+        );
+        assert!(!has_err(&cfg, "site[\"x\"].route[0].redirect", ""));
     }
 
     fn warnings(cfg: &Config) -> Vec<Diagnostic> {
@@ -2773,5 +3284,302 @@ sample = 1.5
         assert!(!has_warn(&cfg, "log.level", "unusual"));
         let cfg = parse_test_config("[log]\nlevel = \"debug\"");
         assert!(!has_warn(&cfg, "log.level", "unusual"));
+    }
+
+    fn site_route(body: &str) -> String {
+        format!("[[site]]\nhosts = \"x\"\ntls = \"off\"\n[[site.route]]\nprefix = \"/\"\n{body}\n")
+    }
+
+    #[test]
+    fn redirect_targets_validated() {
+        // a host value that can't survive as a Location is an error
+        let cfg = parse_test_config(&site_route("redirect = { host = \"exa mple.com\" }"));
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].route[0].redirect.host",
+            "not a valid Host"
+        ));
+        let cfg = parse_test_config(&site_route("redirect = { host = \"https://x.com\" }"));
+        assert!(has_err(&cfg, "site[\"x\"].route[0].redirect.host", ""));
+        let cfg = parse_test_config(&site_route("redirect = { host = \"api.internal:8443\" }"));
+        assert!(!has_err(&cfg, "site[\"x\"].route[0].redirect.host", ""));
+
+        // redirect_host on the site follows the same rule
+        let cfg = parse_test_config(
+            "[[site]]\nhosts = \"x\"\ntls = \"off\"\nredirect_host = \"bad host\"\nroot = \"/tmp\"",
+        );
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].redirect_host",
+            "not a valid Host"
+        ));
+
+        // `to` without scheme or leading slash looks like a host — warn
+        let cfg = parse_test_config(&site_route("redirect = { to = \"example.com\" }"));
+        assert!(has_warn(
+            &cfg,
+            "site[\"x\"].route[0].redirect.to",
+            "relative-path"
+        ));
+        let cfg = parse_test_config(&site_route("redirect = { to = \"/new{path}\" }"));
+        assert!(!has_warn(&cfg, "site[\"x\"].route[0].redirect.to", ""));
+        // whitespace in the literal template is an error — spaces
+        // survive as header values but break Location semantically
+        let cfg = parse_test_config(&site_route("redirect = { to = \"https://x.com/sp ace\" }"));
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].route[0].redirect.to",
+            "whitespace"
+        ));
+    }
+
+    #[test]
+    fn unknown_placeholders_warn() {
+        let cfg = parse_test_config(&site_route("redirect = { to = \"https://x.com{pah}\" }"));
+        assert!(has_warn(&cfg, "site[\"x\"].route[0].redirect.to", "{pah}"));
+        let cfg = parse_test_config(&site_route(
+            "respond = { status = 200, body = \"ip is {ipadress}\" }",
+        ));
+        assert!(has_warn(
+            &cfg,
+            "site[\"x\"].route[0].respond.body",
+            "{ipadress}"
+        ));
+        // known placeholders and non-token braces stay quiet
+        let cfg = parse_test_config(&site_route(
+            "respond = { status = 200, body = \"{\\\"ok\\\": true} {path}{host}{query}{method}{scheme}\" }",
+        ));
+        assert!(!has_warn(&cfg, "site[\"x\"].route[0].respond.body", ""));
+    }
+
+    #[test]
+    fn replace_prefix_needs_slashes() {
+        let cfg = parse_test_config(&site_route(
+            "[site.route.proxy]\nupstream = \"http://x:1\"\n[site.route.proxy.rewrite]\nreplace_prefix = { from = \"api\", to = \"/v1\" }",
+        ));
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].route[0].proxy.rewrite.replace_prefix.from",
+            "'/'"
+        ));
+    }
+
+    #[test]
+    fn security_header_tokens_validated() {
+        let cfg = parse_test_config("[server.security]\nframe_options = \"ALLOWALL\"");
+        assert!(has_err(
+            &cfg,
+            "server.security.frame_options",
+            "DENY or SAMEORIGIN"
+        ));
+        let cfg = parse_test_config("[server.security]\nreferrer_policy = \"sometimes\"");
+        assert!(has_err(
+            &cfg,
+            "server.security.referrer_policy",
+            "Referrer-Policy"
+        ));
+        let cfg = parse_test_config("[server.security]\ncross_domain_policy = \"maybe\"");
+        assert!(has_err(&cfg, "server.security.cross_domain_policy", ""));
+        let cfg = parse_test_config(
+            "[server.security]\nframe_options = \"sameorigin\"\nreferrer_policy = \"unsafe-url\"\ncross_domain_policy = \"all\"\ncsp = \"default-src 'self'\"",
+        );
+        assert!(errors(&cfg).is_empty(), "{:?}", errors(&cfg));
+        // route overrides take the same tokens
+        let cfg = parse_test_config(&site_route(
+            "respond = { status = 200 }\n[site.route.security]\nframe_options = \"BANANA\"",
+        ));
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].route[0].security.frame_options",
+            ""
+        ));
+    }
+
+    #[test]
+    fn server_header_value_checked() {
+        // `\n` escapes to a real newline inside the TOML string —
+        // control chars are the only thing HeaderValue rejects
+        let cfg = parse_test_config("[server]\nserver_header = \"verd\\n1.0\"");
+        assert!(has_err(&cfg, "server.server_header", "header value"));
+        let cfg = parse_test_config("[server]\nserver_header = \"off\"");
+        assert!(!has_err(&cfg, "server.server_header", ""));
+        let cfg = parse_test_config("[server]\nserver_header = \"verd 1.0\"");
+        assert!(!has_err(&cfg, "server.server_header", ""));
+    }
+
+    #[test]
+    fn disk_path_checked() {
+        // /dev/null is a file — no directory can be created beneath it
+        let cfg = parse_test_config(
+            "[cache.c]\ntier = \"disk\"\ndisk_path = \"/dev/null/x\"\ndisk_bytes = \"1k\"\nmax_object_bytes = \"1k\"",
+        );
+        assert!(has_err(&cfg, "cache.c.disk_path", ""));
+    }
+
+    #[test]
+    fn upstream_sni_and_ca_checked() {
+        let cfg = parse_test_config(
+            "[upstream.u]\nservers = \"https://x:1\"\n[upstream.u.tls]\nsni = \"bad host\"",
+        );
+        assert!(has_err(&cfg, "upstream.u.tls.sni", ""));
+        let cfg = parse_test_config(
+            "[upstream.u]\nservers = \"https://x:1\"\n[upstream.u.tls]\nsni = \"api.internal\"",
+        );
+        assert!(!has_err(&cfg, "upstream.u.tls.sni", ""));
+        let cfg = parse_test_config(
+            "[upstream.u]\nservers = \"https://x:1\"\n[upstream.u.tls]\nca = \"/nonexistent/ca.pem\"",
+        );
+        assert!(has_warn(&cfg, "upstream.u.tls.ca", "does not exist"));
+    }
+
+    #[test]
+    fn host_header_typo_warns() {
+        let cfg = parse_test_config(&site_route(
+            "[site.route.proxy]\nupstream = \"http://x:1\"\nhost_header = \"upsteam\"",
+        ));
+        assert!(has_warn(
+            &cfg,
+            "site[\"x\"].route[0].proxy.host_header",
+            "typo"
+        ));
+        let cfg = parse_test_config(&site_route(
+            "[site.route.proxy]\nupstream = \"http://x:1\"\nhost_header = \"api.internal\"",
+        ));
+        assert!(!has_warn(
+            &cfg,
+            "site[\"x\"].route[0].proxy.host_header",
+            ""
+        ));
+    }
+
+    #[test]
+    fn rate_limit_header_key_validated() {
+        let cfg = parse_test_config(&site_route(
+            "respond = { status = 200 }\n[site.route.rate_limit]\nrate = \"10/s\"\nkey = \"header:x bad\"",
+        ));
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].route[0].rate_limit.key",
+            "header name"
+        ));
+        let cfg = parse_test_config(&site_route(
+            "respond = { status = 200 }\n[site.route.rate_limit]\nrate = \"10/s\"\nkey = \"header:x-tenant\"\nexempt = \"0.0.0.0/0\"",
+        ));
+        assert!(!has_err(&cfg, "site[\"x\"].route[0].rate_limit.key", ""));
+        assert!(has_warn(
+            &cfg,
+            "site[\"x\"].route[0].rate_limit.exempt",
+            "every client"
+        ));
+    }
+
+    #[test]
+    fn cache_bypass_entries_validated() {
+        let cfg = parse_test_config(&format!(
+            "[cache.c]\n{}",
+            site_route(
+                "[site.route.cache]\nstore = \"c\"\n[site.route.cache.bypass]\nmethods = [\"GTE\", \"B A D\"]\nheaders = [\"x bad\"]\ncookies = [\"bad;name\"]",
+            )
+        ));
+        assert!(has_warn(
+            &cfg,
+            "site[\"x\"].route[0].cache.bypass.methods",
+            "GTE"
+        ));
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].route[0].cache.bypass.methods",
+            "B A D"
+        ));
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].route[0].cache.bypass.headers",
+            "x bad"
+        ));
+        assert!(has_warn(
+            &cfg,
+            "site[\"x\"].route[0].cache.bypass.cookies",
+            "bad;name"
+        ));
+    }
+
+    #[test]
+    fn cors_tokens_and_origins_validated() {
+        let cfg = parse_test_config(&site_route(
+            "respond = { status = 200 }\n[site.route.cors]\norigins = [\"app.example.com\"]",
+        ));
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].route[0].cors.origins",
+            "no scheme"
+        ));
+        let cfg = parse_test_config(&site_route(
+            "respond = { status = 200 }\n[site.route.cors]\norigins = [\"https://app.example.com\", \"*.staging.example.com\", \"*\", \"re:^https://a.*$\"]\nmethods = [\"GTE\", \"B A D\"]\nheaders = [\"content-type\"]\nexpose = [\"x bad\"]",
+        ));
+        assert!(!has_err(&cfg, "site[\"x\"].route[0].cors.origins", ""));
+        assert!(has_warn(&cfg, "site[\"x\"].route[0].cors.methods", "GTE"));
+        assert!(has_err(&cfg, "site[\"x\"].route[0].cors.methods", "B A D"));
+        assert!(has_err(&cfg, "site[\"x\"].route[0].cors.expose", "x bad"));
+    }
+
+    #[test]
+    fn site_name_duplicates_error() {
+        let cfg = parse_test_config(
+            "[[site]]\nname = \"api\"\nhosts = \"a.example\"\nroot = \"/tmp\"\n[[site]]\nname = \"api\"\nhosts = \"b.example\"\nroot = \"/tmp\"",
+        );
+        assert!(has_err(&cfg, "site[\"api\"]", "duplicate site name"));
+    }
+
+    #[test]
+    fn catchall_cidrs_warn() {
+        let cfg = parse_test_config("[server]\ntrusted_proxies = \"0.0.0.0/0\"");
+        assert!(has_warn(&cfg, "server.trusted_proxies", "spoofable"));
+        let cfg = parse_test_config(&site_route(
+            "respond = { status = 200 }\nip_allow = \"0.0.0.0/0\"\nip_deny = \"::/0\"",
+        ));
+        assert!(has_warn(&cfg, "site[\"x\"].route[0].ip_allow", "no-op"));
+        assert!(has_warn(&cfg, "site[\"x\"].route[0].ip_deny", "403"));
+    }
+
+    #[test]
+    fn log_access_filter_checked() {
+        let cfg = parse_test_config("[log.access]\nfilter = \"bogus = x\"");
+        assert!(has_err(&cfg, "log.access.filter", ""));
+        let cfg = parse_test_config(
+            "[log.access]\nfilter = \"path != \\\"/healthz\\\" && status >= 500\"",
+        );
+        assert!(!has_err(&cfg, "log.access.filter", ""));
+    }
+
+    #[test]
+    fn upstream_url_full_parse() {
+        for (url, needle) in [
+            ("http://h:1/path", "must not contain a path"),
+            ("http://h:1?q=1", "must not contain a path"),
+            ("http://u:p@h:1", "userinfo"),
+            ("gopher://h", "scheme"),
+        ] {
+            let cfg = parse_test_config(&format!("[upstream.u]\nservers = \"{url}\""));
+            assert!(has_err(&cfg, "upstream.u", needle), "{url}");
+        }
+    }
+
+    #[test]
+    fn on_demand_allowlist_checked() {
+        let cfg = parse_test_config("[acme.on_demand]\nenabled = true\nallowed_hosts = [\"*\"]");
+        assert!(has_err(
+            &cfg,
+            "acme.on_demand.allowed_hosts",
+            "invalid allowlist"
+        ));
+        let cfg =
+            parse_test_config("[acme.on_demand]\nenabled = true\nallowed_hosts = [\"*.com\"]");
+        assert!(has_warn(&cfg, "acme.on_demand.allowed_hosts", "entire"));
+        // disabled with leftovers → dead config
+        let cfg =
+            parse_test_config("[acme.on_demand]\nenabled = false\nallowed_hosts = [\"a.example\"]");
+        assert!(has_warn(&cfg, "acme.on_demand", "ignored"));
+        let cfg = parse_test_config("[acme]\nca_roots = \"/nonexistent/ca.pem\"");
+        assert!(has_warn(&cfg, "acme.ca_roots", "does not exist"));
     }
 }

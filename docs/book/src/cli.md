@@ -7,7 +7,7 @@
 | `verd run` | Start the server. |
 | `verd validate` | Check a config file for errors and dry-run the full runtime build (read-only); exits non-zero on failure. |
 | `verd init` | Write a starter `verd.toml`. |
-| `verd config` | Print the effective merged/interpolated config as TOML (secrets redacted). |
+| `verd config` | Print the effective merged/interpolated config as TOML or JSON (secrets redacted). |
 | `verd fmt` | Normalize whitespace in a config file in place, preserving comments. |
 | `verd schema` | Print the JSON Schema for the config format to stdout. |
 | `verd version` | Print version, build commit, and target triple. |
@@ -18,9 +18,11 @@
 | --- | --- | --- | --- |
 | `-c, --config PATH` | `VERD_CONFIG` | `run`, `validate`, `config`, `fmt` | Config file path. Without it, `verd` searches `./verd.toml` and `/etc/verd/verd.toml`. |
 | `--watch` | — | `run` | Reload config when it changes on disk (in addition to `POST /reload`). Observes the parent directories of every loaded source — the config file, `include`d files, `include` dirs/globs, and `${file:…}` secret files — so atomic renames, editor save-swaps, k8s `..data` swaps, and newly dropped-in `*.toml` include fragments all trigger a reload. Events on unrelated files in those directories (e.g. a log file written next to the config) are ignored. The watched set is re-derived after each reload. |
-| `--format FMT` | — | `validate` | `text` (default) prints diagnostics on stderr; `json` prints a machine-readable report `{ valid, error, diagnostics, sources }` on stdout. |
+| `--format FMT` | — | `validate` | `text` (default) prints diagnostics on stderr; `json` prints a machine-readable report on stdout — always `{ valid, strict, diagnostics, sources }`, plus `"error"` on load/dry-build failures. |
+| `--format FMT` | — | `config` | `toml` (default) prints canonical TOML; `json` prints the same redacted JSON the admin `/config` endpoint serves. |
 | `--strict` | — | `validate` | Fail on warnings too, not just errors. |
 | `--check` | — | `fmt` | Exit non-zero if unformatted instead of rewriting. |
+| `--diff` | — | `fmt` | Print a line-level diff of pending changes (implies `--check`). |
 | `--all` | — | `fmt` | Also format every file reachable through `include`. |
 | `-o, --output PATH` | — | `schema`, `init` | `schema`: write the schema to a file instead of stdout. `init`: where to write the config (default `./verd.toml`; `-` is stdout). |
 | `--force` | — | `init` | Overwrite an existing file. |

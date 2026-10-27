@@ -73,27 +73,78 @@ pub mod one_or_many {
             Repr::One(v) => Ok(vec![v]),
         }
     }
+}
 
-    /// Same sugar for `Option<Vec<T>>` fields.
+/// Serde adapter for `Vec<IpNet>`/`Option<Vec<IpNet>>` fields: the
+/// same scalar-or-list sugar as `one_or_many`, plus bare IPs — a
+/// `"10.0.0.1"` entry parses as the host route `10.0.0.1/32` (and
+/// `::1` as `/128`), since a prefix is almost never what an operator
+/// means to omit.
+pub mod cidr {
+    use std::net::IpAddr;
+
+    use ipnet::IpNet;
+    use serde::de::Error;
+    use serde::{Deserialize, Deserializer};
+
+    /// Parse a CIDR or a bare IP (interpreted as a host route).
+    pub fn parse(s: &str) -> Result<IpNet, String> {
+        s.parse::<IpNet>().or_else(|_| {
+            s.parse::<IpAddr>()
+                .map(|ip| match ip {
+                    IpAddr::V4(a) => IpNet::V4(ipnet::Ipv4Net::from(a)),
+                    IpAddr::V6(a) => IpNet::V6(ipnet::Ipv6Net::from(a)),
+                })
+                .map_err(|_| {
+                    format!("invalid network {s:?} — expected a CIDR (\"10.0.0.0/8\") or IP (\"10.0.0.1\")")
+                })
+        })
+    }
+
+    /// Deserialize `v` or `[v, …]` into `Vec<IpNet>`.
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<IpNet>, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Many(Vec<String>),
+            One(String),
+        }
+        let raw = match Repr::deserialize(d)? {
+            Repr::Many(v) => v,
+            Repr::One(s) => vec![s],
+        };
+        raw.iter()
+            .map(|s| parse(s).map_err(Error::custom))
+            .collect()
+    }
+
+    /// Same sugar for `Option<Vec<IpNet>>` fields.
     pub mod option {
+        use ipnet::IpNet;
+        use serde::de::Error;
         use serde::{Deserialize, Deserializer};
 
-        /// Deserialize `v`, `[v, …]`, or none into `Option<Vec<T>>`.
-        pub fn deserialize<'de, D, T>(d: D) -> Result<Option<Vec<T>>, D::Error>
-        where
-            D: Deserializer<'de>,
-            T: Deserialize<'de>,
-        {
+        /// Deserialize `v`, `[v, …]`, or none into `Option<Vec<IpNet>>`.
+        pub fn deserialize<'de, D: Deserializer<'de>>(
+            d: D,
+        ) -> Result<Option<Vec<IpNet>>, D::Error> {
             #[derive(Deserialize)]
             #[serde(untagged)]
-            enum Repr<T> {
-                Many(Vec<T>),
-                One(T),
+            enum Repr {
+                Many(Vec<String>),
+                One(String),
             }
-            Ok(Option::<Repr<T>>::deserialize(d)?.map(|r| match r {
-                Repr::Many(v) => v,
-                Repr::One(v) => vec![v],
-            }))
+            Option::<Repr>::deserialize(d)?
+                .map(|r| match r {
+                    Repr::Many(v) => v,
+                    Repr::One(s) => vec![s],
+                })
+                .map(|v| {
+                    v.iter()
+                        .map(|s| super::parse(s).map_err(Error::custom))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()
         }
     }
 }
@@ -256,8 +307,10 @@ impl Serialize for ByteSize {
     }
 }
 
-/// A rate like `100/s`, `600/m`, `10000/h`, `50000/day`. Units: `s`, `m`,
-/// `h`, `d` or the words `second`, `minute`, `hour`, `day` (also plural).
+/// A rate like `100/s`, `600/m`, `10000/h`, `50000/day`, or `10/30s`
+/// for arbitrary periods. Units: `s`, `m`, `h`, `d` or the words
+/// `second`, `minute`, `hour`, `day` (also plural), or a humantime
+/// duration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
 pub struct RateSpec {
     /// Number of permits granted per `period`.
@@ -287,7 +340,8 @@ impl RateSpec {
             "m" | "min" | "minute" | "minutes" => Duration::from_secs(60),
             "h" | "hr" | "hour" | "hours" => Duration::from_secs(3600),
             "d" | "day" | "days" => Duration::from_secs(86400),
-            _ => return Err(format!("invalid rate unit in {s:?}")),
+            other => humantime::parse_duration(other)
+                .map_err(|_| format!("invalid rate unit in {s:?}"))?,
         };
         Ok(Self { permits, period })
     }

@@ -99,6 +99,33 @@ workflow publishes the matching section as the GitHub release notes.
 - **Unified template placeholders** — `redirect` targets and
   `respond.body` share `{path}`, `{host}`, `{query}`, `{method}`,
   `{scheme}` (`{method}` is new on redirect, `{query}` on respond).
+- **`site.proxy` full-table parity** — a site catch-all now accepts the
+  whole `route.proxy` table (`{ upstream, rewrite, request_headers,
+  retries, host_header }`), not just an upstream reference.
+- **`security = false`** — bare off-switch for `site.security` and
+  `route.security`, suppressing all inherited security headers.
+- **Bare-IP network entries** — `ip_allow`/`ip_deny`,
+  `trusted_proxies`, and `rate_limit.exempt` accept `"10.0.0.1"` as
+  the host route `10.0.0.1/32` (`::1` as `/128`) — the `/prefix` is no
+  longer mandatory.
+- **`redirect` status 303** — post/redirect/get joins the accepted
+  statuses (301/302/303/307/308).
+- **`acme.directory` aliases** — `"letsencrypt"` and
+  `"letsencrypt-staging"` resolve to their URLs at load.
+- **`listen = ":port"`** — the wildcard spelling binds all interfaces;
+  a bare `"8080"` still errors rather than guessing the host intent.
+- **`upstream.*.health.passive = 5`** — a failure count expands to
+  `{ failures = 5 }` with the default cooldown, matching the `active`
+  shorthand.
+- **Arbitrary rate periods** — `RateSpec` accepts humantime periods, so
+  `rate_limit = "10/30s"` means ten permits per 30 seconds.
+- **`verd config --format json`** — the same redacted dump the admin
+  `/config` endpoint serves; `toml` stays the default.
+- **`verd fmt --diff`** — prints a line-level diff of pending changes
+  instead of only failing (implies `--check`).
+- **`did you mean` for named references** — unknown `upstream` names
+  and `cache.store` values suggest the closest defined name, or list
+  the defined ones.
 
 ### Changed
 
@@ -197,6 +224,41 @@ workflow publishes the matching section as the GitHub release notes.
   `proxy.request_headers.set`/`add` carrying `host` overrides
   `host_header`; the validator now says so instead of letting it win
   silently.
+- **BREAKING: `match.headers = { "x-a" = "" }` is presence-only** —
+  an empty value now matches "header present", matching `match.query`'s
+  rule (previously it matched a literally-empty value). Use `re:^$` to
+  match empty values.
+- **BREAKING: duplicate `site.name` rejected** — two sites sharing a
+  `name` is an error; metric `route` labels collided before.
+- **BREAKING: `validate --format json` has one shape** — every outcome
+  emits `{ valid, strict, diagnostics, sources }`, with `"error"`
+  added on load/dry-build failures (previously each failure class had
+  its own key set).
+- **Stricter semantic validation** — `verd validate` now errors on
+  values that silently produced wrong behavior: `redirect.host`/
+  `site.redirect_host` values that can't be a `Location` authority,
+  `redirect.to` containing whitespace, `replace_prefix` missing a
+  leading `/`, invalid `security` header values (`frame_options`,
+  `referrer_policy`, `csp`, `cross_domain_policy`), a
+  `server.server_header` that isn't a valid header value,
+  `upstream.*.tls.sni` that isn't a DNS name, `rate_limit
+  key = "header:<name>"` with an invalid header name, malformed
+  `cache.bypass` methods/headers, malformed CORS methods/headers and
+  scheme-less `cors.origins` entries, `acme.on_demand.allowed_hosts`
+  entries that can't be allowlisted, invalid `log.access.filter`
+  expressions, and upstream URLs with paths/queries/userinfo (previously
+  only the scheme was checked). Catch-all CIDRs (`0.0.0.0/0`, `::/0`)
+  in `trusted_proxies`, `rate_limit.exempt`, `ip_allow`, and `ip_deny`
+  warn loudly; `{typo}` placeholders in `redirect`/`respond` templates
+  warn; `host_header` values within edit distance 2 of `upstream`/
+  `original` warn; missing `upstream.*.tls.ca`, `acme.ca_roots`, and
+  `cache.*.disk_path` parents warn.
+- **Field paths normalized** — serde and schema errors render
+  `site[0].route[2]` instead of `site.0.route.2`, matching the
+  `site["name"]` label style used by semantic diagnostics.
+- **Cache build errors carry a field path** — disk-store failures
+  report `cache.<name>: …` like upstream errors report
+  `upstream.<name>: …`.
 
 ### Fixed
 
