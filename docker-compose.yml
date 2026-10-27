@@ -1,0 +1,22 @@
+# Demo stack: verd fronts a static site, proxies an upstream, and
+# exposes its admin API on 127.0.0.1:2019.
+services:
+  verd:
+    build: .
+    read_only: true
+    tmpfs: [/tmp]
+    volumes:
+      - ./demo/verd.toml:/etc/verd/verd.toml:ro
+      - ./demo/site:/var/www/site:ro
+      - verd-data:/var/lib/verd
+    ports:
+      - "8080:8080"
+      - "127.0.0.1:2019:2019"
+    depends_on: [upstream]
+
+  upstream:
+    image: hashicorp/http-echo:latest
+    command: ["-listen=:9000", "-text=hello from upstream"]
+
+volumes:
+  verd-data:

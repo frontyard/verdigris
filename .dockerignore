@@ -1,0 +1,21 @@
+# Build context hygiene — the image build only copies
+# Cargo.toml, Cargo.lock, and src/. Keep the context small.
+
+# VCS & editor
+.git
+.history
+
+# Build output
+target
+fuzz/target
+
+# Bench suite (generated fixtures are GBs)
+bench
+
+# Not needed in the image
+docs
+tests
+demo
+packaging
+.github
+llms*.txt

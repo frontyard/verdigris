@@ -1,0 +1,14 @@
+# Shared OSS-Fuzz/ClusterFuzzLite contract. ClusterFuzzLite reads
+# `language` only; the rest is OSS-Fuzz metadata kept ready for a
+# resubmission (copies to projects/verdigris/project.yaml in
+# google/oss-fuzz — the original was declined for project maturity,
+# see google/oss-fuzz#16349).
+homepage: "https://github.com/frontyard/verdigris"
+main_repo: "https://github.com/frontyard/verdigris"
+language: rust
+primary_contact: "intestellafella@gmail.com"
+fuzzing_engines:
+  - libfuzzer
+sanitizers:
+  - address
+# Rust targets only support the address sanitizer today.

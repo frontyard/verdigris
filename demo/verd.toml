@@ -1,0 +1,26 @@
+[server]
+server_header = "verd"
+
+listen = ["0.0.0.0:8080"]
+
+[admin]
+listen = "0.0.0.0:2019"
+# demo only: non-loopback admin requires a token; real deployments
+# should export VERD_ADMIN_TOKEN (or bind admin to loopback instead)
+token = "${VERD_ADMIN_TOKEN:-verd-demo-admin}"
+
+[log.access]
+output = "stdout"
+
+[[site]]
+hosts = ["localhost", "127.0.0.1"]
+default = true
+tls = "off"
+
+[[site.route]]
+path = "/"
+static = { root = "/var/www/site" }
+
+[[site.route]]
+prefix = "/api"
+proxy = { upstream = ["http://upstream:9000"] }

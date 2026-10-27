@@ -1,0 +1,52 @@
+name: ClusterFuzzLite batch fuzzing
+
+on:
+  schedule:
+    - cron: "17 3 * * *" # daily 03:17 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  # Corpus is committed to the `corpus` branch of this repo so it
+  # keeps evolving between runs instead of restarting from scratch.
+  STORAGE_REPO: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+
+jobs:
+  fuzz:
+    name: batch (${{ matrix.sanitizer }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 100 # 3600s fuzz + parallel build/corpus upload
+    concurrency:
+      # serializes against the prune job, which writes the same branch
+      group: cflite-corpus
+      cancel-in-progress: false
+    permissions:
+      contents: write # push the evolved corpus to the storage branch
+      security-events: write # SARIF upload to code scanning
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address] # rust fuzz targets support address only
+    steps:
+      - uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        id: build
+        with:
+          language: rust
+          sanitizer: ${{ matrix.sanitizer }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          storage-repo: ${{ env.STORAGE_REPO }}
+          storage-repo-branch: corpus
+      - uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        id: run
+        with:
+          language: rust
+          sanitizer: ${{ matrix.sanitizer }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: 3600
+          mode: batch
+          parallel-fuzzing: true
+          minimize-crashes: true
+          output-sarif: true
+          storage-repo: ${{ env.STORAGE_REPO }}
+          storage-repo-branch: corpus

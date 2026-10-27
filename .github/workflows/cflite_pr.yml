@@ -1,0 +1,61 @@
+name: ClusterFuzzLite PR fuzzing
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "fuzz/**"
+      - ".clusterfuzzlite/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/cflite_pr.yml"
+
+permissions: {}
+
+env:
+  # Corpus lives on the `corpus` branch of this repo; the run job
+  # downloads it so PR fuzzing builds on the batch-fuzzed corpus.
+  STORAGE_REPO: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+
+jobs:
+  fuzz:
+    name: code-change (${{ matrix.sanitizer }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: ${{ github.workflow }}-${{ matrix.sanitizer }}-${{ github.ref }}
+      cancel-in-progress: true
+    permissions:
+      contents: read # clone the `corpus` storage branch
+      security-events: write # SARIF upload to code scanning
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address] # rust fuzz targets support address only
+    steps:
+      - uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        id: build
+        with:
+          language: rust
+          sanitizer: ${{ matrix.sanitizer }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          storage-repo: ${{ env.STORAGE_REPO }}
+          storage-repo-branch: corpus
+      - uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        id: run
+        with:
+          language: rust
+          sanitizer: ${{ matrix.sanitizer }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # 300s × ~4 runner cores ≈ 1200 core-s — more effective coverage
+          # than the old single-core 600s, at half the wall time. Depth is
+          # the daily batch's job (3600s + persistent corpus).
+          fuzz-seconds: 300
+          parallel-fuzzing: true
+          mode: code-change
+          minimize-crashes: true
+          # fork PRs can't get security-events: write — skip SARIF there
+          output-sarif: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          storage-repo: ${{ env.STORAGE_REPO }}
+          storage-repo-branch: corpus

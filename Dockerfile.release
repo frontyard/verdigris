@@ -1,0 +1,13 @@
+# Release-image Dockerfile: consumes the CI-built musl binaries so the
+# same artifact ships in the tarball and the image. Build context = the
+# extracted release artifacts directory (`dist/<arch>/verd`).
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+LABEL org.opencontainers.image.licenses="MIT OR Apache-2.0" \
+      org.opencontainers.image.source="https://github.com/frontyard/verdigris"
+ARG TARGETARCH
+COPY --chmod=0755 ${TARGETARCH}/verd /usr/bin/verd
+USER nonroot
+VOLUME ["/var/lib/verd", "/var/log/verd"]
+EXPOSE 8080 2019
+ENTRYPOINT ["/usr/bin/verd"]
+CMD ["run", "--config", "/etc/verd/verd.toml"]

@@ -1,0 +1,16 @@
+# Codecov status checks — informational, not gating. The upload step in
+# ci.yml is already advisory (fail_ci_if_error: false); these thresholds
+# surface regression signal on the PR without blocking merges.
+coverage:
+  status:
+    project:
+      default:
+        target: auto # fail-signal when coverage drops vs base
+        threshold: 1%
+        informational: true
+    patch:
+      default:
+        target: 80% # new code should carry tests
+        informational: true
+comment:
+  layout: "reach, diff, files"

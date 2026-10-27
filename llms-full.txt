@@ -1,0 +1,2065 @@
+# verdigris — complete documentation
+
+# Verdigris
+
+> Verdigris is a single-binary web server and reverse proxy written in Rust:
+> static files, HTTP/1.1 + HTTP/2 (+h2c), TLS (manual, self-signed, or
+> ACME/Let's Encrypt), load balancing, response caching, and middleware —
+> all configured in one TOML file (`verd.toml`).
+
+## Authoritative sources — don't guess field names
+
+- `verd schema` prints the complete JSON Schema of the config. When
+  unsure about a field name, type, or default, consult it — it is
+  generated from the same structs the binary parses.
+- `verd validate -c FILE` checks a config (syntax, types, and
+  cross-field rules) without starting the server.
+- `verd fmt -c FILE` normalizes a config file's formatting.
+- `docs/book/src/reference.md` is a generated table of every field.
+- `llms-full.txt` (repo root) concatenates this file plus the full
+  reference for one-shot ingestion.
+
+## Mental model
+
+Top-level keys: `server`, `timeouts`, `limits`, `log`, `admin`, `acme`,
+`upstream`, `cache`, `include`, `site`.
+
+- `[server]` holds `listen` (array of `{ addr, tls }`), connection caps,
+  `security` headers, `graceful_timeout`. **`[limits]` and `[timeouts]`
+  are top-level siblings of `[server]`, not children.**
+- `[[site]]` = a virtual host set: `hosts` (or `default = true`),
+  `tls`, `root`/`proxy` catch-all shorthands, and `[[site.route]]` tables.
+- A route = matcher (`prefix` — `path` is a shorthand — `exact`,
+  `regex`, `match`) + **exactly one handler** (`static`, `proxy`,
+  `redirect`, `respond`) + middleware (`ip_allow`, `ip_deny`, `auth`,
+  `rate_limit`, `cors`, `headers`, `security`, `compress`, `cache`,
+  `limits`, `timeouts`). More specific prefixes win.
+- Upstreams may be named (`[upstream.NAME]` clusters with `servers`,
+  `lb`, `health`, `timeouts`, `tls`) or inline URL lists.
+
+## Recipes (each validates against `verd validate`)
+
+Minimal static site on :8080:
+
+```toml
+[server]
+listen = [{ addr = "0.0.0.0:8080", tls = false }]
+
+[[site]]
+hosts = ["example.com"]
+root = "/var/www/site"           # shorthand: catch-all static route
+```
+
+Everything as separate route tables (equivalent, more control):
+
+```toml
+[upstream.app]
+servers = ["http://127.0.0.1:9000"]
+
+[[site]]
+hosts = ["example.com"]
+
+[[site.route]]
+prefix = "/assets"
+static = { root = "/var/www/assets", index = ["index.html"] }
+
+[[site.route]]
+prefix = "/api"
+proxy = { upstream = "app" }
+
+[[site.route]]
+exact = "/health"
+respond = { status = 200, body = "ok" }
+```
+
+Load-balanced proxy:
+
+```toml
+[upstream.app]
+servers = ["http://10.0.0.11:9000", "http://10.0.0.12:9000"]
+lb = "least_conn"                # round_robin | least_conn | ip_hash
+
+[upstream.app.health.passive]
+failures = 3
+cooldown = "10s"
+```
+
+TLS — pick one per site:
+
+```toml
+# inside [[site]] — choose ONE:
+tls = "auto"          # ACME/Let's Encrypt; needs [acme] email + port 80 or 443
+# tls = "selfsigned"  # throwaway dev cert per host at boot
+# tls = { cert = "/etc/verd/site.pem", key = "/etc/verd/site.key" }
+# tls = "off"         # plaintext only
+```
+
+```toml
+[acme]
+email = "ops@example.com"
+storage = "/var/lib/verd/acme"
+# directory = "https://acme-staging-v02.api.letsencrypt.org/directory"  # test first
+```
+
+Route middleware:
+
+```toml
+[upstream.app]
+servers = ["http://127.0.0.1:9000"]
+
+[[site]]
+hosts = ["example.com"]
+
+[[site.route]]
+prefix = "/api"
+proxy = { upstream = "app" }
+rate_limit = { rate = "100/s", burst = 50, key = "ip" }
+auth = { bearer = { tokens = ["${API_TOKEN}"] } }
+cors = { origins = ["https://app.example.com"], credentials = true }
+```
+
+Cache in front of a route:
+
+```toml
+[cache.main]
+tier = "hybrid"                  # ram | disk | hybrid
+policy = "lru"
+ram_bytes = "256MiB"
+disk_bytes = "4GiB"
+disk_path = "/var/lib/verd/cache"
+
+[upstream.app]
+servers = ["http://127.0.0.1:9000"]
+
+[[site]]
+hosts = ["example.com"]
+
+[[site.route]]
+prefix = "/media"
+proxy = { upstream = "app" }
+cache = { store = "main", ttl = "5m", stale_if_error = "5m" }
+```
+
+## Gotchas — names that differ from nginx/Caddy conventions
+
+- `lb`, not `load_balancing`; `policy`, not `eviction`; `disk_path`,
+  not `path`/`root` inside `[cache.*]`.
+- `basic.users` is a `name = "hash"` **map** (argon2 inline, or
+  `htpasswd` file for bcrypt), not a list of objects.
+- `bearer = { tokens = [...] }` — plural array.
+- `api_key` requires `location` (`"header"` or `"query"`), `name`, `keys`.
+- `compress` has `algorithms` (`br`, `zstd`, `gzip`) and a single `level`,
+  not per-algorithm switches.
+- `include` takes a file, a directory (expands `*.toml` inside the
+  dir), or a glob like `conf.d/*.toml` — a glob matching nothing is
+  silently ignored.
+- `pass_host = true` (the default) rewrites `Host` to the upstream
+  authority; `false` passes the client's original `Host` through.
+- `site.proxy` is a catch-all site shorthand accepting a cluster name,
+  one URL, or a URL list; per-route use `route.proxy = { upstream =
+  "name" | "url" | [urls] }`.
+- `rate` specs: `100/s`, `600/m`, `10000/h`, `50000/day`.
+  `key`: `ip` | `identity` | `route` | `header:<Name>`.
+- Durations: `500ms`, `10s`, `5m`, `1h`, `1d`. Sizes: `B`, `KiB`,
+  `MiB`, `GiB`. Both are strings (`"10s"`, `"256MiB"`).
+- Cache entries are keyed by scheme + authority (incl. port) + raw
+  request target: HTTP and HTTPS, `host` and `host:8443`, and
+  differently-encoded paths never share an entry.
+- `${ENV_VAR}` and `${file:/path}` interpolation works for secrets.
+  `verd validate` resolves them, so exports/files must exist then.
+
+## Doc pages
+
+- [Quickstart](docs/book/src/quickstart.md)
+- [Examples](docs/book/src/examples.md)
+- [Configuration model](docs/book/src/configuration.md)
+- [Static file serving](docs/book/src/static.md)
+- [Reverse proxy & load balancing](docs/book/src/proxy.md)
+- [TLS, ACME & redirects](docs/book/src/tls.md)
+- [Middleware](docs/book/src/middleware.md)
+- [Caching](docs/book/src/caching.md)
+- [Observability](docs/book/src/observability.md)
+- [Admin API & lifecycle](docs/book/src/admin.md)
+- [Tuning](docs/book/src/tuning.md)
+- [Migrating from nginx/Caddy](docs/book/src/migration.md)
+- [Full field reference (generated)](docs/book/src/reference.md)
+
+
+
+
+---
+
+# Verdigris
+
+**Documentation for verd 0.4.0.**
+
+Verdigris is a self-hosting web server and reverse proxy in a single static
+binary: nginx-class performance with Caddy-like zero-configuration TLS and
+a readable TOML configuration.
+
+## What it does
+
+- HTTP/1.1 and HTTP/2 (plus h2c) on the same listener, downstream and upstream
+- Static files with ranges, ETag/Last-Modified validators, precompressed variants
+- Reverse proxy with load balancing, retries, health checks, HTTP upgrades (WebSockets)
+- TLS termination with manual certificates, self-signed, or fully automatic
+  ACME (Let's Encrypt) issuance — http-01 and tls-alpn-01 challenges
+- Authentication (basic, bearer, API key), IP ACLs, CORS, rate limiting,
+  compression (br/zstd/gzip), and a full HTTP response cache (RAM/disk/hybrid)
+- Prometheus metrics, structured access logs, and an admin API with
+  atomic config reloads (SIGHUP, file watch, or `POST /reload`)
+
+## Design rules
+
+- One binary, one `verd.toml`, no external dependencies at runtime.
+- Configuration is validated before it can serve; a bad reload never
+  interrupts traffic.
+- Response bodies stream end-to-end; nothing buffers a whole body unless
+  a feature explicitly requires it.
+
+## For LLMs / tooling
+
+The repository root ships `llms.txt` (curated summary + recipes) and
+`llms-full.txt` (the whole book in one file), following the llmstxt.org
+convention. Point a model at either, or give it the authoritative
+`verd schema` JSON output — every config example in this book is
+validated against the real parser in CI.
+
+
+
+---
+
+# Installation
+
+## Prebuilt binaries
+
+Release tags publish static musl binaries for `x86_64` and `aarch64`
+Linux. Download the archive for your platform, verify the checksum, and
+place the binary on your `PATH`:
+
+```sh
+curl -LO https://github.com/frontyard/verdigris/releases/download/v0.1.0/verd-x86_64-unknown-linux-musl.tar.gz
+sha256sum -c checksums.txt --ignore-missing
+tar xzf verd-*.tar.gz
+sudo install -m755 verd /usr/local/bin/
+```
+
+Release artifacts are signed with cosign (keyless). The SBOM
+(`verd-sbom.json`) is attached to every release.
+
+## Docker
+
+```sh
+docker run --read-only \
+  -v $PWD/verd.toml:/etc/verd/verd.toml:ro \
+  -v verd-data:/var/lib/verd \
+  -p 8080:8080 -p 127.0.0.1:2019:2019 \
+  ghcr.io/frontyard/verdigris:latest
+```
+
+See [Docker & deployment](./docker.md).
+
+## From source
+
+Rust 1.88 or newer:
+
+```sh
+cargo install --path .
+verd version
+```
+
+> **Crates.io note:** the package publishes as **`verd`** — `cargo
+> install verd` installs the `verd` binary once the first crates release
+> lands. Until then, installing from a checkout or a release artifact
+> always works.
+
+
+
+---
+
+# Quickstart
+
+Create `verd.toml`:
+
+```toml
+[server]
+listen = ["0.0.0.0:8080"]
+
+[[site]]
+default = true
+tls = "off"
+
+[[site.route]]
+path = "/"
+static = { root = "/var/www/site" }
+```
+
+Run it:
+
+```sh
+verd run                    # looks for ./verd.toml, then /etc/verd/
+verd run -c ./verd.toml  # explicit path
+verd validate               # check the config without serving
+```
+
+The admin listener comes up on `127.0.0.1:2019` — `/health`, `/ready`,
+`/metrics` (Prometheus), `/version` are available immediately.
+
+## Try the admin API
+
+Loopback is the default and needs no extra config — every request must
+just carry a loopback `Host` (curl does this automatically):
+
+```sh
+curl http://127.0.0.1:2019/health        # → ok
+curl http://127.0.0.1:2019/ready         # → ready (503 until fully up)
+curl http://127.0.0.1:2019/version       # → {"version":"0.2.2","commit":...}
+curl http://127.0.0.1:2019/upstreams     # → {"clusters":[...]}
+curl http://127.0.0.1:2019/config        # live config, secrets shown as ***
+curl http://127.0.0.1:2019/metrics       # Prometheus exposition
+```
+
+Set a token to protect it — **mandatory** if you bind beyond loopback:
+
+```toml
+[admin]
+listen = "127.0.0.1:2019"      # or "0.0.0.0:2019" to reach it remotely
+token = "${ADMIN_TOKEN}"  # interpolated from the environment
+```
+
+```sh
+export ADMIN_TOKEN=change-me
+
+# no token → 401
+curl http://127.0.0.1:2019/health
+
+# with token → ok
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+  http://127.0.0.1:2019/health
+
+# mutating endpoints work the same way
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
+  http://127.0.0.1:2019/reload
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:2019/purge -d '{"all": true}'
+```
+
+In Docker, `127.0.0.1` inside the container is the *container's*
+loopback — `-p 2019:2019` can't reach it. Either bind the admin to
+`0.0.0.0` with a token (and prefer `-p 127.0.0.1:2019:2019` so it stays
+host-local), or query it with a shared-namespace helper:
+
+```sh
+docker run --rm --network container:<verd-container> \
+  curlimages/curl -sS http://127.0.0.1:2019/health
+```
+
+See the [admin reference](admin.md) for the full endpoint list and
+reload semantics.
+
+Change the config and reload without dropping connections:
+
+```sh
+kill -HUP $(pidof verd)          # SIGHUP reload
+verd run --watch                 # or auto-reload on file change
+curl -X POST localhost:2019/reload  # or via the admin API
+```
+
+
+
+---
+
+# Examples
+
+Each example is a complete `verd.toml` — copy it, replace the domains
+and paths, check it with `verd validate`, then `verd run`. The HTTPS
+examples assume DNS already resolves to the machine and ports 80 and
+443 are reachable; drop the `[acme]` section and use `tls = "off"` or
+`"selfsigned"` where that's not true.
+
+## Static site with automatic HTTPS
+
+The flagship "zero-config TLS" case: a certificate is issued at first
+request and renewed automatically; HTTP requests 308 to HTTPS.
+
+```toml
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+
+[[site]]
+hosts = ["example.com", "www.example.com"]
+tls = "auto"                    # ACME issues and renews the certificate
+root = "/var/www/example.com"   # catch-all static route shorthand
+```
+
+Security headers (HSTS, X-Frame-Options, …) come from
+`[server.security]` defaults — nothing to configure. See
+[TLS, ACME & redirects](tls.md) and [Static file serving](static.md).
+
+## Single-page application
+
+`spa = true` serves `index.html` for paths that don't match a file, so
+client-side routes like `/settings/billing` work on refresh. Hashed
+bundles under `/assets/` get immutable far-future caching.
+
+```toml
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+
+[[site]]
+hosts = ["app.example.com"]
+tls = "auto"
+
+[[site.route]]
+path = "/"
+static = { root = "/var/www/app/dist", spa = true,
+           cache_control = { "/assets/*" = "public, max-age=31536000, immutable" } }
+```
+
+## Reverse proxy to one backend
+
+`site.proxy` is the catch-all shorthand — every request forwards to the
+app. `X-Forwarded-For`/`X-Forwarded-Proto` are set automatically.
+
+```toml
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+
+[[site]]
+hosts = ["app.example.com"]
+tls = "auto"
+proxy = "http://127.0.0.1:3000"   # also accepts a cluster name or URL list
+```
+
+## Frontend and API on one domain
+
+Serving the API under `/api` on the site's own domain avoids CORS
+entirely. More specific prefixes win, so `/api` routes never touch the
+static handler; `strip_prefix` removes `/api` before forwarding
+(`/api/users` → `http://127.0.0.1:3000/users`).
+
+```toml
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+
+[[site]]
+hosts = ["example.com"]
+tls = "auto"
+
+[[site.route]]
+prefix = "/api"
+proxy = { upstream = "http://127.0.0.1:3000",
+          rewrite = { strip_prefix = "/api" } }
+
+[[site.route]]
+path = "/"
+static = { root = "/var/www/site", spa = true }
+```
+
+## Load balancing across replicas
+
+A named `[upstream.*]` cluster gives you balancing, health checking,
+retries, and pool tuning. `h2c://` URLs speak cleartext HTTP/2 (gRPC)
+to the backend.
+
+```toml
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+
+[upstream.api]
+servers = ["http://10.0.0.11:8080", "http://10.0.0.12:8080",
+           "http://10.0.0.13:8080"]
+lb = "least_conn"                 # round_robin | least_conn | ip_hash
+
+[upstream.api.health.active]      # periodic probes on each member
+path = "/healthz"
+interval = "5s"
+timeout = "2s"
+
+[upstream.api.health.passive]     # kick members out on real failures
+failures = 3
+cooldown = "30s"
+
+[upstream.api.timeouts]
+connect = "3s"
+response_header = "10s"
+max_connections = 256
+
+[[site]]
+hosts = ["api.example.com"]
+tls = "auto"
+proxy = "api"                     # the cluster name
+```
+
+`upstream.api.unavailable` customizes the response (status, body) when
+every member is down — handy for a branded maintenance page. See
+[Reverse proxy & load balancing](proxy.md).
+
+## Multiple sites on one instance
+
+Sites are matched by `Host`; a `default` site catches everything else
+(including requests to unknown names).
+
+```toml
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+
+[[site]]
+hosts = ["example.com", "www.example.com"]
+tls = "auto"
+root = "/var/www/example"
+
+[[site]]
+hosts = ["blog.example.com"]
+tls = "auto"
+proxy = "http://127.0.0.1:9000"
+
+# requests whose Host matches no site above land here
+[[site]]
+default = true
+tls = "off"
+
+[[site.route]]
+path = "/"
+respond = { status = 404, body = "unknown host" }
+```
+
+## Redirects: www → apex and domain moves
+
+`redirect_host` covers the plaintext leg (`http://www` goes straight to
+`https://example.com`); the redirect route handles HTTPS requests to
+`www`. `{path}` and `{query}` substitute from the request, so links
+keep working.
+
+```toml
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+
+[[site]]                          # canonical site
+hosts = ["example.com"]
+tls = "auto"
+root = "/var/www/example"
+
+[[site]]                          # www → apex
+hosts = ["www.example.com"]
+tls = "auto"
+redirect_host = "example.com"     # http://www… → https://example.com…
+
+[[site.route]]
+path = "/"
+redirect = { to = "https://example.com{path}{query}", status = 308 }
+```
+
+A permanent domain move is the same shape — every path 301s to the new
+domain:
+
+```toml
+[[site]]
+hosts = ["old.example.com", "www.old.example.com"]
+tls = "auto"
+
+[[site.route]]
+path = "/"
+redirect = { to = "https://new.example.com{path}{query}", status = 301 }
+```
+
+## WebSockets and other long-lived connections
+
+Upgrade requests (WebSocket) are detected and tunneled automatically —
+the only config that matters is timeouts: `request_deadline` would kill
+a healthy stream and `send` bounds tunnel inactivity, so both are
+disabled and liveness is left to the app's own ping/pong.
+
+```toml
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+
+[[site]]
+hosts = ["live.example.com"]
+tls = "auto"
+
+[[site.route]]
+prefix = "/ws"
+proxy = { upstream = "http://127.0.0.1:4000" }
+timeouts = { request_deadline = "0s", send = "0s" }
+```
+
+For SSE the same applies: streams must outlive the default deadline.
+
+## Protected routes: auth plus an IP allowlist
+
+Middleware composes per route — the LAN allowlist runs first, then
+basic auth.
+
+```toml
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+
+[[site]]
+hosts = ["grafana.internal.example"]
+tls = "auto"
+
+[[site.route]]
+path = "/"
+proxy = { upstream = "http://10.0.0.5:3000" }
+ip_allow = ["10.0.0.0/8", "192.168.0.0/16"]
+auth = { basic = { realm = "ops",
+                   users = { oncall = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$3nGf8u5Z2p2mJx0yq9Rk3g" } } }
+```
+
+Password values must be argon2/bcrypt hashes — generate with `argon2`
+or `htpasswd -B`; an `htpasswd` file path works instead of inline
+`users`. For machine clients use `bearer` or `api_key` with `${VAR}`
+interpolation. See [Middleware](middleware.md).
+
+## Public API: rate limiting and CORS
+
+```toml
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+
+[upstream.api]
+servers = ["http://10.0.0.11:8080", "http://10.0.0.12:8080"]
+
+[[site]]
+hosts = ["api.example.com"]
+tls = "auto"
+
+[[site.route]]
+prefix = "/v1"
+proxy = { upstream = "api" }
+rate_limit = { key = "ip", rate = "100/m", burst = 25 }
+cors = { origins = ["https://app.example.com"],
+         methods = ["GET", "POST", "OPTIONS"],
+         headers = ["content-type", "authorization"],
+         max_age = "1h" }
+# auth = { api_key = { location = "header", name = "x-api-key",
+#                      keys = ["${KEY1}"] } }
+```
+
+Preflight `OPTIONS` requests short-circuit before auth. `key` selects
+what a bucket applies to: `ip`, `identity` (authenticated user),
+`route`, or `header:<Name>`.
+
+## Response caching
+
+Cache stores are named and shared; routes opt in. Freshness honors
+upstream `Cache-Control`/`Expires` by default, `stale_*` covers the
+gaps, and authenticated requests bypass automatically.
+
+```toml
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+
+[cache.main]
+tier = "hybrid"                   # hot objects in RAM, rest on disk
+ram_bytes = "256MiB"
+disk_bytes = "10GiB"
+disk_path = "/var/lib/verd/cache"
+
+[upstream.app]
+servers = ["http://127.0.0.1:8080"]
+
+[[site]]
+hosts = ["cdn.example.com"]
+tls = "auto"
+
+[[site.route]]
+path = "/"
+proxy = { upstream = "app" }
+cache = { store = "main", stale_while_revalidate = "30s",
+          stale_if_error = "1h" }
+```
+
+See [Caching](caching.md) for tiers, purging, and `X-Cache`.
+
+## Fixed responses: health checks and maintenance mode
+
+`respond` needs no backend at all — a cheap health endpoint for the
+load balancer, or a maintenance page during a deploy. `exact` matches
+win over prefix routes regardless of declaration order.
+
+```toml
+[server]
+listen = ["127.0.0.1:8080"]
+
+[[site]]
+default = true
+tls = "off"
+
+[[site.route]]
+exact = "/healthz"
+respond = { status = 200, body = "ok" }
+
+[[site.route]]
+path = "/"
+respond = { status = 503, body = "back in a few minutes",
+            headers = { "retry-after" = "300" } }
+```
+
+## Local development
+
+Plain HTTP, pretty logs, files from the working directory:
+
+```toml
+[server]
+listen = ["127.0.0.1:8080"]
+
+[log]
+format = "pretty"
+level = "debug"
+
+[[site]]
+default = true
+tls = "off"
+root = "./public"
+```
+
+To test HTTPS locally swap the listener for
+`{ addr = "127.0.0.1:8443", tls = true }` and set `tls = "selfsigned"`
+on the site — a throwaway certificate is generated at boot.
+
+## Splitting a large config
+
+One file per site keeps `verd.toml` small. `conf.d/*.toml` is a glob —
+fragments load in sorted order, tables merge recursively, `[[site]]`
+lists append, and a scalar set twice to different values is an error.
+
+```toml
+# /etc/verd/verd.toml
+include = ["conf.d/*.toml"]
+
+[server]
+listen = ["0.0.0.0:80", { addr = "0.0.0.0:443", tls = true }]
+
+[acme]
+email = "ops@example.com"
+```
+
+```toml
+# /etc/verd/conf.d/blog.toml — one fragment per site
+[[site]]
+hosts = ["blog.example.com"]
+tls = "auto"
+root = "/var/www/blog"
+```
+
+An empty `conf.d/` is fine — a glob matching nothing is ignored, while
+a named file that doesn't exist is an error. `verd config` prints the
+merged result with secrets redacted when you want to check what the
+fragments added up to.
+
+
+
+---
+
+# Configuration
+
+Verdigris reads a single TOML file. `verd validate` checks it without
+starting; `verd config` prints the merged, interpolated effective
+configuration (secrets redacted); `verd fmt` normalizes whitespace in
+place preserving comments; `verd schema` prints the generated JSON
+Schema.
+
+## Includes
+
+Split large configs across files:
+
+```toml
+include = ["conf.d", "extra-*.toml"]
+```
+
+`include` accepts files, directories (`*.toml` directly inside,
+sorted), and glob patterns (`*` matches any characters in the file
+name). A named file or directory that doesn't exist is an error; a
+glob that matches nothing is silently ignored, so `conf.d/*.toml` can
+be populated later. Tables merge recursively — `[[site]]` entries append,
+`[upstream.*]` and `[cache.*]` tables merge by name — and **arrays
+concatenate** rather than conflict. Scalars set to different values in
+different fragments are an error.
+
+## Secrets and environment interpolation
+
+Secrets never live in the file itself:
+
+```toml
+[admin]
+token = "${ADMIN_TOKEN}"        # from the environment
+# token = "${file:/run/secrets/admin-token}"   # or a file
+```
+
+`${VAR}` errors when unset; `${VAR:-default}` supplies a default, as
+does `${file:/path:-default}` when the file is unreadable. A literal
+`${` is written `$${`. `verd validate` resolves them, so CI can catch
+missing secrets.
+
+## Top-level layout
+
+| Section | Contents |
+| --- | --- |
+| `[server]` | listeners, limits, timeouts, connection caps, trusted proxies |
+| `[admin]` | admin listener, bearer token, optional TLS |
+| `[log]` | server log + access log (format/output/filter/sample) |
+| `[[site]]` | virtual hosts: hostnames, TLS mode, routes, trusted proxies |
+| `[upstream.*]` | named upstream clusters for proxy routes |
+| `[cache.*]` | named cache stores (RAM/disk/hybrid) for routes |
+| `[acme]` | ACME account + certificate storage |
+
+The full field-by-field listing is in the
+[configuration reference](./reference.md).
+
+
+
+---
+
+# Static file serving
+
+```toml
+[[site.route]]
+path = "/"
+static = { root = "/var/www/site", index = ["index.html"] }
+```
+
+- **Ranges**: `Range: bytes=…` single-range requests return `206` with
+  correct `Content-Range`; unsatisfiable ranges get `416`.
+- **Validators**: `ETag` and `Last-Modified` are emitted; `If-None-Match`
+  and `If-Modified-Since` answer `304`.
+- **Precompressed variants**: a `file.css.br`/`.zst`/`.gz` next to
+  `file.css` is served directly when the client accepts that encoding —
+  the content-encoded bytes are never re-compressed.
+- **Traversal safety**: `..` escapes are clamped to the root; NUL and bad
+  UTF-8 in paths are rejected with `400` before touching the filesystem.
+
+Directory listings are off by default — requests to a directory redirect
+to its `index` or return `404`.
+
+
+
+---
+
+# Reverse proxy & load balancing
+
+```toml
+[upstream.app]
+servers = ["http://app1:9000", "http://app2:9000"]
+lb = "least_conn"                  # round_robin | least_conn | ip_hash
+
+[upstream.app.timeouts]
+max_connections = 256
+
+[upstream.app.health.passive]
+failures = 3
+cooldown = "10s"
+
+[upstream.app.health.active]
+interval = "5s"
+path = "/healthz"
+
+[[site.route]]
+prefix = "/api"
+proxy = { upstream = "app", rewrite = { strip_prefix = "/api" } }
+```
+
+## Upstreams
+
+- **Protocols**: `http://`, `https://`, `h2c://` (cleartext HTTP/2 with
+  prior knowledge). ALPN on `https://` picks h2 automatically; a shared
+  h2 connection multiplexes requests per member.
+- **Balancing**: `round_robin` (default), `least_conn`, `ip_hash`.
+- **Health**: passive (kick members out after N consecutive failures for
+  a cooldown) and/or active (periodic HTTP probes on `path`, honours h1/h2).
+- **Retries**: `retries.max_per_request` replays idempotent requests on
+  connect/connection-failure; a cluster-wide `budget_fraction` caps
+  concurrent retries so retries can't amplify an outage.
+- **Timeouts**: `connect`, `response_header`, plus the route's
+  `timeouts.request_deadline` and body read/write budgets.
+- **DNS**: names resolve through the system resolver with TTL caching,
+  failure grace, and re-resolution on connect errors.
+- **Upgrades**: `Connection`/`Upgrade` tokens (e.g. WebSocket) are
+  tunneled end-to-end; the tunnel closes when either side does.
+
+Inline upstreams without a named cluster are fine for small configs:
+
+```toml
+[[site]]
+hosts = ["app.example.com"]
+proxy = "http://127.0.0.1:9000"        # catch-all route to an inline cluster
+```
+
+`site.proxy` also accepts a cluster name (`proxy = "app"`) or a URL
+list. Inside a route, `proxy.upstream` accepts the same three shapes:
+`"app"`, `"http://…"`, or `["http://…", …]`.
+
+## Headers
+
+Request headers can be set/cleared per route under
+`proxy.request_headers` (`headers` is accepted as an alias); response
+headers under `route.response_headers`. `Host` is rewritten to the
+member authority when `pass_host = true` (the default); set it `false`
+to pass the client's original `Host` through. Hop-by-hop headers are
+stripped; `X-Forwarded-For` is appended when the peer is trusted
+(otherwise replaced) and `X-Forwarded-Proto` reflects the inbound scheme.
+
+
+
+---
+
+# TLS, ACME & redirects
+
+## Manual certificates
+
+```toml
+[server]
+listen = [{ addr = "0.0.0.0:443", tls = true }]
+
+[[site]]
+hosts = ["example.com"]
+tls = { cert = "/etc/verd/example.pem", key = "/etc/verd/example.key" }
+```
+
+SNI picks the right certificate per host; a `default` certificate covers
+clients without SNI. Cert files are watched and **hot-reloaded** — rotate
+the file and new handshakes use it, no restart.
+
+## Self-signed (dev)
+
+```toml
+tls = "selfsigned"   # generates a throwaway cert per host at boot
+```
+
+## ACME — automatic certificates
+
+```toml
+[acme]
+email = "ops@example.com"
+directory = "https://acme-v02.api.letsencrypt.org/directory"
+storage = "/var/lib/verd/acme"
+
+[[site]]
+hosts = ["example.com", "www.example.com"]
+tls = "auto"
+```
+
+- Challenges: **http-01** (served on `/.well-known/acme-challenge/` over
+  any plaintext listener) and **tls-alpn-01** (answered during the TLS
+  handshake on 443 — works when port 80 is blocked). `acme.challenge`
+  picks the preference.
+- Renewal runs automatically (lead time capped at a third of the
+  certificate's lifetime) with retry backoff on failure.
+- `[acme.on_demand]` (`enabled`, `allowed_hosts`, `rate`) issues certificates lazily
+  on first handshake for allowlisted names, rate-limited to bound abuse.
+
+## HTTP→HTTPS and security headers
+
+`site.redirect_https` (default on) answers plaintext requests with a
+permanent redirect once a certificate exists for the host;
+`site.redirect_host` overrides the target host. Security headers
+(HSTS, CSP, X-Frame-Options, …) are set globally under
+`[server.security]` and refined per route under
+`route.security` — HSTS is only emitted over TLS.
+
+
+
+---
+
+# Middleware
+
+Per-route, in order: `ip acl → CORS preflight → auth → rate limit →
+cache → handler → security/cors/ratelimit headers → compression`.
+
+## IP ACLs
+
+```toml
+[[site.route]]
+prefix = "/internal"
+ip_allow = ["10.0.0.0/8", "192.168.0.0/16"]
+ip_deny = ["10.0.0.9/32"]
+```
+
+Client IP honours `X-Forwarded-For` only from `trusted_proxies`.
+
+## Authentication
+
+```toml
+auth = { basic = { realm = "ops", users = { ned = "$argon2id$…" } }}
+# or: auth = { bearer = { tokens = ["${API_TOKEN}"] } }
+# or: auth = { api_key = { location = "header", name = "x-api-key", keys = ["${KEY1}"] } }
+```
+
+Basic-auth passwords must be argon2id or bcrypt hashes (plaintext is
+rejected at validation). The authenticated identity rides request
+extensions into handlers, the access log, and rate-limit keys.
+
+## CORS
+
+```toml
+cors = { origins = ["https://app.example.com", "*.staging.example.com"],
+         methods = ["GET","POST"], headers = ["content-type"],
+         credentials = true, max_age = "1h" }
+```
+
+Preflights short-circuit before auth; actual responses get ACAO/ACAC and
+a `Vary: Origin`.
+
+## Rate limiting
+
+```toml
+rate_limit = { rate = "10/s", burst = 20, key = "identity" }
+# or: rate_limit = { rate = "600/m", burst = 20, key = "header:x-api-key" }
+```
+
+Token bucket per key (`ip`, `identity`, or `header:<name>`), with
+`dry_run` (log-but-allow), `exempt` CIDRs, and `RateLimit-*` headers.
+Idle buckets are swept automatically.
+
+## Compression
+
+```toml
+compress = { types = ["text/*", "application/json"], min_bytes = "1KiB",
+             algorithms = ["br", "zstd", "gzip"], level = 5 }
+```
+
+Streams br/zstd/gzip by `Accept-Encoding` q-values; skips small bodies,
+precompressed content, ranges, HEAD, no-transform responses, and upgrades.
+
+
+
+---
+
+# Caching
+
+A full HTTP response cache in front of any handler — static files and
+proxied responses alike.
+
+```toml
+[cache.main]
+tier = "hybrid"            # ram | disk | hybrid
+policy = "lru"           # lru | lfu | fifo
+ram_bytes = "256MiB"
+disk_bytes = "4GiB"
+disk_path = "/var/lib/verd/cache"
+max_object_bytes = "16MiB"
+
+[[site.route]]
+prefix = "/assets"
+cache = { store = "main", ttl = "5m",
+          stale_while_revalidate = "30s", stale_if_error = "5m" }
+```
+
+## Semantics
+
+Honours `Cache-Control`/`Expires` on responses, request directives
+(`no-cache`, `no-store`, `only-if-cached`, `max-age`, `max-stale`,
+`min-fresh`), `Vary` (plus forced `vary_headers`), client conditionals
+(`If-None-Match`/`If-Modified-Since` → `304`), heuristic freshness,
+negative caching (`negative_ttl`, 404s et al. via `cache_statuses`),
+`must-revalidate`, `stale-while-revalidate` (background refresh) and
+`stale-if-error`. HEAD shares GET's entry.
+
+Requests for the same key **coalesce**: one leader fetches, followers
+wait and read the committed entry.
+
+## Bypass and purge
+
+`cache.bypass` skips the cache by path glob, method, request header, or
+for authenticated requests (default). `x_cache = true` emits
+`X-Cache: HIT|MISS|STALE|BYPASS` on responses.
+
+```sh
+curl -XPOST localhost:2019/purge -d '{"store":"main","prefix":"/assets"}'
+curl -XPOST localhost:2019/purge -d '{"all":true}'
+```
+
+## Tiers
+
+- `ram`: in-memory, budgeted by bytes/items.
+- `disk`: content-addressed object files with self-describing heads; the
+  index rebuilds at boot, dropping corrupt or partial files.
+- `hybrid`: RAM read-through in front of disk; hits promote, the disk
+  copy is authoritative.
+
+
+
+---
+
+# Observability
+
+## Access log
+
+One JSON record per request (default), emitted when the response body
+finishes — bytes and duration are what actually went over the wire. A
+client that disconnects mid-body is logged as `499`.
+
+```toml
+[log.access]
+format = "json"            # or "pretty"
+output = "/var/log/verd/access.log"   # or "stdout" / "stderr"
+filter = 'path != "/healthz" && status != 404'
+sample = 0.25              # deterministic fraction
+```
+
+Fields: `ts` (RFC 3339 UTC), `req_id`, `client_ip`, `method`, `host`,
+`path`, `proto`, `tls`, `route`, `status`, `bytes`, `duration_ms`,
+`user_agent`, `referer`, `upstream`, `cache`, `identity`.
+
+Filter terms support `=`/`!=`/`==`, `=~`/`!~` globs, and `>`/`<`/`>=`/`<=`
+on `path`, `host`, `method`, `status`, `upstream`, `cache`, `identity`.
+
+File output is reopened on **SIGUSR1** (logrotate).
+
+## Metrics
+
+`GET /metrics` on the admin listener exposes Prometheus text format.
+Labels are deliberately bounded — route ids, store/cluster/member names
+from the config, exact status codes, and a `method` label that folds
+non-standard methods into `OTHER` — never hosts, paths or headers.
+Metric handles are resolved once per config object, so steady-state
+emission is a few atomic ops rather than a registry lookup per request.
+
+- `verd_requests_total{method,status,route}` — completed requests
+  (client aborts count as `status="499"`)
+- `verd_request_duration_seconds{route}` — fixed-bucket histogram
+  (`le` series for `histogram_quantile`), plus
+  `verd_response_bytes_total` / `verd_request_bytes_total` per route
+- `verd_cache_requests_total{store,result}`, `verd_cache_bytes`,
+  `verd_cache_items`
+- `verd_upstream_requests_total{cluster,member,result}`,
+  `verd_upstream_healthy`, `verd_upstream_inflight`,
+  `verd_upstream_duration_seconds`
+- `verd_active_connections`, `verd_connections_total`,
+  `verd_connections_rejected_total`, `verd_active_requests`,
+  `verd_tls_handshake_errors_total`
+- `verd_tunnels_total`, `verd_tunnels_active`,
+  `verd_tunnel_bytes_total{direction}` — upgraded WebSocket/CONNECT
+  tunnels
+- `verd_ratelimit_rejected_total`, `verd_acme_issuance_total`,
+  `verd_cert_expiry_seconds`, `verd_config_reloads_total{result}`
+- `verd_process_resident_bytes`, `verd_process_cpu_seconds_total`,
+  `verd_process_open_fds`, `verd_process_threads`,
+  `verd_uptime_seconds` (read from `/proc` every 5 s)
+- `verd_build_info{version,commit}` — always `1`
+
+## Probes
+
+`GET /health` is always `200 ok` (process alive). `GET /ready` returns
+`503` until the config is built and every listener is bound — wire it to
+your load balancer's readiness check.
+
+
+
+---
+
+# Admin API & lifecycle
+
+The admin listener (`admin.listen`, default `127.0.0.1:2019`) is a
+separate HTTP service from the data plane.
+
+```toml
+[admin]
+listen = "127.0.0.1:2019"
+token = "${ADMIN_TOKEN}"     # mandatory when listen is not loopback
+tls = { cert = "admin.pem", key = "admin.key" }   # optional
+```
+
+| Endpoint | Description |
+| --- | --- |
+| `GET /health` | liveness |
+| `GET /ready` | readiness (bind to your LB health check) |
+| `GET /metrics` | Prometheus exposition |
+| `GET /version` | version + commit |
+| `GET /config` | the live config; secret values rendered `***` |
+| `GET /upstreams` | per-cluster member health, drain, in-flight |
+| `POST /reload` | re-read the config file, swap generations |
+| `POST /purge` | `{store?, key? \| prefix? \| all:true}` cache purge |
+| `POST /upstreams/{cluster}/{member}/drain` | remove member from rotation |
+| `POST /upstreams/{cluster}/{member}/undrain` | restore member |
+
+`{member}` is a member index or URL authority.
+
+`/version` reports `{"version":"x.y.z","commit":<sha-or-null>}` —
+`version` is the crate version baked at compile time, `commit` is the
+git SHA when the build sets `VERD_GIT_SHA` (release binaries do;
+locally `null` otherwise). `verd version` prints the same fields.
+
+## Reload semantics
+
+SIGHUP, `POST /reload`, or `--watch` file changes all take the same path:
+
+1. Re-read and validate the config. Errors keep the old generation —
+   traffic is never interrupted.
+2. Build a new runtime, reusing unchanged cache stores (RAM contents and
+   disk indexes survive reloads).
+3. Swap the runtime atomically; sockets that still match the listener set
+   keep accepting against the new config, removed sockets drain, added
+   sockets bind. Any bind failure aborts the whole reload.
+4. In-flight requests finish on the old generation; new connections get
+   the new one immediately.
+
+The admin listener itself (address + TLS pair) is boot-fixed; the bearer
+token rotates with the config.
+
+
+
+---
+
+# Docker & deployment
+
+The published image is a static musl binary on `distroless/static`,
+running as `nonroot` with a read-only root filesystem.
+
+## Writable directories
+
+| Path | Used for |
+| --- | --- |
+| `/var/lib/verd` | disk-cache objects, ACME account + certificates |
+| `/var/log/verd` | access-log files (or log to stdout) |
+| `/etc/verd` | config + manual cert files (mount **read-only**) |
+
+```sh
+docker run --read-only \
+  -v $PWD/verd.toml:/etc/verd/verd.toml:ro \
+  -v verd-data:/var/lib/verd \
+  -p 80:8080 -p 127.0.0.1:2019:2019 \
+  ghcr.io/frontyard/verdigris:latest
+```
+
+## Compose
+
+`docker-compose.yml` at the repo root runs a demo: static site, an
+`http-echo` upstream behind `/api`, and the admin API on
+`127.0.0.1:2019`.
+
+## systemd
+
+`packaging/verd.service` — `ExecReload` uses SIGHUP for config reload
+and SIGUSR1 for access-log reopen, `ProtectSystem=strict` with
+`ReadWritePaths` limited to state/log/config dirs, and
+`AmbientCapabilities=CAP_NET_BIND_SERVICE` for ports <1024.
+
+
+
+---
+
+# Tuning
+
+## Limits
+
+```toml
+[limits]
+header_bytes = "32KiB"        # total request header size
+body_bytes = "10MiB"          # per-route override: route.limits.body_bytes
+
+[server]
+max_connections = 100000
+max_connections_per_ip = 1000
+```
+
+## Timeouts
+
+```toml
+[timeouts]
+header_read = "10s"    # until the first request's headers arrive
+idle = "60s"           # keep-alive between requests
+body_read = "30s"
+send = "60s"           # write inactivity; also bounds silent tunnels
+tls_handshake = "10s"
+request_deadline = "0" # whole-request cap, per route; 0 = none
+```
+
+## Practical notes
+
+- Bodies stream — `body_bytes` caps size without buffering.
+- Keep-alive and h2 multiplexing are on by default; no tuning needed for
+  typical workloads.
+- For high-concurrency proxies raise `upstream.max_connections` (per
+  member semaphore) and `nofile` (see the systemd unit).
+- RAM cache tiers are fastest; `hybrid` trades a small hit latency for
+  surviving restarts. Size `ram_bytes` to your hot set.
+- Rate-limit buckets are per key; `key = "identity"` with auth avoids
+  NAT'd-IP collateral.
+
+
+
+---
+
+# Migrating from nginx / Caddy
+
+| nginx | verd.toml |
+| --- | --- |
+| `server { listen 443 ssl; }` | `server.listen = [{ addr = "0.0.0.0:443", tls = true }]` |
+| `server_name example.com` | `hosts = ["example.com"]` on `[[site]]` |
+| `location / { root … }` | `[[site.route]] path="/" static={root="…"}` |
+| `proxy_pass http://app` | `proxy = "http://app"` or `{ upstream = "app" }` |
+| `upstream { least_conn; }` | `[upstream.app] lb="least_conn"` |
+| `limit_req_zone` | `route.rate_limit` |
+| `add_header X-…` | `route.response_headers = { set = { … } }` |
+| `access_log /var/log/x` | `[log.access] output = "/var/log/x"` |
+| `ssl_certificate(…)` | `site.tls = { cert="…", key="…" }` |
+
+| Caddy | verd.toml |
+| --- | --- |
+| `example.com { file_server }` | `hosts=["example.com"] tls="auto"` + static route |
+| `reverse_proxy app:9000` | `proxy = "http://app:9000"` |
+| automatic HTTPS | `tls = "auto"` + `[acme]` account block |
+| `basic_auth` | `route.auth = { basic = { users = { name="hash" } } }` |
+
+Wildcard hosts (`*.example.com`), regex routes, per-site trusted proxies,
+and multi-site host routing match nginx semantics — the config reference
+covers each knob.
+
+
+
+---
+
+# Upgrading
+
+- **Binary**: replace the binary (or image tag) and send `SIGTERM`; the
+  drain window lets in-flight requests finish. Rolling upgrades across a
+  cluster need no special handling — `/ready` drops first.
+- **Config**: `verd validate` after upgrading catches renamed or
+  removed fields before rollout. The schema is versioned with the binary;
+  `verd schema` prints it.
+- **State**: disk caches and ACME storage are forward-compatible within
+  V1; entries that fail to parse are dropped at rebuild, never fatal.
+- Zero-downtime config changes never need a binary restart — see
+  [reload semantics](./admin.md#reload-semantics).
+- **What changed**: each release is documented in the repository's
+  `CHANGELOG.md` (Keep a Changelog format); the GitHub release notes are
+  generated from it automatically.
+
+
+
+---
+
+# Operations
+
+## Day-to-day
+
+- **Reload config**: `systemctl reload verd` (SIGHUP), `POST /reload`,
+  or `--watch`. All are atomic; a bad file keeps the old generation.
+- **Rotate access logs**: move the file, then `kill -USR1` (the systemd
+  unit wires this as the second `ExecReload`).
+- **Rotate TLS certs**: overwrite the PEM files — the watcher hot-loads
+  them for new handshakes.
+- **Drain a backend**: `POST /upstreams/<cluster>/<member>/drain` before
+  maintenance; `/undrain` to restore.
+
+## Debugging
+
+- `VERD_LOG=debug` (or `--log-level`) for structured tracing on stderr.
+- `GET /config` (admin) shows the *effective* merged config with secrets
+  redacted — check this before assuming a key applied.
+- `GET /upstreams` shows member health/drain/in-flight live.
+- Access-log `499` = the client hung up mid-body, not a server error.
+- Metrics `verd_upstream_healthy{member=…} = 0` marks members out of
+  rotation (active probe failing, passive cooldown, or drained).
+
+## Failure modes
+
+- Reload bind failure → reload aborts, old generation keeps serving.
+- Cache disk corruption → entries dropped at boot rebuild; serving
+  continues with an empty cache.
+- ACME failure → issuance retries with backoff; sites with no cert yet
+  serve HTTP until one exists.
+
+
+
+---
+
+# Command line
+
+`verd` is a single binary with five subcommands. All options can also be
+set via environment variables.
+
+| Command | Purpose |
+| --- | --- |
+| `verd run` | Start the server. Default when a config file exists. |
+| `verd validate` | Check a config file for errors; exits non-zero on failure. |
+| `verd config` | Print the effective merged/interpolated config as TOML (secrets redacted). |
+| `verd fmt` | Normalize whitespace in a config file in place, preserving comments. |
+| `verd schema` | Print the JSON Schema for the config format to stdout. |
+| `verd version` | Print version, build commit, and target triple. |
+
+## Flags
+
+| Flag | Env var | Applies to | Effect |
+| --- | --- | --- | --- |
+| `-c, --config PATH` | `VERD_CONFIG` | `run`, `validate`, `config`, `fmt` | Config file path. Without it, `verd` searches `./verd.toml`, `./config/verd.toml`, `/etc/verd/verd.toml`. |
+| `--watch` | — | `run` | Reload config when the file changes on disk (in addition to `POST /reload`). |
+| `--check` | — | `fmt` | Exit non-zero if unformatted instead of rewriting. |
+| `-o, --output PATH` | — | `schema` | Write the schema to a file instead of stdout. |
+| `--log-level LVL` | `VERD_LOG` | all | `error` / `warn` / `info` / `debug` / `trace`; default `info`. JSON logs when stderr is not a TTY. |
+
+`verd --version` prints just the crate version; `verd version` also
+prints the build commit (when built with `VERD_GIT_SHA`) and target.
+
+## Exit codes
+
+`0` success; `1` config errors / missing config; `2` CLI usage errors.
+`validate` prints one line per error or warning to stderr.
+
+
+
+---
+
+<!-- GENERATED by docs/gen-reference.py — do not edit by hand. -->
+
+# Configuration reference
+
+Every field verd accepts in `verd.toml`, generated from the
+JSON Schema (`verd schema`). Durations accept `500ms`, `10s`,
+`5m`, `1h`, `1d`; sizes accept `B`, `KiB`, `MiB`, `GiB`.
+
+
+## `Config`
+
+Root configuration for a verdigris instance.
+
+| field | type | default | description |
+|---|---|---|---|
+| `acme` | AcmeConfig | `{"ca_roots": null, "challenge": "auto", "directory": "https://acme-v02.api.letsencrypt.org/directory", "eab": null, "email": null, "on_demand": {"allowed_hosts": [], "enabled": false, "rate": null}, "renew_before": "30days", "storage": "./verd-state/acme"}` | ACME account settings used by sites with `tls = "auto"`. |
+| `admin` | AdminConfig | `{"listen": "127.0.0.1:2019", "tls": null, "token": null}` | Admin API listener (metrics, health, reload, purge, inspection). |
+| `cache` | object | `{}` | Named cache stores for routes with `cache` enabled. |
+| `include` | [string] | `[]` | Additional files or directories of `*.toml` fragments merged into this configuration, relative to the directory containing this file. Fragment files are loaded in sorted order; scalar conflicts between fragments and the main file are errors. A glob pattern matching no files is a no-op; a missing file or directory is an error. |
+| `limits` | Limits | `{"body_bytes": "10MiB", "header_bytes": "16KiB"}` | Default request limits; individual routes may override. |
+| `log` | LogConfig | `{"access": {"enabled": true, "filter": null, "format": "json", "output": "stdout", "sample": 1.0}, "format": "json", "level": "info", "output": "stderr"}` | Server and access logging. |
+| `server` | ServerConfig | `{"graceful_timeout": "30s", "listen": [{"addr": "0.0.0.0:80", "tls": false}], "max_connections": 65536, "max_connections_per_ip": 256, "security": {"content_type_options": true, "cross_domain_policy": "", "csp": null, "enabled": true, "frame_options": "DENY", "hsts": true, "hsts_max_age": "5months 27days 19h 12m", "hsts_subdomains": false, "referrer_policy": "strict-origin-when-cross-origin"}, "server_header": "verd", "trusted_proxies": []}` | Server-wide settings: listeners, connection limits, shutdown. |
+| `site` | [SiteConfig] | `[]` | Virtual sites. Requests are routed by the Host header. |
+| `timeouts` | Timeouts | `{"body_read": "1m", "header_read": "20s", "idle": "1m 15s", "request_deadline": "5m", "send": "1m", "tls_handshake": "10s"}` | Default timeouts; individual routes may override. |
+| `upstream` | object | `{}` | Named upstream clusters for reverse proxy routes. |
+
+## `ServerConfig`
+
+Server-wide settings.
+
+| field | type | default | description |
+|---|---|---|---|
+| `graceful_timeout` | string | `"30s"` | Time to wait for in-flight requests during shutdown or reload before connections are closed. |
+| `listen` | [ListenAddrSchema] | `[{"addr": "0.0.0.0:80", "tls": false}]` | Addresses to listen on. Defaults to a single plaintext listener on port 80. Entries are either `"ip:port"` strings or `{ addr = "ip:port", tls = true }` tables to terminate TLS. |
+| `max_connections` | integer | `65536` | Maximum concurrent connections across all listeners. |
+| `max_connections_per_ip` | integer | `256` | Maximum concurrent connections per client IP address. |
+| `security` | SecurityConfig | `{"content_type_options": true, "cross_domain_policy": "", "csp": null, "enabled": true, "frame_options": "DENY", "hsts": true, "hsts_max_age": "5months 27days 19h 12m", "hsts_subdomains": false, "referrer_policy": "strict-origin-when-cross-origin"}` | Baseline security response headers applied to every route. |
+| `server_header` | string | `"verd"` | Value of the `Server` response header; `"off"` or `""` omits it. |
+| `trusted_proxies` | [string] | `[]` | CIDRs whose `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`, `X-Real-IP` and `Forwarded` headers are trusted. Empty: trust none. |
+
+
+## `Limits`
+
+Request size limits.
+
+| field | type | default | description |
+|---|---|---|---|
+| `body_bytes` | ByteSize | `"10MiB"` | Maximum size of a request body. The request is rejected with `413 Payload Too Large` when exceeded. |
+| `header_bytes` | ByteSize | `"16KiB"` | Maximum total size of request headers. |
+
+## `Timeouts`
+
+Timeout settings. `0s` disables a timeout.
+
+| field | type | default | description |
+|---|---|---|---|
+| `body_read` | string | `"1m"` | Time allowed to read a request body. |
+| `header_read` | string | `"20s"` | Time allowed to read request headers (slowloris protection). |
+| `idle` | string | `"1m 15s"` | Keep-alive idle time between requests on one connection. |
+| `request_deadline` | string | `"5m"` | Overall per-request deadline. Set to `0s` for long-lived routes (SSE, WebSocket, long-polling). |
+| `send` | string | `"1m"` | Write-side inactivity deadline: a send that stalls longer than this closes the connection (slow-client/slow-read protection). Progress resets it — large slow downloads are fine. `0s` disables. |
+| `tls_handshake` | string | `"10s"` | TLS handshake deadline. |
+
+## `LogConfig`
+
+Logging configuration.
+
+| field | type | default | description |
+|---|---|---|---|
+| `access` | AccessLog | `{"enabled": true, "filter": null, "format": "json", "output": "stdout", "sample": 1.0}` | Access log settings. |
+| `format` | LogFormat | `"json"` | Server log format: `json` or `pretty`. |
+| `level` | string | `"info"` | Server (diagnostic) log level: error, warn, info, debug, trace. |
+| `output` | string | `"stderr"` | Server log destination: `stdout`, `stderr`, or a file path. |
+
+
+## `AccessLog`
+
+Access log settings.
+
+| field | type | default | description |
+|---|---|---|---|
+| `enabled` | boolean | `true` | Emit access logs. |
+| `filter` | string \| null | `null` | Optional filter expression evaluated against log fields, e.g. `path != "/healthz" && status != 404`. Matching requests are logged. |
+| `format` | LogFormat | `"json"` | Format: `json` or `pretty`. |
+| `output` | string | `"stdout"` | Destination: `stdout`, `stderr`, or a file path. File output is reopened on `SIGUSR1` for logrotate. |
+| `sample` | number | `1.0` | Fraction of requests to log, 0.0–1.0. |
+
+## `AdminConfig`
+
+Admin API configuration. Served on a dedicated listener, separate from
+the data plane.
+
+| field | type | default | description |
+|---|---|---|---|
+| `listen` | string | `"127.0.0.1:2019"` | `IP:port` to bind. Use loopback unless remote administration is needed. |
+| `tls` | ManualTls \| null | `null` | Optional TLS for the admin listener (recommended when bound beyond localhost). |
+| `token` | string \| null | `null` | Bearer token required on all admin requests. Mandatory when `listen` is not a loopback address; use `${VAR}` interpolation to keep it out of the file. |
+
+## `ManualTls`
+
+Certificate + private key file pair.
+
+| field | type | default | description |
+|---|---|---|---|
+| `cert` | string **required** |  | PEM file with the certificate chain. |
+| `key` | string **required** |  | PEM file with the private key. |
+
+## `AcmeConfig`
+
+ACME account settings (Let's Encrypt or any RFC 8555 directory).
+
+| field | type | default | description |
+|---|---|---|---|
+| `ca_roots` | string \| null | `null` | PEM bundle of extra CA roots to trust when talking to the ACME directory — for private ACME servers (Pebble, step-ca, internal PKI). The system/WebPKI roots are always included. |
+| `challenge` | AcmeChallenge | `"auto"` | Preferred challenge type: `http-01`, `tls-alpn-01`, or `auto` (HTTP-01 when a plaintext listener exists, else TLS-ALPN-01). |
+| `directory` | string | `"https://acme-v02.api.letsencrypt.org/directory"` | ACME directory URL. Use the Let's Encrypt staging directory (`https://acme-staging-v02.api.letsencrypt.org/directory`) while testing to avoid production rate limits. |
+| `eab` | ExternalAccountBinding \| null | `null` | External Account Binding for providers that require it. |
+| `email` | string \| null | `null` | Contact email for the ACME account. |
+| `on_demand` | OnDemandAcme | `{"allowed_hosts": [], "enabled": false, "rate": null}` | On-demand issuance for previously unseen hostnames. |
+| `renew_before` | string | `"30days"` | Renew certificates this long before expiry. |
+| `storage` | string | `"./verd-state/acme"` | Directory holding the account key and issued certificates. Must be writable; persists across restarts. |
+
+## `SiteConfig`
+
+A virtual site: a set of hosts with routes and optional TLS.
+
+| field | type | default | description |
+|---|---|---|---|
+| `default` | boolean | `false` | Serve requests whose Host matches no site. |
+| `hosts` | [string] | `[]` | Hostnames served by this site. Exact names and `*.example.com` wildcards. May be empty only when `default = true`. |
+| `name` | string \| null | `null` | Optional display name used in logs, metrics and the admin API. |
+| `proxy` | UpstreamRef \| null | `null` | Shorthand for a catch-all reverse proxy route: a named upstream (`"app"`), an upstream URL (`"http://app:9000"`), or a list of URLs. |
+| `redirect_host` | string \| null | `null` | Host the HTTPS redirect points at; defaults to the request's Host. Useful for `www → apex` style consolidation across schemes. |
+| `redirect_https` | boolean \| null | `null` | Redirect plaintext HTTP to HTTPS when TLS is enabled; defaults on. Set explicitly `false` only to serve a TLS site on plain HTTP. |
+| `root` | string \| null | `null` | Shorthand for a catch-all static file route rooted here. |
+| `route` | [RouteConfig] | `[]` | Routes, evaluated in order of specificity, not declaration order. |
+| `tls` | SiteTls | `"auto"` | TLS mode: `"auto"` (ACME), `{cert, key}`, `"selfsigned"`, or `"off"`. |
+| `trusted_proxies` | array \| null | `null` | Per-site override of the trusted proxy CIDR list. |
+
+## `SiteTls`
+
+TLS mode for a site.
+
+
+## `TlsMode`
+
+TLS mode keyword.
+
+
+
+
+## `RouteConfig`
+
+One route: a matcher, one handler, and middleware.
+
+| field | type | default | description |
+|---|---|---|---|
+| `auth` | AuthConfig \| null | `null` | Authentication configuration. |
+| `cache` | RouteCache \| null | `null` | Response caching. |
+| `compress` | CompressConfig \| null | `null` | Response compression. |
+| `cors` | CorsConfig \| null | `null` | CORS handling. |
+| `exact` | string \| null | `null` | Match this exact path only. |
+| `ip_allow` | [string] | `[]` | Client CIDRs allowed; others get 403. |
+| `ip_deny` | [string] | `[]` | Client CIDRs denied; they get 403 before allow rules. |
+| `limits` | LimitOverrides \| null | `null` | Per-route limit overrides. |
+| `match` | MatchConditions \| null | `null` | Additional match conditions: methods, headers, query parameters. (`conditions` is accepted as an alias.) |
+| `path` | string \| null | `null` | Alias for `prefix`. |
+| `prefix` | string \| null | `null` | Match paths starting with this prefix. Prefix matching is segment-aware: `/api` matches `/api` and `/api/…` but not `/apix`. |
+| `priority` | integer | `0` | Priority among routes that tie on specificity. Higher wins. |
+| `proxy` | ProxyHandler \| null | `null` | Reverse proxy handler. |
+| `rate_limit` | RateLimitConfig \| null | `null` | Rate limiting. |
+| `redirect` | RedirectHandler \| null | `null` | Redirect handler. |
+| `regex` | string \| null | `null` | Match paths against this regular expression. Evaluated last; a regex route never overrides a prefix route. |
+| `respond` | RespondHandler \| null | `null` | Fixed response handler. |
+| `response_headers` | HeaderOps \| null | `null` | Response header manipulation applied to this route's responses. (`headers` is accepted as an alias.) |
+| `security` | RouteSecurity \| null | `null` | Per-route security-header overrides. |
+| `static` | StaticHandler \| null | `null` | Serve static files. |
+| `timeouts` | TimeoutOverrides \| null | `null` | Per-route timeout overrides (e.g. `0s` deadline for SSE/WebSocket). |
+
+
+
+
+## `StaticHandler`
+
+Static file handler.
+
+| field | type | default | description |
+|---|---|---|---|
+| `cache_control` | object | `{}` | `Cache-Control` values applied to paths matching the glob keys. |
+| `error_pages` | object | `{}` | Custom error pages: status code → file path, always relative to `root` (a leading `/` means "from the document root"). |
+| `index` | [string] | `["index.html"]` | Index files tried for directory requests, in order. |
+| `listing` | boolean | `false` | HTML directory listing when no index file exists. |
+| `mime_types` | object | `{}` | MIME type overrides by file extension (without dot). |
+| `precompressed` | boolean | `true` | Serve a sibling `.gz`, `.br`, or `.zst` file when the client accepts that encoding. |
+| `root` | string **required** |  | Document root on disk. |
+| `spa` | boolean | `false` | SPA mode: serve `index.html` for unknown paths. |
+| `try_files` | [string] | `[]` | Extra fallback files tried before SPA/listing/404: on a miss each entry is resolved relative to `root` (or the requested directory after `index` misses) and the first existing file is served. Not nginx `try_files` semantics — the request path is not rewritten. |
+
+## `RespondHandler`
+
+Fixed response handler.
+
+| field | type | default | description |
+|---|---|---|---|
+| `body` | string | `""` | Response body (text). `{path}`, `{host}`, `{method}` substitute from the request. |
+| `headers` | object | `{}` | Extra response headers. |
+| `status` | integer | `200` | Status code. |
+
+## `RedirectHandler`
+
+Redirect handler.
+
+| field | type | default | description |
+|---|---|---|---|
+| `host` | string \| null | `null` | Redirect to the same path on another host (and optional port). |
+| `scheme` | string \| null | `null` | Redirect to another scheme, e.g. `https`. |
+| `status` | integer | `308` | Status code: 301, 302, 307 (preserves method+body), or 308. |
+| `to` | string \| null | `null` | Redirect to a fixed URL template. `{host}`, `{path}`, `{query}` are substituted from the request. |
+
+## `ProxyHandler`
+
+Reverse proxy handler.
+
+| field | type | default | description |
+|---|---|---|---|
+| `pass_host` | boolean | `true` | Rewrite the `Host` header to the upstream authority (vs. passing the original host through). |
+| `request_headers` | HeaderOps \| null | `null` | Request header manipulation applied before forwarding upstream. (`headers` is accepted as an alias.) |
+| `retries` | RetryPolicy | `{"budget_fraction": 0.2, "max_per_request": 2}` | Retry policy for idempotent requests on connection failure. |
+| `rewrite` | Rewrite \| null | `null` | Path rewriting before forwarding. |
+| `upstream` | UpstreamRef **required** |  | Named upstream (`upstream.name`) or an inline list of upstream URLs. |
+
+## `Rewrite`
+
+Path rewriting before forwarding upstream.
+
+| field | type | default | description |
+|---|---|---|---|
+| `regex` | RegexRewrite \| null | `null` | Apply `pattern` regex substitution once to the path. |
+| `replace_prefix` | PrefixPair \| null | `null` | Replace this path prefix with another. |
+| `strip_prefix` | string \| null | `null` | Remove this prefix from the request path. |
+
+## `UpstreamConfig`
+
+A named cluster of upstream servers.
+
+| field | type | default | description |
+|---|---|---|---|
+| `dns` | UpstreamDns | `{"grace": "1m"}` | DNS re-resolution behaviour for hostname upstreams. |
+| `health` | HealthCheck | `{"active": null, "passive": null}` | Health checking. |
+| `lb` | LoadBalancing | `"round_robin"` | Load balancing algorithm. |
+| `servers` | [string] | `[]` | Server URLs: `http://host:port`, `https://host:port`, or `h2c://` for cleartext HTTP/2 prior knowledge (typical for gRPC backends). |
+| `timeouts` | UpstreamTimeouts | `{"connect": "5s", "idle": "1m 30s", "max_connections": 1024, "response_header": "30s"}` | Per-upstream timeouts and the per-member connection cap. |
+| `tls` | UpstreamTls | `{"ca": null, "sni": null, "verify": true}` | TLS options for `https://` upstreams. |
+| `unavailable` | UnavailableResponse | `{"body": null, "status": 502}` | Response when no upstream in the cluster is healthy. |
+
+## `UpstreamRef`
+
+Upstream reference: a name, a single URL (`"http://app:9000"`), or an
+inline URL list.
+
+
+## `HealthCheck`
+
+Health check configuration: active probes and passive failure tracking.
+
+| field | type | default | description |
+|---|---|---|---|
+| `active` | ActiveHealth \| null | `null` | Periodic probes; absent = no active checking. |
+| `passive` | PassiveHealth \| null | `null` | Mark upstreams unhealthy after consecutive request failures. |
+
+## `ActiveHealth`
+
+Active health probing.
+
+| field | type | default | description |
+|---|---|---|---|
+| `expect` | integer | `200` | Expected HTTP status. The upstream is healthy only on an exact match. |
+| `interval` | string | `"10s"` | Probe interval. |
+| `path` | string | `"/healthz"` | Path to GET on each upstream, e.g. `/healthz`. |
+| `timeout` | string | `"3s"` | Per-probe timeout. |
+
+## `PassiveHealth`
+
+Passive health tracking.
+
+| field | type | default | description |
+|---|---|---|---|
+| `cooldown` | string | `"30s"` | How long an upstream stays out of rotation before re-admission. |
+| `failures` | integer | `3` | Consecutive failures before an upstream is marked unhealthy. |
+
+## `RetryPolicy`
+
+Retry policy for idempotent requests.
+
+| field | type | default | description |
+|---|---|---|---|
+| `budget_fraction` | number | `0.2` | Maximum in-flight retries as a fraction (0–1) of total requests. |
+| `max_per_request` | integer | `2` | Total retry budget across all requests to the cluster (concurrent retries are limited to this fraction of recent requests, and never exceed `max` per request). |
+
+
+## `AuthConfig`
+
+Authentication configuration; exactly one method per route.
+
+| field | type | default | description |
+|---|---|---|---|
+| `api_key` | ApiKeyAuth \| null | `null` | API key in a header or query parameter. |
+| `basic` | BasicAuth \| null | `null` | HTTP Basic authentication. |
+| `bearer` | BearerAuth \| null | `null` | Bearer token authentication (`Authorization: Bearer <token>`). |
+
+## `BasicAuth`
+
+HTTP Basic authentication.
+
+| field | type | default | description |
+|---|---|---|---|
+| `htpasswd` | string \| null | `null` | Path to an htpasswd file (bcrypt `$2y$` entries). |
+| `realm` | string \| null | `null` | Basic auth realm. |
+| `users` | object | `{}` | User → hashed password. Argon2 hashes (`$argon2id$...`) inline, or use `htpasswd` for bcrypt `$2y$` files. Generate hashes with any argon2/bcrypt tool; plaintext values are rejected at validation. |
+
+
+## `BearerAuth`
+
+Bearer token authentication.
+
+| field | type | default | description |
+|---|---|---|---|
+| `tokens` | [string] | `[]` | Valid tokens. Prefer `${VAR}`/`${file:...}` interpolation. |
+
+## `ApiKeyAuth`
+
+API key authentication.
+
+| field | type | default | description |
+|---|---|---|---|
+| `keys` | [string] **required** |  | Valid keys. |
+| `location` | ApiKeyLocation **required** |  | Where the key is read: `header` or `query`. |
+| `name` | string **required** |  | Header name (e.g. `X-Api-Key`) or query parameter name. |
+
+## `CorsConfig`
+
+CORS configuration.
+
+| field | type | default | description |
+|---|---|---|---|
+| `credentials` | boolean | `false` | Allow credentials (cookies, Authorization). |
+| `expose` | [string] | `[]` | Headers exposed to browsers on real responses. |
+| `headers` | [string] | `[]` | Allowed request headers for preflight. |
+| `max_age` | string \| null | `null` | Preflight cache duration. |
+| `methods` | [string] | `[]` | Allowed methods for preflight. |
+| `origins` | [string] | `[]` | Allowed origins: exact origins, `*`, `*.suffix` wildcards, or `re:`-prefixed regular expressions. |
+
+## `RateLimitConfig`
+
+Rate limiting.
+
+| field | type | default | description |
+|---|---|---|---|
+| `burst` | integer \| null | `null` | Burst size; defaults to the per-second equivalent of `rate`. |
+| `dry_run` | boolean | `false` | Log-only mode: never reject, but emit metrics/logs as if it would. |
+| `exempt` | [string] | `[]` | CIDRs exempt from limiting. |
+| `key` | string **required** |  | What the limit applies to: `ip`, `identity` (authenticated identity), `route`, or `header:<Name>` for an arbitrary header value. |
+| `rate` | RateSpec **required** |  | Sustained rate, e.g. `100/s`, `600/m`, `10000/h`. |
+
+## `HeaderOps`
+
+Header manipulation: `set` overwrites, `add` appends, `remove` deletes.
+
+| field | type | default | description |
+|---|---|---|---|
+| `add` | object | `{}` | Headers to add (append without removing existing values). |
+| `remove` | [string] | `[]` | Header names to remove. |
+| `set` | object | `{}` | Headers to set (replace any existing values). |
+
+## `SecurityConfig`
+
+Baseline security response headers (OWASP-ish defaults). Each route may
+override or disable individual headers via `route.security`.
+
+| field | type | default | description |
+|---|---|---|---|
+| `content_type_options` | boolean | `true` | `X-Content-Type-Options: nosniff`. |
+| `cross_domain_policy` | string | `""` | `X-Permitted-Cross-Domain-Policies` value. Empty disables. |
+| `csp` | string \| null | `null` | `Content-Security-Policy` value; unset emits no CSP. |
+| `enabled` | boolean | `true` | Master switch; `false` emits none of these headers. |
+| `frame_options` | string | `"DENY"` | `X-Frame-Options` value, e.g. `"DENY"` or `"SAMEORIGIN"`. Empty string disables the header. |
+| `hsts` | boolean | `true` | `Strict-Transport-Security`, emitted only on TLS responses. |
+| `hsts_max_age` | string | `"5months 27days 19h 12m"` | HSTS `max-age`: `"180d"`, or a bare number of seconds. |
+| `hsts_subdomains` | boolean | `false` | Append `includeSubDomains` to the HSTS header. |
+| `referrer_policy` | string | `"strict-origin-when-cross-origin"` | `Referrer-Policy` value. Empty string disables the header. |
+
+## `RouteSecurity`
+
+Per-route security-header overrides: absent fields inherit the global
+[`SecurityConfig`]. `enabled = false` suppresses all of them.
+
+| field | type | default | description |
+|---|---|---|---|
+| `content_type_options` | boolean \| null | `null` | Override `X-Content-Type-Options`. |
+| `cross_domain_policy` | string \| null | `null` | Override `X-Permitted-Cross-Domain-Policies` (`""` disables). |
+| `csp` | string \| null | `null` | Set a CSP for this route (`""` clears an inherited one). |
+| `enabled` | boolean \| null | `null` | Route-level master switch; absent inherits global `enabled`. |
+| `frame_options` | string \| null | `null` | Override `X-Frame-Options` (`""` disables). |
+| `hsts` | boolean \| null | `null` | Override HSTS on/off for this route. |
+| `hsts_max_age` | string \| null | `null` | Override HSTS `max-age` (`"180d"`, or a bare number of seconds). |
+| `hsts_subdomains` | boolean \| null | `null` | Override `includeSubDomains`. |
+| `referrer_policy` | string \| null | `null` | Override `Referrer-Policy` (`""` disables). |
+
+## `CompressConfig`
+
+Response compression.
+
+| field | type | default | description |
+|---|---|---|---|
+| `algorithms` | [string] | `["br", "zstd", "gzip"]` | Enabled algorithms, negotiated by client `Accept-Encoding` q-values: `br`, `zstd`, `gzip`. Defaults to all. |
+| `level` | integer \| null | `null` | Compression level, algorithm-specific (brotli 0–11, gzip 0–9, zstd 1–19). Default is the algorithm's balanced level. |
+| `min_bytes` | ByteSize | `"1KiB"` | Don't compress responses smaller than this (when Content-Length is known). |
+| `types` | [string] | `["text/*", "application/json", "application/javascript", "application/xml", "application/wasm", "image/svg+xml", "font/ttf", "font/otf"]` | Content types eligible for compression; `*` suffixes allowed. |
+
+## `RouteCache`
+
+Route cache configuration referencing a named `[cache.<store>]`.
+
+| field | type | default | description |
+|---|---|---|---|
+| `bypass` | CacheBypass | `{"authenticated": true, "cookies": [], "headers": [], "methods": [], "paths": []}` | Requests that bypass the cache. |
+| `negative_ttl` | string | `"10s"` | Short TTL used for error responses (negative caching). |
+| `stale_if_error` | string \| null | `null` | Serve stale on upstream error for this long. |
+| `stale_while_revalidate` | string \| null | `null` | Serve stale while revalidating in the background, for this long. |
+| `store` | string **required** |  | Name of a top-level cache store. |
+| `ttl` | string \| null | `null` | TTL override for responses without explicit freshness. Otherwise `Cache-Control`/`Expires` semantics apply. |
+| `vary_headers` | [string] | `[]` | Extra headers folded into the cache key (in addition to the response `Vary` header). |
+| `x_cache` | boolean | `true` | Emit the `X-Cache` response header. |
+
+## `CacheBypass`
+
+Cache bypass rules. Requests carrying `Authorization` bypass by default
+(`authenticated`).
+
+| field | type | default | description |
+|---|---|---|---|
+| `authenticated` | boolean | `true` | Authenticated requests (`Authorization` header present or identity resolved by `route.auth`) bypass the cache. |
+| `cookies` | [string] | `[]` | Cookie names whose presence bypasses the cache. |
+| `headers` | [string] | `[]` | Header names whose presence bypasses the cache. |
+| `methods` | [string] | `[]` | Additional HTTP methods that bypass the cache. Only GET and HEAD are cacheable anyway — list them here to bypass even those. |
+| `paths` | [string] | `[]` | Path globs that bypass the cache. |
+
+## `CacheStore`
+
+A named cache store.
+
+| field | type | default | description |
+|---|---|---|---|
+| `disk_bytes` | ByteSize | `"10GiB"` | Disk budget. Required for `disk` and `hybrid`. |
+| `disk_path` | string \| null | `null` | Directory for on-disk objects and index. Required unless `ram`. |
+| `max_items` | integer | `1000000` | Maximum number of cached items. |
+| `max_object_bytes` | ByteSize | `"64MiB"` | Maximum size of a single cacheable object. |
+| `policy` | EvictionPolicy | `"lru"` | Eviction policy when limits are exceeded. |
+| `ram_bytes` | ByteSize | `"256MiB"` | RAM budget. Required for `ram` and `hybrid`. |
+| `tier` | CacheTier | `"ram"` | Storage tier: `ram`, `disk`, or `hybrid` (RAM in front of disk with promotion on hit). |
+
+
+
+## `AcmeChallenge`
+
+Which ACME challenge type to solve.
+
+
+## `ApiKeyLocation`
+
+API key location.
+
+
+## `ByteSize`
+
+A byte size parsed from `123`, `"123B"`, `"16KiB"`, `"10MB"`, `"4GiB"`.
+Unit-less strings and integers mean bytes. `K`/`M`/`G` suffixes are
+decimal (×1000); `Ki`/`Mi`/`Gi` are binary (×1024).
+
+
+## `CacheTier`
+
+Cache storage tier.
+
+
+## `Duration`
+
+| field | type | default | description |
+|---|---|---|---|
+| `nanos` | integer **required** |  |  |
+| `secs` | integer **required** |  |  |
+
+## `EvictionPolicy`
+
+Cache eviction policy.
+
+
+## `ExternalAccountBinding`
+
+External Account Binding credentials.
+
+| field | type | default | description |
+|---|---|---|---|
+| `key` | string **required** |  | Base64url-encoded HMAC key. |
+| `key_id` | string **required** |  | EAB key identifier. |
+
+## `LimitOverrides`
+
+Per-route limit overrides.
+
+| field | type | default | description |
+|---|---|---|---|
+| `body_bytes` | ByteSize \| null | `null` | See [`Limits::body_bytes`]. |
+| `header_bytes` | ByteSize \| null | `null` | See [`Limits::header_bytes`]. |
+
+## `ListenAddrSchema`
+
+Schema shape for a `server.listen` entry (`"ip:port"` or `{addr, tls}`).
+
+
+## `LoadBalancing`
+
+Load balancing algorithm.
+
+
+## `LogFormat`
+
+Log output format.
+
+
+## `MatchConditions`
+
+Additional match conditions. Conditions filter candidate routes; they do
+not affect path precedence.
+
+| field | type | default | description |
+|---|---|---|---|
+| `headers` | object | `{}` | Required request headers. Values match exactly, or as regex when prefixed with `re:`. |
+| `methods` | [string] | `[]` | HTTP methods, e.g. `["GET", "HEAD"]`. |
+| `query` | object | `{}` | Required query parameters (`key` must equal or regex-match the value). A value of `""` requires only presence. |
+
+## `OnDemandAcme`
+
+On-demand certificate issuance.
+
+| field | type | default | description |
+|---|---|---|---|
+| `allowed_hosts` | [string] | `[]` | Hostnames or `*.suffix` patterns allowed to trigger issuance. Empty list means on-demand never issues — an explicit allowlist is required. |
+| `enabled` | boolean | `false` | Enable issuance for hostnames not present in any site's `hosts` list. |
+| `rate` | RateSpec \| null | `null` | Maximum issuance rate, e.g. `5/hour`. |
+
+## `PrefixPair`
+
+Prefix replacement: `{ from = "/api", to = "/v1" }`. The legacy
+two-element array `["/api", "/v1"]` is also accepted.
+
+
+## `RateSpec`
+
+A rate like `100/s`, `600/m`, `10000/h`, `50000/day`. Units: `s`, `m`,
+`h`, `d` or the words `second`, `minute`, `hour`, `day` (also plural).
+
+| field | type | default | description |
+|---|---|---|---|
+| `period` | Duration **required** |  | Length of one period. |
+| `permits` | integer **required** |  | Number of permits granted per `period`. |
+
+## `RegexRewrite`
+
+Regex path rewrite: `pattern` → `replace`.
+
+| field | type | default | description |
+|---|---|---|---|
+| `pattern` | string **required** |  | Regular expression matched against the path. |
+| `replace` | string **required** |  | Replacement, may contain `$1`-style capture references. |
+
+## `TimeoutOverrides`
+
+Per-route timeout overrides; each absent field inherits the global value.
+
+| field | type | default | description |
+|---|---|---|---|
+| `body_read` | string \| null | `null` | See [`Timeouts::body_read`]. |
+| `header_read` | string \| null | `null` | See [`Timeouts::header_read`]. |
+| `idle` | string \| null | `null` | See [`Timeouts::idle`]. |
+| `request_deadline` | string \| null | `null` | See [`Timeouts::request_deadline`]; set `0s` for long-lived streams. |
+| `send` | string \| null | `null` | See [`Timeouts::send`]; also the inactivity bound applied to upgrade tunnels (e.g. WebSocket) — raise it or set `0s` for long-idle tunnels. |
+
+## `UnavailableResponse`
+
+Response served when every upstream in a cluster is unhealthy.
+
+| field | type | default | description |
+|---|---|---|---|
+| `body` | string \| null | `null` | Optional response body; a short default text is used when absent. |
+| `status` | integer | `502` | Status code returned to clients (typically 502 or 503). |
+
+## `UpstreamDns`
+
+DNS re-resolution for hostname upstreams.
+
+| field | type | default | description |
+|---|---|---|---|
+| `grace` | string | `"1m"` | After DNS records disappear, keep last-known-good addresses for this long before removing the upstream from rotation. |
+
+## `UpstreamTimeouts`
+
+Per-upstream timeouts and the per-member connection cap.
+(`[upstream.*.limits]` is accepted as an alias.)
+
+| field | type | default | description |
+|---|---|---|---|
+| `connect` | string | `"5s"` | TCP/TLS connect timeout. |
+| `idle` | string | `"1m 30s"` | Idle keep-alive time for pooled upstream connections. |
+| `max_connections` | integer | `1024` | Max concurrent connections to a single upstream. |
+| `response_header` | string | `"30s"` | Time waiting for upstream response headers. |
+
+## `UpstreamTls`
+
+TLS verification for `https://` upstreams.
+
+| field | type | default | description |
+|---|---|---|---|
+| `ca` | string \| null | `null` | Additional CA bundle (PEM) to trust. |
+| `sni` | string \| null | `null` | Override the SNI/verification hostname. |
+| `verify` | boolean | `true` | Verify the upstream certificate against the web PKI or `ca`. |
+

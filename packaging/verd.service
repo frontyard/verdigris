@@ -1,0 +1,40 @@
+[Unit]
+Description=Verdigris web server and reverse proxy
+Documentation=https://github.com/frontyard/verdigris
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/verd run --config /etc/verd/verd.toml
+ExecReload=/bin/kill -HUP $MAINPID
+# logrotate hook: reopen access-log files without a config reload
+ExecReload=/bin/kill -USR1 $MAINPID
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=30
+
+# hardening: verd binds configured ports, reads /etc/verd, writes
+# its cache/ACME state dir and log files — nothing else
+User=verd
+Group=verd
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/verd /var/log/verd
+ReadOnlyPaths=/etc/verd
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
