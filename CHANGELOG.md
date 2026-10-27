@@ -11,6 +11,16 @@ workflow publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Release flow no longer leaves `llms-full.txt` stale** — the file
+  embeds the version line from `introduction.md`, so every version
+  bump invalidated it and broke the `generated docs in sync` CI check
+  on release PRs. `release.sh` now regenerates it unconditionally
+  (`--regen-docs` still gates the schema-driven `reference.md`).
+
+## [0.4.1] - 2026-10-27
+
 ### Build & CI
 
 - **Required `docker build + trivy scan` no longer hangs on unrelated
@@ -420,7 +430,8 @@ reverse proxy with load balancing and retries, response caching
 (RAM/disk/hybrid), compression, rate limiting, CORS, security headers,
 admin API with atomic reloads, Prometheus metrics.
 
-[Unreleased]: https://github.com/frontyard/verdigris/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/frontyard/verdigris/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/frontyard/verdigris/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/frontyard/verdigris/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/frontyard/verdigris/compare/v0.2.7...v0.3.1
 [0.2.7]: https://github.com/frontyard/verdigris/compare/v0.2.6...v0.2.7
