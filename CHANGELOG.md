@@ -348,6 +348,55 @@ workflow publishes the matching section as the GitHub release notes.
   `respond.headers` or `request_headers`/`response_headers`, which now
   error instead of corrupting the wire.
 
+### Security
+
+- **`HEAD` requests no longer poison the cache** — a `HEAD` to an
+  uncached, cacheable URL stored its empty body under the shared
+  `GET` cache key, so every subsequent `GET` served `200` with
+  `Content-Length: 0` and an empty body until the entry expired. Any
+  unauthenticated client could blank any cached route. `HEAD`
+  responses are never stored now; `HEAD` *lookups* still share the
+  `GET` entry.
+- **`/purge` prefix purge actually works** — stored metadata recorded
+  the request *authority* in the field prefix purge matched on, so
+  `{"prefix": "/api"}` silently removed 0 entries. Prefix purge now
+  matches the request path as documented.
+- **`X-Forwarded-For` can no longer be spoofed through repeated
+  header lines** — `real_ip` read only the first `X-Forwarded-For`
+  line, which is fully client-controlled when a trusted proxy appends
+  its own line; all lines are now merged per RFC 7230 ordering before
+  the trusted-chain walk, fixing `ip_allow`/`ip_deny`, per-IP rate
+  limiting, and `{remote_ip}` identity behind such proxies.
+- **Malformed `Host` values are rejected with `400`** — authorities
+  containing `@`, whitespace, or other non-authority characters could
+  reach `Location` construction (e.g. `Host: brand.com@evil.net` →
+  `https://brand.com@evil.net/…` userinfo-disguised redirect) and
+  `{host}` template substitution.
+- **The admin listener enforces connection caps and io deadlines** —
+  128 concurrent connections / 16 per IP, and any read or write
+  stalled longer than 30s is dropped. The bearer check only runs
+  after a request is parsed, so unauthenticated slowloris could
+  previously pin unlimited sockets and tasks.
+- **`respond` bodies can no longer reflect request data under markup
+  content-types** — `{path}`, `{query}`, `{args}`, `{uri}`, and
+  `{request_id}` combined with `text/html` (or any `+html`/`+svg`
+  media type) was reflected XSS by configuration; it is now a config
+  error rather than a warning. Alphabet-constrained placeholders
+  (`{host}`, `{scheme}`, `{remote_ip}`, `{method}`) remain allowed,
+  as does any placeholder under non-markup content-types.
+- **`redirect.to` templates can no longer emit scheme-relative
+  `Location`s** — a template starting with `{path}`/`{uri}` (or a lone
+  `/`) combined with a decoded `/\host` path produced
+  `Location: /\evil.com`, which WHATWG URL parsing folds into
+  `//evil.com` — an open redirect to an attacker-chosen host.
+  Scheme-relative targets are now refused (header dropped, warning
+  logged).
+- **ACME on-demand retries no longer drain the issuance rate limit** —
+  repeated handshakes for a host whose issuance was already in flight
+  consumed rate-window permits, so ~5 SNI probes could starve all
+  on-demand issuance for the window. The gate now only charges when a
+  new order actually starts.
+
 ### Fixed
 
 - **Site-scoped `auth.basic.htpasswd` didn't rebase against its

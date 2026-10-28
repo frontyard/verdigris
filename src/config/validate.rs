@@ -123,19 +123,16 @@ const KNOWN_PLACEHOLDERS: [&str; 9] = [
     "request_id",
 ];
 
-/// The subset that renders request-derived data — reflected verbatim
-/// into a body, so `text/html` + any of these is XSS by config
-/// (`{scheme}` only ever renders `http`/`https`).
-const REFLECTED_PLACEHOLDERS: [&str; 8] = [
-    "path",
-    "host",
-    "query",
-    "method",
-    "uri",
-    "args",
-    "remote_ip",
-    "request_id",
-];
+/// Reflected placeholders an attacker can steer markup through:
+/// `{path}` decodes `%3C` to a real `<`, `{request_id}` is any
+/// printable ASCII, and `{query}`/`{args}`/`{uri}` reflect `'`/`=` raw
+/// — enough to break out of a quoted HTML attribute. Under a markup
+/// content-type these are a config error: there is no safe way to
+/// splice them into HTML unescaped. (`{host}` is authority-charset,
+/// `{scheme}` only http/https, `{remote_ip}` an IP literal, and
+/// `{method}` an HTTP token — none can carry markup or break out of
+/// attributes, so HTML + those alone stays allowed.)
+const UNSAFE_REFLECTED_PLACEHOLDERS: [&str; 5] = ["path", "query", "args", "uri", "request_id"];
 
 /// `{ident}`-looking tokens in `redirect.to`/`respond.body` templates.
 /// The placeholder set is closed; anything else passes through
@@ -1369,18 +1366,24 @@ fn check_respond(ctx: &mut Ctx, path: &str, resp: &RespondHandler) {
             ),
         );
     }
-    // reflected-request placeholders + text/html = XSS by config
+    // attacker-rich reflected placeholders under a markup content-type
+    // = reflected XSS by config — refuse outright. `html`/`svg` as
+    // substrings catch `+html`/`+svg` media-type suffixes too.
     let htmlish = resp.headers.iter().any(|(k, v)| {
-        k.eq_ignore_ascii_case("content-type") && v.to_ascii_lowercase().contains("text/html")
+        if !k.eq_ignore_ascii_case("content-type") {
+            return false;
+        }
+        let v = v.to_ascii_lowercase();
+        v.contains("html") || v.contains("svg")
     });
     if htmlish
-        && REFLECTED_PLACEHOLDERS
+        && let Some(p) = UNSAFE_REFLECTED_PLACEHOLDERS
             .iter()
-            .any(|p| resp.body.contains(&format!("{{{p}}}")))
+            .find(|p| resp.body.contains(&format!("{{{p}}}")))
     {
-        ctx.warn(
+        ctx.error(
             format!("{path}.respond"),
-            "respond body substitutes request data under a text/html content-type — reflected content without escaping; use text/plain",
+            format!("respond body reflects {{{p}}} under a markup content-type — reflected XSS; use text/plain, or stick to {{host}}/{{scheme}}/{{remote_ip}}/{{method}}"),
         );
     }
 }
@@ -3278,7 +3281,11 @@ response_headers = { set = { "x-a" = "1" } }
             "site[\"x\"].route[2]",
             "not a valid HTTP status"
         ));
-        assert!(has_warn(&cfg, "site[\"x\"].route[3].respond", "text/plain"));
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].route[3].respond",
+            "reflected XSS"
+        ));
         assert!(errors(&cfg).iter().all(|d| !d.path.contains("route[4]")));
     }
 
@@ -3944,26 +3951,56 @@ sample = 1.5
     }
 
     #[test]
-    fn respond_html_warns_on_every_reflected_placeholder() {
-        // {uri}/{args}/{remote_ip}/{request_id} reflect request data the
-        // same way {path}/{query} do — the text/html check covers them
-        for p in ["uri", "args", "remote_ip", "request_id"] {
+    fn respond_markup_errors_on_unsafe_placeholders() {
+        // decoded `{path}` carries `<` (`%3C`), `{request_id}` is any
+        // printable ASCII, and `{query}`/`{args}`/`{uri}` reflect `'`
+        // and `=` raw — attribute-context breakout. Under any markup
+        // content-type these are a config error, not a warning.
+        for p in ["path", "query", "args", "uri", "request_id"] {
             let cfg = parse_test_config(&site_route(&format!(
                 "respond = {{ status = 200, body = \"{{{p}}}\", headers = {{ \"content-type\" = \"text/html\" }} }}"
             )));
             assert!(
-                has_warn(&cfg, "site[\"x\"].route[0].respond", "text/plain"),
-                "placeholder {p} should warn"
+                has_err(&cfg, "site[\"x\"].route[0].respond", "reflected XSS"),
+                "placeholder {p} should error"
             );
         }
-        // {scheme} renders only http/https — no warning
+        // `+html`/`+svg` media-type suffixes are markup too
+        for ct in ["application/xhtml+xml", "image/svg+xml"] {
+            let cfg = parse_test_config(&site_route(&format!(
+                "respond = {{ status = 200, body = \"{{path}}\", headers = {{ \"content-type\" = \"{ct}\" }} }}"
+            )));
+            assert!(
+                has_err(&cfg, "site[\"x\"].route[0].respond", "reflected XSS"),
+                "{ct} should error"
+            );
+        }
+        // alphabet-constrained placeholders cannot carry markup or
+        // break out of attributes — allowed under text/html
+        for p in ["host", "scheme", "remote_ip", "method"] {
+            let cfg = parse_test_config(&site_route(&format!(
+                "respond = {{ status = 200, body = \"{{{p}}}\", headers = {{ \"content-type\" = \"text/html\" }} }}"
+            )));
+            assert!(
+                !has_err(&cfg, "site[\"x\"].route[0].respond", "reflected XSS"),
+                "placeholder {p} must stay allowed"
+            );
+        }
+        // and everything stays allowed under non-markup types —
+        // verbatim reflection is harmless when it can't render
         let cfg = parse_test_config(&site_route(
-            "respond = { status = 200, body = \"{scheme}\", headers = { \"content-type\" = \"text/html\" } }",
+            "respond = { status = 200, body = \"{path} {request_id}\", headers = { \"content-type\" = \"text/plain\" } }",
         ));
-        assert!(!has_warn(
+        assert!(!has_err(
             &cfg,
             "site[\"x\"].route[0].respond",
-            "text/plain"
+            "reflected XSS"
+        ));
+        let cfg = parse_test_config(&site_route("respond = { status = 200, body = \"{path}\" }"));
+        assert!(!has_err(
+            &cfg,
+            "site[\"x\"].route[0].respond",
+            "reflected XSS"
         ));
     }
 

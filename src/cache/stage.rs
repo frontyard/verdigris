@@ -289,6 +289,7 @@ pub async fn serve(
                     &key,
                     run_handler(route, req, req_ctx).await,
                     &req_headers,
+                    head_only,
                     had_auth,
                     None,
                 )
@@ -330,6 +331,7 @@ async fn follower(
             &key,
             run_handler(route, req, req_ctx).await,
             req_headers,
+            head_only,
             had_auth,
             None,
         )
@@ -424,7 +426,7 @@ async fn fetch_and_decide(
     }
 
     tag(
-        maybe_store(cm, key, resp, req_headers, had_auth, guard).await,
+        maybe_store(cm, key, resp, req_headers, head_only, had_auth, guard).await,
         "MISS",
         cm,
     )
@@ -514,15 +516,23 @@ fn conditional_request(req: &http::Request<BoxBody>, meta: &Meta) -> http::Reque
 
 /// Decide whether `resp` may be stored; if so wrap its body in a tee
 /// that commits on completion. The fetch `guard` moves into the commit
-/// task so coalesced followers wake to a landed entry.
+/// task so coalesced followers wake to a landed entry. `head_only`
+/// responses are never stored: HEAD shares the GET key, and persisting
+/// its empty body would poison subsequent GETs with a 200 + `Content-
+/// Length: 0` entry until expiry. (A HEAD 304 still freshens an existing
+/// entry via the revalidation path — that's RFC 9111 §4.3.5.)
 async fn maybe_store(
     cm: &RouteCacheMw,
     key: &Key,
     resp: http::Response<BoxBody>,
     req_headers: &HeaderMap,
+    head_only: bool,
     had_auth: bool,
     guard: Option<FetchGuard>,
 ) -> http::Response<BoxBody> {
+    if head_only {
+        return resp;
+    }
     let dir = semantics::response_directives(resp.headers());
     let kind = semantics::storable(resp.status(), &dir, resp.headers(), had_auth);
     if kind == Store::No {
@@ -550,7 +560,8 @@ async fn maybe_store(
         path: key
             .raw
             .split('\u{1f}')
-            .nth(2)
+            .nth(3)
+            .and_then(|t| t.split('?').next())
             .unwrap_or_default()
             .to_string(),
         status: parts.status.as_u16(),
@@ -666,7 +677,7 @@ fn spawn_revalidate(
                 .await;
             return;
         }
-        let resp = maybe_store(&cm, &key, resp, &req_headers, false, None).await;
+        let resp = maybe_store(&cm, &key, resp, &req_headers, false, false, None).await;
         // drain the revalidated body so the tee can commit
         let _ = http_body_util::BodyExt::collect(resp.into_body()).await;
     });
@@ -1288,23 +1299,47 @@ cache = { store = "c", vary_headers = ["x-tenant"] }
     }
 
     #[tokio::test]
-    async fn head_requests_use_same_entry() {
+    async fn head_shares_get_but_never_stores() {
         let rig = Rig::new(BASE);
-        let req = http::Request::builder()
-            .method("HEAD")
-            .uri("/p")
-            .body(body::empty())
-            .unwrap();
-        let r = rig.call(req, (0, 0), false).await;
+        let head = || {
+            http::Request::builder()
+                .method("HEAD")
+                .uri("/p")
+                .body(body::empty())
+                .unwrap()
+        };
+        // HEAD on an empty cache: MISS, and nothing may be recorded —
+        // storing the empty HEAD body under the shared GET key poisoned
+        // subsequent GETs with `200 Content-Length: 0` until expiry
+        let r = rig.call(head(), (0, 0), false).await;
         assert_eq!(x_cache(&r), "MISS");
         let _ = http_body_util::BodyExt::collect(r.into_body()).await;
         tokio::task::yield_now().await;
-        let req = http::Request::builder()
-            .method("HEAD")
-            .uri("/p")
-            .body(body::empty())
-            .unwrap();
-        let r = rig.call(req, (0, 0), false).await;
+        // the GET must still fetch the real body
+        let r = rig.call(req_for("/p", &[]), (0, 0), false).await;
+        assert_eq!(x_cache(&r), "MISS");
+        let got = http_body_util::BodyExt::collect(r.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        assert_eq!(&got[..], b"hi");
+        tokio::task::yield_now().await;
+        // HEAD *lookups* still ride the stored GET entry
+        let r = rig.call(head(), (0, 0), false).await;
         assert_eq!(x_cache(&r), "HIT");
+    }
+
+    #[tokio::test]
+    async fn prefix_purge_matches_request_path() {
+        let rig = Rig::new(BASE);
+        let r = rig.call(req_for("/p", &[]), (0, 0), false).await;
+        assert_eq!(x_cache(&r), "MISS");
+        let _ = http_body_util::BodyExt::collect(r.into_body()).await;
+        tokio::task::yield_now().await;
+        // regression: meta.path held the authority (key field 2), not the
+        // request path — a prefix purge could never match anything
+        assert_eq!(rig.cm().store.purge_prefix("/p").await, 1);
+        let r = rig.call(req_for("/p", &[]), (0, 0), false).await;
+        assert_eq!(x_cache(&r), "MISS");
     }
 }

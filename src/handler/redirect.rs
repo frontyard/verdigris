@@ -67,9 +67,40 @@ impl Redirect {
         };
         let mut resp = http::Response::new(body::empty());
         *resp.status_mut() = self.status;
+        // Protocol-relative guard: templates whose substituted result
+        // starts with `//` — or with `\`, or `/`+`\`, which WHATWG URL
+        // parsing folds into `//` for http/https — are open redirects
+        // (`Location: /\evil.com` navigates to `https://evil.com`).
+        // `{path}` reaches here decoded, so `/%5Cevil.com` survives
+        // normalization as `/\evil.com` (backslash is not a separator
+        // the normalizer collapses).
         if let Ok(v) = HeaderValue::from_str(&location) {
-            resp.headers_mut().insert(http::header::LOCATION, v);
+            if is_scheme_relative(&location) {
+                tracing::warn!(target = %self.target_name(), "refused scheme-relative redirect target");
+            } else {
+                resp.headers_mut().insert(http::header::LOCATION, v);
+            }
         }
         resp
+    }
+
+    fn target_name(&self) -> &'static str {
+        match &self.target {
+            Target::To(_) => "to",
+            Target::Host(_) => "host",
+            Target::Scheme(_) => "scheme",
+        }
+    }
+}
+
+/// True when `location` resolves as a scheme-relative URL — `//host`,
+/// `/\host`, `\/host` or any leading `\` (WHATWG treats a leading
+/// backslash as `//` for special schemes).
+fn is_scheme_relative(location: &str) -> bool {
+    let b = location.as_bytes();
+    match b.first() {
+        Some(b'\\') => true,
+        Some(b'/') => matches!(b.get(1), Some(b'/') | Some(b'\\')),
+        _ => false,
     }
 }

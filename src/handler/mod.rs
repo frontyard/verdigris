@@ -328,6 +328,39 @@ mod tests {
                 .starts_with("https://h/")
         );
 
+        // scheme-relative targets refused: a decoded `/\evil.com` path
+        // (from `/%5Cevil.com`) makes `to = "{path}"` render a
+        // protocol-relative Location — WHATWG folds `/\` into `//` →
+        // open redirect. The header is dropped instead of emitted.
+        let mut evil_ctx = ctx();
+        evil_ctx.path = "/\\evil.com".into();
+        let c = cfg::RedirectHandler {
+            to: Some("{path}".into()),
+            ..Default::default()
+        };
+        let r = redirect::Redirect::build(&c, "s").unwrap();
+        let resp = r.handle(&req(Method::GET, "/%5Cevil.com"), &evil_ctx);
+        assert!(resp.headers().get("location").is_none());
+        // same for a `//` result (`to = "/{uri}"`)
+        let c = cfg::RedirectHandler {
+            to: Some("/{uri}".into()),
+            ..Default::default()
+        };
+        let r = redirect::Redirect::build(&c, "s").unwrap();
+        let resp = r.handle(&req(Method::GET, "/evil.com"), &ctx());
+        assert!(resp.headers().get("location").is_none());
+        // ordinary absolute/prefixed targets still redirect fine
+        let c = cfg::RedirectHandler {
+            to: Some("https://new{uri}".into()),
+            ..Default::default()
+        };
+        let r = redirect::Redirect::build(&c, "s").unwrap();
+        let resp = r.handle(&req(Method::GET, "/p"), &ctx());
+        assert_eq!(
+            resp.headers()["location"].to_str().unwrap(),
+            "https://new/p"
+        );
+
         // nothing configured → Missing
         let c = cfg::RedirectHandler::default();
         assert!(matches!(

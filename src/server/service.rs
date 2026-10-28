@@ -149,6 +149,12 @@ async fn pipeline(
         .map(str::to_string)
         .or_else(|| parts.uri.authority().map(|a| a.to_string()))
         .ok_or_else(|| error_response(http::StatusCode::BAD_REQUEST, "missing Host"))?;
+    if !host_is_authority(&host) {
+        return Err(error_response(
+            http::StatusCode::BAD_REQUEST,
+            "malformed Host",
+        ));
+    }
     let (site_idx, site) = rt
         .hosts
         .lookup_idx(&host)
@@ -457,13 +463,17 @@ pub fn real_ip(peer: IpAddr, parts: &http::request::Parts, trusted: &[ipnet::IpN
     if !trusted.iter().any(|n| n.contains(&peer)) {
         return peer;
     }
-    let xff = parts
+    // Repeated XFF lines are legal (RFC 7230 §3.2.2 — equivalent to one
+    // comma-joined field). A trusted proxy that *appends* its own header
+    // line rather than rewriting in place leaves the client's line in
+    // front; reading only the first line would let the client dictate
+    // `client_ip` and defeat IP ACLs and per-IP rate limits.
+    let ips: Vec<IpAddr> = parts
         .headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok());
-    let Some(xff) = xff else { return peer };
-    let ips: Vec<IpAddr> = xff
-        .split(',')
+        .get_all("x-forwarded-for")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
         .filter_map(|s| s.trim().parse().ok())
         .collect();
     // leftmost entry is the original client per convention; entries to the
@@ -475,6 +485,19 @@ pub fn real_ip(peer: IpAddr, parts: &http::request::Parts, trusted: &[ipnet::IpN
         }
     }
     ips.first().copied().unwrap_or(peer)
+}
+
+/// A `Host`/`:authority` value must be a bare authority: DNS name, IPv4,
+/// or `[v6]`, optional `:port`. Anything else — `user@host`, whitespace,
+/// the exotic sub-delims reg-name technically allows — is either a parse
+/// artifact or an attempt to sneak a userinfo `@` into host-reflecting
+/// output (`Location: https://brand@evil/…`, `{host}` templates) — the
+/// URI `authority()` fallback takes the same path, so it is covered too.
+fn host_is_authority(host: &str) -> bool {
+    !host.is_empty()
+        && host.bytes().all(|b| {
+            b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b':' | b'[' | b']')
+        })
 }
 
 /// Build a plain-text error response.
@@ -526,6 +549,54 @@ mod tests {
         // garbage XFF → peer
         let p = mk(Some("not-an-ip"));
         assert_eq!(real_ip(trusted_peer, &p, &trusted), trusted_peer);
+    }
+
+    #[test]
+    fn host_authority_chars() {
+        for ok in [
+            "example.com",
+            "EXAMPLE.com.",
+            "a-b.example.com:8443",
+            "127.0.0.1:8080",
+            "[::1]",
+            "[::1]:443",
+            "under_score.local",
+        ] {
+            assert!(host_is_authority(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "brand.com@evil.net",
+            "evil.net@",
+            "a b.com",
+            "a\\b.com",
+            "a/b.com",
+            "a?b.com",
+            "a;b.com",
+            "a,b.com",
+            "100%",
+        ] {
+            assert!(!host_is_authority(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn real_ip_multi_line_xff() {
+        // a trusted proxy that *appends* a second XFF line leaves the
+        // client-controlled first line in place — the merged rightmost
+        // entries are the verifiable claim
+        let trusted: Vec<ipnet::IpNet> = vec!["10.0.0.0/8".parse().unwrap()];
+        let trusted_peer: IpAddr = "10.0.0.5".parse().unwrap();
+        let mut b = http::Request::builder().uri("/");
+        b = b
+            .header("x-forwarded-for", "1.1.1.1")
+            .header("x-forwarded-for", "2.2.2.2");
+        let p = b.body(crate::body::empty()).unwrap().into_parts().0;
+        assert_eq!(
+            real_ip(trusted_peer, &p, &trusted),
+            IpAddr::from([2, 2, 2, 2]),
+            "client-forged first line must not win"
+        );
     }
 
     #[test]

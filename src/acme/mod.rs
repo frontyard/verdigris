@@ -566,13 +566,18 @@ impl OnDemandIssue for OnDemand {
             tracing::warn!(host, "on-demand TLS: host not in allowed_hosts");
             return None;
         }
-        if !self.rate_ok() {
-            tracing::warn!(host, "on-demand TLS: rate limit reached");
-            return None;
-        }
         use dashmap::mapref::entry::Entry;
         let wait = match self.inflight.entry(host.clone()) {
+            // the rate gate sits inside the Vacant arm: handshakes for a
+            // host whose issuance is already running ride the same wait
+            // and must NOT consume permits — retrying one slow issuance
+            // would otherwise drain the window and starve every other
+            // allowed host
             Entry::Vacant(v) => {
+                if !self.rate_ok() {
+                    tracing::warn!(host, "on-demand TLS: rate limit reached");
+                    return None;
+                }
                 let w = Arc::new(IssueWait::default());
                 if let Some(mgr) = self.mgr.upgrade() {
                     let w2 = w.clone();
