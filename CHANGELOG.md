@@ -275,7 +275,7 @@ workflow publishes the matching section as the GitHub release notes.
   auth, and `tls = "auto"` on non-public names (IPs, `localhost`,
   `.internal`, …) or on a hostless site without on-demand issuance.
 - **BREAKING: config paths anchor to their file** — `site.root`,
-  `route.static.root`, `tls.cert`/`key`, `auth.basic.htpasswd`,
+  `route.static` / `route.static.root`, `tls.cert`/`key`, `auth.basic.htpasswd`,
   `cache.*.disk_path`, `acme.storage`/`ca_roots`,
   `upstream.*.tls.ca`, and the log outputs now resolve relative to the
   directory of the file (or `include`d fragment) that contains them
@@ -382,7 +382,9 @@ workflow publishes the matching section as the GitHub release notes.
   128 concurrent connections / 16 per IP, and any read or write
   stalled longer than 30s is dropped. The bearer check only runs
   after a request is parsed, so unauthenticated slowloris could
-  previously pin unlimited sockets and tasks.
+  previously pin unlimited sockets and tasks. Shutdown drains
+  in-flight connections on a bounded 5s grace so an idle keep-alive
+  socket can't hold process exit.
 - **`respond` bodies can no longer reflect request data under markup
   content-types** — `{path}`, `{query}`, `{args}`, `{uri}`, and
   `{request_id}` combined with `text/html` (or any `+html`/`+svg`

@@ -209,7 +209,8 @@ catch-alls. Resolution:
 
 Filesystem paths in config are relative to **the file that contains
 them** — the main file or an `include`d fragment — so a config tree
-moves as a unit. This covers `site.*.root`, `route.*.static.root`,
+moves as a unit. This covers `site.*.root`, `route.*.static` (scalar
+shorthand and `static.root` alike),
 `*.tls.cert`/`key`, `auth.basic.htpasswd`, `cache.*.disk_path`,
 `acme.storage`/`ca_roots`, `upstream.*.tls.ca`, `log.output`,
 `log.access.output`.

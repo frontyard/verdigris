@@ -13,7 +13,7 @@ default = true
 tls = "off"
 
 [[site.route]]
-path = "/exact"
+exact = "/exact"
 respond = { body = "e" }
 
 [[site.route]]

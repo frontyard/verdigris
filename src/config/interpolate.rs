@@ -55,7 +55,9 @@ pub struct Report {
     /// Files referenced by `${file:…}` markers, paired with the dotted
     /// config path that held each marker (watch needs the files;
     /// permission diagnostics need to know whether the receiving field
-    /// is secret-bearing).
+    /// is secret-bearing). A ref behind a symlink yields two entries —
+    /// canonical target first, then the configured path — so both the
+    /// backing file and the directory that can repoint it stay watched.
     pub file_refs: Vec<(String, PathBuf)>,
 }
 
@@ -173,15 +175,23 @@ fn resolve(
         } else {
             path
         };
-        let path = path.canonicalize().unwrap_or(path);
-        report.file_refs.push((at.to_string(), path.clone()));
-        return match std::fs::read_to_string(&path) {
+        // Canonicalize so the ref names the real backing file — but a
+        // k8s-style mount rotates by repointing a `..data` symlink in
+        // the *configured* directory, and only watching the literal
+        // path keeps that directory observed. Record both when they
+        // differ.
+        let canon = path.canonicalize().unwrap_or_else(|_| path.clone());
+        report.file_refs.push((at.to_string(), canon.clone()));
+        if canon != path {
+            report.file_refs.push((at.to_string(), path));
+        }
+        return match std::fs::read_to_string(&canon) {
             Ok(content) => Ok(content.trim_end_matches(['\n', '\r']).to_string()),
             Err(e) => match default {
                 Some(d) => Ok(d.to_string()),
                 None => Err(InterpolateError::UnreadableFile {
                     at: at.to_string(),
-                    path: path.clone(),
+                    path: canon,
                     cause: e.to_string(),
                 }),
             },
@@ -267,6 +277,25 @@ mod tests {
         assert_eq!(v.as_str().unwrap(), "hunter2");
         assert_eq!(r.file_refs.len(), 1);
         assert_eq!(r.file_refs[0].1, f.path().canonicalize().unwrap());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn symlinked_file_ref_watches_literal_and_target() {
+        // A `${file:}` ref through a symlink must keep the configured
+        // path's directory in the watch plan — that's where k8s-style
+        // `..data` swaps happen — alongside the canonical target.
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real-secret");
+        std::fs::write(&real, "via-symlink").unwrap();
+        let link = dir.path().join("linked");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let mut v = val(&format!("${{file:{}}}", link.display()));
+        let r = interp(&mut v).unwrap();
+        assert_eq!(v.as_str().unwrap(), "via-symlink");
+        assert_eq!(r.file_refs.len(), 2);
+        assert_eq!(r.file_refs[0].1, link.canonicalize().unwrap());
+        assert_eq!(r.file_refs[1].1, link);
     }
 
     #[test]

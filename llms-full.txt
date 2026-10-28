@@ -1678,7 +1678,8 @@ SIGHUP, `POST /reload`, or `--watch` file changes all take the same path:
    the new one immediately.
 
 The admin listener itself (address + TLS pair) is boot-fixed; the bearer
-token rotates with the config.
+token rotates with the config. The `[log]` sink is boot-fixed too —
+level/format/output changes need a restart.
 
 
 

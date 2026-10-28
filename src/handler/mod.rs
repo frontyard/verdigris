@@ -349,6 +349,18 @@ mod tests {
         let r = redirect::Redirect::build(&c, "s").unwrap();
         let resp = r.handle(&req(Method::GET, "/evil.com"), &ctx());
         assert!(resp.headers().get("location").is_none());
+        // encoded separators in `{uri}` (the raw request target) are
+        // refused the same way — `%5C`/`%2F` at the head decode to the
+        // same scheme-relative forms the literal check rejects
+        let c = cfg::RedirectHandler {
+            to: Some("{uri}".into()),
+            ..Default::default()
+        };
+        let r = redirect::Redirect::build(&c, "s").unwrap();
+        let resp = r.handle(&req(Method::GET, "/%5C%5Cevil.com"), &ctx());
+        assert!(resp.headers().get("location").is_none());
+        let resp = r.handle(&req(Method::GET, "/%2f%2fevil.com"), &ctx());
+        assert!(resp.headers().get("location").is_none());
         // ordinary absolute/prefixed targets still redirect fine
         let c = cfg::RedirectHandler {
             to: Some("https://new{uri}".into()),

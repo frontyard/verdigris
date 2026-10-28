@@ -602,7 +602,7 @@ fn cmd_validate(
         return fatal(e.to_string());
     }
 
-    let ok = !(strict && !diags.is_empty());
+    let ok = !strict || diags.is_empty();
     if json {
         println!(
             "{}",

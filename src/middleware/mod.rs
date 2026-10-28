@@ -339,7 +339,7 @@ impl Factory {
         for site in &cfg.site {
             match site.rate_limit.as_ref().filter(|rl| rl.enabled) {
                 Some(rl) => {
-                    let rl = Arc::new(RateLimiter::build(rl)?);
+                    let rl = Arc::new(RateLimiter::build_site(rl)?);
                     limiters.push(rl.clone());
                     site_limiters.push(Some(rl));
                 }

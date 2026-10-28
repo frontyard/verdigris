@@ -95,12 +95,19 @@ impl Redirect {
 
 /// True when `location` resolves as a scheme-relative URL — `//host`,
 /// `/\host`, `\/host` or any leading `\` (WHATWG treats a leading
-/// backslash as `//` for special schemes).
+/// backslash as `//` for special schemes). The check looks through a
+/// percent-encoded prefix too: `{uri}` substitutes the raw request
+/// target, so `/%5Cevil.com` arrives encoded — the decoded form is
+/// what `{path}`-style templates are refused for, and any client that
+/// decodes-then-reparses would turn it into the same open redirect.
 fn is_scheme_relative(location: &str) -> bool {
-    let b = location.as_bytes();
-    match b.first() {
+    // only positions 0-1 can change the authority — decode just the
+    // head (an incomplete `%x` tail decodes to literals, harmlessly)
+    let head = location.get(..8).unwrap_or(location);
+    let mut decoded = percent_encoding::percent_decode_str(head).take(2);
+    match decoded.next() {
         Some(b'\\') => true,
-        Some(b'/') => matches!(b.get(1), Some(b'/') | Some(b'\\')),
+        Some(b'/') => matches!(decoded.next(), Some(b'/') | Some(b'\\')),
         _ => false,
     }
 }

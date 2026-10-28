@@ -382,6 +382,8 @@ fn redact_toml(v: &mut toml::Value, path: &mut Vec<String>, under_secret: bool) 
 /// document values and keep their documented CWD-relative meaning.
 const PATH_FIELDS: &[&str] = &[
     "site.*.root",
+    // `static = "./pub"` shorthand — the scalar IS the root
+    "site.*.route.*.static",
     "site.*.route.*.static.root",
     "site.*.tls.cert",
     "site.*.tls.key",
@@ -972,21 +974,32 @@ fn load_document_impl(
     // failure is not an interpolation artifact (`${…}` inside a typed
     // field never parses raw).
     if let Err(e) = serde_path_to_error::deserialize::<toml::Value, Config>(value.clone()) {
-        let msg = match toml::from_str::<Config>(text) {
-            Err(raw)
-                if raw
-                    .span()
-                    .is_none_or(|s| !text.get(s.clone()).is_some_and(|t| t.contains('$'))) =>
-            {
-                raw.to_string()
-            }
-            _ => format!(
-                "{}: {}",
-                normalize_serde_path(&e.path().to_string()),
-                e.inner()
-            ),
-        };
-        return Err(LoadError::Schema(path.to_path_buf(), did_you_mean(&msg)));
+        // Merge-resolvable failures defer to the post-merge deserialize
+        // in `load_inner`: a legal fragment may carry only half of a
+        // required table (`[admin.tls]` cert here, key in the root doc).
+        // `missing field` is the plain required-field case; the
+        // shorthand-or-table deserializers report an incomplete table
+        // as `must be …`. Merge only adds members, so anything else —
+        // unknown field, wrong type, bad value — is final here and gets
+        // the better per-document error.
+        let inner = e.inner().to_string();
+        if !inner.contains("missing field") && !inner.contains("must be") {
+            let msg = match toml::from_str::<Config>(text) {
+                Err(raw)
+                    if raw
+                        .span()
+                        .is_none_or(|s| !text.get(s.clone()).is_some_and(|t| t.contains('$'))) =>
+                {
+                    raw.to_string()
+                }
+                _ => format!(
+                    "{}: {}",
+                    normalize_serde_path(&e.path().to_string()),
+                    e.inner()
+                ),
+            };
+            return Err(LoadError::Schema(path.to_path_buf(), did_you_mean(&msg)));
+        }
     }
 
     // provenance of every leaf already in `value` — lets a merge
@@ -2767,6 +2780,55 @@ response_headers = { enabled = false }
                 loaded.config.site[0].root.as_deref(),
                 Some(Path::new("/srv/www"))
             );
+        }
+
+        #[test]
+        fn route_static_scalar_rebases_too() {
+            // `static = "./pub"` is the scalar form of `static.root` —
+            // its relative path anchors on the document's dir either way
+            let dir = tempfile::tempdir().unwrap();
+            let main = write(
+                dir.path(),
+                "verd.toml",
+                "[[site]]\nhosts = [\"a\"]\n[[site.route]]\nprefix = \"/\"\nstatic = \"./pub\"\n[[site.route]]\nprefix = \"/t\"\nstatic = { root = \"./pub2\" }\n",
+            );
+            let loaded = load(&main).unwrap();
+            let routes = &loaded.config.site[0].route;
+            assert_eq!(
+                routes[0].static_files.as_ref().map(|s| s.root.as_path()),
+                Some(dir.path().join("pub").as_path())
+            );
+            assert_eq!(
+                routes[1].static_files.as_ref().map(|s| s.root.as_path()),
+                Some(dir.path().join("pub2").as_path())
+            );
+        }
+
+        #[test]
+        fn split_required_tables_merge() {
+            // cert in the root doc, key in a fragment — each document
+            // is incomplete alone, but the merge forms a valid
+            // [admin.tls]; required-field schema checks must run on
+            // the merged result, not per document
+            let dir = tempfile::tempdir().unwrap();
+            let main = write(
+                dir.path(),
+                "verd.toml",
+                "include = [\"one.toml\"]\n[admin.tls]\ncert = \"c.pem\"\n[[site]]\nhosts = [\"a\"]\nroot = \"/x\"\n",
+            );
+            write(dir.path(), "one.toml", "[admin.tls]\nkey = \"k.pem\"\n");
+            let loaded = load(&main).unwrap();
+            assert!(matches!(
+                loaded.config.admin.tls,
+                Some(model::AdminTls::Manual(_))
+            ));
+            // ... and a still-incomplete table fails post-merge
+            let main2 = write(
+                dir.path(),
+                "v2.toml",
+                "include = [\"one.toml\"]\n[[site]]\nhosts = [\"a\"]\nroot = \"/x\"\n",
+            );
+            assert!(matches!(load(&main2), Err(LoadError::Schema(_, _))));
         }
 
         #[test]

@@ -419,6 +419,21 @@ const ADMIN_MAX_PER_IP: usize = 16;
 /// Any single stalled read or write beyond this kills the connection —
 /// slowloris header drip, drip-fed bodies, and never-read responses.
 const ADMIN_IO_IDLE: std::time::Duration = std::time::Duration::from_secs(30);
+/// Grace window for in-flight connections during shutdown drain —
+/// a lingering keep-alive socket must not hold process exit.
+const ADMIN_DRAIN: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Drain in-flight connection tasks on shutdown, bounded by
+/// `ADMIN_DRAIN`: requests get a grace window to finish, then any
+/// lingering connection (idle keep-alive included) is aborted —
+/// `StalledIo` alone would hold exit up to `ADMIN_IO_IDLE` per conn.
+async fn drain_conns(conns: &mut tokio::task::JoinSet<()>) {
+    let drain = async { while conns.join_next().await.is_some() {} };
+    if tokio::time::timeout(ADMIN_DRAIN, drain).await.is_err() {
+        tracing::debug!("admin drain deadline reached — aborting lingering connections");
+        conns.abort_all();
+    }
+}
 
 impl AdminCaps {
     fn new() -> Arc<Self> {
@@ -618,7 +633,7 @@ async fn serve_plain(
             }
         }
     }
-    while conns.join_next().await.is_some() {}
+    drain_conns(&mut conns).await;
     Ok(())
 }
 
@@ -690,7 +705,7 @@ async fn serve_tls(
             }
         }
     }
-    while conns.join_next().await.is_some() {}
+    drain_conns(&mut conns).await;
     Ok(())
 }
 
