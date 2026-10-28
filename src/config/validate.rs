@@ -109,30 +109,52 @@ fn check_host_target(ctx: &mut Ctx, path: String, v: &str, extra: &str) {
     }
 }
 
+/// The closed placeholder set `redirect.to`, `respond.body`, and
+/// `upstream.*.unavailable.body` substitute at request time.
+const KNOWN_PLACEHOLDERS: [&str; 9] = [
+    "path",
+    "host",
+    "query",
+    "method",
+    "scheme",
+    "uri",
+    "args",
+    "remote_ip",
+    "request_id",
+];
+
+/// The subset that renders request-derived data — reflected verbatim
+/// into a body, so `text/html` + any of these is XSS by config
+/// (`{scheme}` only ever renders `http`/`https`).
+const REFLECTED_PLACEHOLDERS: [&str; 8] = [
+    "path",
+    "host",
+    "query",
+    "method",
+    "uri",
+    "args",
+    "remote_ip",
+    "request_id",
+];
+
 /// `{ident}`-looking tokens in `redirect.to`/`respond.body` templates.
 /// The placeholder set is closed; anything else passes through
 /// literally at request time — almost always a typo, but possibly
 /// intentional text, so warn rather than error.
 fn check_placeholder_tokens(ctx: &mut Ctx, path: &str, template: &str) {
-    const KNOWN: [&str; 9] = [
-        "path",
-        "host",
-        "query",
-        "method",
-        "scheme",
-        "uri",
-        "args",
-        "remote_ip",
-        "request_id",
-    ];
     let mut seen = HashSet::new();
     for cap in placeholder_re().captures_iter(template) {
         let name = cap[1].to_string();
-        if !KNOWN.contains(&name.as_str()) && seen.insert(name.clone()) {
+        if !KNOWN_PLACEHOLDERS.contains(&name.as_str()) && seen.insert(name.clone()) {
+            let known = KNOWN_PLACEHOLDERS
+                .iter()
+                .map(|p| format!("{{{p}}}"))
+                .collect::<Vec<_>>()
+                .join(", ");
             ctx.warn(
                 path.to_string(),
                 format!(
-                    "unknown placeholder {{{name}}} in {template:?} — the closed set is {{path}}, {{host}}, {{query}}, {{method}}, {{scheme}}, {{uri}}, {{args}}, {{remote_ip}}, {{request_id}}; other text passes through literally"
+                    "unknown placeholder {{{name}}} in {template:?} — the closed set is {known}; other text passes through literally"
                 ),
             );
         }
@@ -1297,6 +1319,17 @@ fn check_respond(ctx: &mut Ctx, path: &str, resp: &RespondHandler) {
             format!("respond status {} is not a valid HTTP status", resp.status),
         );
     }
+    // `respond = "404"` (quoted) is a body, not a status — the slip
+    // reads as "reply 404" and silently serves 200
+    if resp.status == 200 && resp.body.len() == 3 && resp.body.bytes().all(|b| b.is_ascii_digit()) {
+        ctx.warn(
+            format!("{path}.respond"),
+            format!(
+                "body {:?} looks like a status code — `respond = {}` (unquoted) sets the status",
+                resp.body, resp.body
+            ),
+        );
+    }
     check_status_body_rules(
         ctx,
         format!("{path}.respond"),
@@ -1341,9 +1374,9 @@ fn check_respond(ctx: &mut Ctx, path: &str, resp: &RespondHandler) {
         k.eq_ignore_ascii_case("content-type") && v.to_ascii_lowercase().contains("text/html")
     });
     if htmlish
-        && ["{path}", "{host}", "{query}", "{method}"]
+        && REFLECTED_PLACEHOLDERS
             .iter()
-            .any(|p| resp.body.contains(p))
+            .any(|p| resp.body.contains(&format!("{{{p}}}")))
     {
         ctx.warn(
             format!("{path}.respond"),
@@ -2097,14 +2130,18 @@ fn check_acme(ctx: &mut Ctx, cfg: &Config) {
         if cf.zone_id.as_deref().is_some_and(|z| z.trim().is_empty()) {
             ctx.error("acme.dns.cloudflare.zone_id", "zone id is empty");
         }
-        if let Some(b) = &cf.api_base
-            && !b.starts_with("https://")
-            && !b.starts_with("http://")
-        {
-            ctx.error(
-                "acme.dns.cloudflare.api_base",
-                format!("{b:?} is not an http(s) URL"),
-            );
+        if let Some(b) = &cf.api_base {
+            if !b.starts_with("https://") && !b.starts_with("http://") {
+                ctx.error(
+                    "acme.dns.cloudflare.api_base",
+                    format!("{b:?} is not an http(s) URL"),
+                );
+            } else if b.starts_with("http://") {
+                ctx.warn(
+                    "acme.dns.cloudflare.api_base",
+                    "http:// sends the API token unencrypted — intended for test mocks; use https:// in production",
+                );
+            }
         }
         if let Some(r) = &cf.resolver
             && r.parse::<std::net::SocketAddr>().is_err()
@@ -3719,6 +3756,24 @@ resolver = "not-an-ip"
         assert!(has_err(&cfg, "acme.dns.cloudflare.api_base", "http(s)"));
         assert!(has_err(&cfg, "acme.dns.cloudflare.resolver", "ip"));
 
+        // http:// api_base parses (tests mock plain-HTTP) but warns —
+        // the token would travel in cleartext
+        let cfg = parse_test_config(
+            r#"
+[acme]
+challenge = "dns-01"
+[acme.dns.cloudflare]
+api_token = "tok"
+api_base = "http://127.0.0.1:9/client/v4"
+"#,
+        );
+        assert!(has_warn(
+            &cfg,
+            "acme.dns.cloudflare.api_base",
+            "unencrypted"
+        ));
+        assert!(!has_err(&cfg, "acme.dns.cloudflare.api_base", ""));
+
         // well-formed dns-01 config — no dns errors; wildcard warning gone
         let cfg = parse_test_config(
             r#"
@@ -3860,6 +3915,56 @@ sample = 1.5
             "respond = { status = 200, body = \"{\\\"ok\\\": true} {path}{host}{query}{method}{scheme}\" }",
         ));
         assert!(!has_warn(&cfg, "site[\"x\"].route[0].respond.body", ""));
+    }
+
+    #[test]
+    fn respond_numeric_body_hints_at_status() {
+        // `respond = "404"` is a body, not a status — the slip reads as
+        // "reply 404" and silently serves 200
+        let cfg = parse_test_config(&site_route("respond = \"404\""));
+        assert!(has_warn(
+            &cfg,
+            "site[\"x\"].route[0].respond",
+            "looks like a status code"
+        ));
+        // table form with an explicit matching status is deliberate — no hint
+        let cfg = parse_test_config(&site_route("respond = { status = 404, body = \"404\" }"));
+        assert!(!has_warn(
+            &cfg,
+            "site[\"x\"].route[0].respond",
+            "looks like a status"
+        ));
+        // non-numeric bodies stay quiet
+        let cfg = parse_test_config(&site_route("respond = \"not found\""));
+        assert!(!has_warn(
+            &cfg,
+            "site[\"x\"].route[0].respond",
+            "looks like a status"
+        ));
+    }
+
+    #[test]
+    fn respond_html_warns_on_every_reflected_placeholder() {
+        // {uri}/{args}/{remote_ip}/{request_id} reflect request data the
+        // same way {path}/{query} do — the text/html check covers them
+        for p in ["uri", "args", "remote_ip", "request_id"] {
+            let cfg = parse_test_config(&site_route(&format!(
+                "respond = {{ status = 200, body = \"{{{p}}}\", headers = {{ \"content-type\" = \"text/html\" }} }}"
+            )));
+            assert!(
+                has_warn(&cfg, "site[\"x\"].route[0].respond", "text/plain"),
+                "placeholder {p} should warn"
+            );
+        }
+        // {scheme} renders only http/https — no warning
+        let cfg = parse_test_config(&site_route(
+            "respond = { status = 200, body = \"{scheme}\", headers = { \"content-type\" = \"text/html\" } }",
+        ));
+        assert!(!has_warn(
+            &cfg,
+            "site[\"x\"].route[0].respond",
+            "text/plain"
+        ));
     }
 
     #[test]

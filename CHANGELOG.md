@@ -413,6 +413,17 @@ workflow publishes the matching section as the GitHub release notes.
 - **`rate` fields claimed a struct shape in the JSON schema** —
   `rate_limit.rate` and `acme.on_demand.rate` only accept strings like
   `"100/s"`; the generated schema now says so.
+- **`text/html` respond check missed newer placeholders** — a
+  `respond.body` reflecting `{uri}`, `{args}`, `{remote_ip}`, or
+  `{request_id}` under `content-type: text/html` produced no warning;
+  the check now covers every request-derived placeholder.
+- **`acme.dns.cloudflare.api_base = "http://…"` was silent** — plain
+  HTTP sends the API token unencrypted; `verd validate` now warns
+  (`http://` stays accepted for test mocks, non-http(s) remains an
+  error).
+- **`respond = "404"` silently served 200** — the quoted form is a
+  body, not a status; a three-digit body under the default status now
+  warns that `respond = 404` (unquoted) sets the code.
 
 ## [0.4.1] - 2026-10-27
 
