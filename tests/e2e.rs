@@ -82,7 +82,7 @@ async fn start_at(
     let cfg: Config = toml::from_str(config).unwrap();
     let mut cfg = cfg;
     cfg.server.listen = listeners;
-    cfg.admin.listen = format!("127.0.0.1:{admin_port}").parse().unwrap();
+    cfg.admin.listen = vec![format!("127.0.0.1:{admin_port}").parse().unwrap()];
 
     let rt = Runtime::build(Arc::new(cfg)).expect("runtime builds");
     let (tx, rx) = tokio::sync::watch::channel(false);

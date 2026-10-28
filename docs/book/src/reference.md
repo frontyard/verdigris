@@ -14,7 +14,7 @@ Root configuration for a verdigris instance.
 | field | type | default | description |
 |---|---|---|---|
 | `acme` | AcmeConfig | `{"ca_roots": null, "challenge": "auto", "directory": "https://acme-v02.api.letsencrypt.org/directory", "dns": null, "eab": null, "email": null, "on_demand": {"allowed_hosts": [], "enabled": false, "rate": null}, "renew_before": "30d", "storage": "./verd-state/acme"}` | ACME account settings used by sites with `tls = "auto"`. |
-| `admin` | AdminConfig | `{"enabled": true, "listen": "127.0.0.1:2019", "tls": null, "token": null}` | Admin API listener (metrics, health, reload, purge, inspection). |
+| `admin` | AdminConfig | `{"enabled": true, "listen": ["127.0.0.1:2019"], "tls": null, "token": null}` | Admin API listener (metrics, health, reload, purge, inspection). |
 | `cache` | object | `{}` | Named cache stores for routes with `cache` enabled. |
 | `include` | [string] |  | Additional files or directories of `*.toml` fragments merged into this configuration, relative to the directory containing this file. Fragment files are loaded in sorted order; scalar conflicts between fragments and the main file are errors. A glob pattern matching no files is a no-op; a missing file or directory is an error. |
 | `limits` | Limits | `{"body_bytes": "10MiB", "header_bytes": "16KiB"}` | Default request limits; individual routes may override. |
@@ -35,7 +35,7 @@ Server-wide settings.
 | `max_connections` | integer | `65536` | Maximum concurrent connections across all listeners. |
 | `max_connections_per_ip` | integer | `256` | Maximum concurrent connections per client IP address. |
 | `security` | SecurityConfig | `{"content_type_options": true, "cross_domain_policy": "", "csp": null, "enabled": true, "frame_options": "DENY", "hsts": true, "hsts_max_age": "180d", "hsts_subdomains": false, "referrer_policy": "strict-origin-when-cross-origin"}` | Baseline security response headers applied to every route. |
-| `server_header` | ServerHeaderSchema | `"verd"` | Value of the `Server` response header. `false` or `""` omits it (the empty-disables convention). |
+| `server_header` | ServerHeaderSchema | `"verd"` | Value of the `Server` response header. `false` or `""` omits it (the empty-disables convention). `"off"` also omits but is deprecated — prefer `false`. |
 | `trusted_proxies` | [string] | `[]` | CIDRs whose `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`, `X-Real-IP` and `Forwarded` headers are trusted. Empty: trust none. |
 
 
@@ -93,7 +93,7 @@ the data plane.
 | field | type | default | description |
 |---|---|---|---|
 | `enabled` | boolean | `true` | Serve the admin API. `false` disables the listener entirely — `listen`, `token`, and `tls` are then ignored. |
-| `listen` | string | `"127.0.0.1:2019"` | `IP:port` to bind — `":port"` expands to the wildcard `0.0.0.0:port`, same as `server.listen` entries. Use loopback unless remote administration is needed. |
+| `listen` | [string] | `["127.0.0.1:2019"]` | `IP:port` to bind — `":port"` expands to the wildcard `0.0.0.0:port`, same as `server.listen` entries. A string binds one listener, a list binds several (`tls` and `token` apply to all). Use loopback unless remote administration is needed. |
 | `tls` | AdminTlsSchema \| null | `null` | Optional TLS for the admin listener (recommended when bound beyond localhost): `"self_signed"` or a `{ cert, key }` table. |
 | `token` | string \| null | `null` | Bearer token required on all admin requests. Mandatory when `listen` is not a loopback address; use `${VAR}` interpolation to keep it out of the file. |
 
@@ -201,13 +201,13 @@ Static file handler.
 | field | type | default | description |
 |---|---|---|---|
 | `cache_control` | object | `{}` | `Cache-Control` values applied to paths matching the glob keys. |
-| `error_pages` | object | `{}` | Custom error pages: status code → file path, always relative to `root` (a leading `/` means "from the document root"). |
+| `error_pages` | object | `{}` | Custom error pages: status code → file path, always relative to `root` (a leading `/` means "from the document root"). Keys are exact codes (`404`) or class keys (`"4xx"`/`"5xx"`); an exact code wins over its class. |
 | `index` | [string] | `["index.html"]` | Index files tried for directory requests, in order. |
 | `listing` | boolean | `false` | HTML directory listing when no index file exists. |
 | `mime_types` | object | `{}` | MIME type overrides by file extension (without dot). |
 | `precompressed` | boolean | `true` | Serve a sibling `.gz`, `.br`, or `.zst` file when the client accepts that encoding. |
 | `root` | string **required** |  | Document root on disk. |
-| `spa` | boolean | `false` | SPA mode: serve `index.html` for unknown paths. |
+| `spa` | boolean | `false` | SPA mode: serve `index[0]` for unknown paths and directory requests (before listing). |
 | `try_files` | [string] | `[]` | Extra fallback files tried before SPA/listing/404: on a miss each entry is resolved relative to `root` (or the requested directory after `index` misses) and the first existing file is served. Not nginx `try_files` semantics — the request path is not rewritten. |
 
 ## `RespondHandler`
@@ -216,7 +216,7 @@ Fixed response handler.
 
 | field | type | default | description |
 |---|---|---|---|
-| `body` | string | `""` | Response body (text). `{path}`, `{host}`, `{query}` (leading `?` included), `{method}`, `{scheme}` substitute from the request. |
+| `body` | string | `""` | Response body (text). `{path}`, `{host}`, `{query}` (leading `?` included), `{method}`, `{scheme}`, `{uri}` (path + query as sent), `{args}` (query without `?`), `{remote_ip}` (client IP under the route's trust model), and `{request_id}` substitute from the request. |
 | `headers` | object | `{}` | Extra response headers — e.g. `content-type = "text/plain"`; the body is text, so pick a non-HTML type when placeholders are used. |
 | `status` | integer | `200` | Status code. |
 
@@ -229,7 +229,7 @@ Redirect handler.
 | `host` | string \| null | `null` | Redirect to the same path on another host (and optional port). |
 | `scheme` | string \| null | `null` | Redirect to another scheme, e.g. `https`. |
 | `status` | integer | `308` | Status code: 301, 302, 303, 307 (preserves method+body), or 308. |
-| `to` | string \| null | `null` | Redirect to a fixed URL template. `{host}`, `{path}`, `{query}` (leading `?` included), `{method}`, `{scheme}` substitute from the request. |
+| `to` | string \| null | `null` | Redirect to a fixed URL template. `{host}`, `{path}`, `{query}` (leading `?` included), `{method}`, `{scheme}`, `{uri}` (path + query as sent), `{args}` (query without `?`), `{remote_ip}`, and `{request_id}` substitute from the request. |
 
 ## `ProxyHandler`
 
@@ -238,7 +238,7 @@ Reverse proxy handler.
 | field | type | default | description |
 |---|---|---|---|
 | `host_header` | HostHeaderSchema | `"upstream"` | Which `Host` the upstream sees: `"upstream"` (default) rewrites it to the upstream authority, `"original"` passes the client `Host` through, any other value is sent verbatim. `{ value = "…" }` forces verbatim even when the value spells a keyword. |
-| `request_headers` | HeaderOps \| null | `null` | Request header manipulation applied before forwarding upstream. |
+| `request_headers` | HeaderOpsSchema \| null | `null` | Request header manipulation applied before forwarding upstream. `request_headers = false` disables it explicitly. |
 | `retries` | RetryPolicySchema | `{"budget_fraction": 0.2, "max_per_request": 2}` | Retry policy for idempotent requests on connection failure. `retries = false` disables retries entirely. |
 | `rewrite` | Rewrite \| null | `null` | Path rewriting before forwarding. |
 | `upstream` | UpstreamRef **required** |  | Named upstream (`upstream.name`) or an inline list of upstream URLs. |
@@ -739,7 +739,7 @@ Response served when every upstream in a cluster is unhealthy.
 
 | field | type | default | description |
 |---|---|---|---|
-| `body` | string \| null | `null` | Optional response body; a short default text is used when absent. |
+| `body` | string \| null | `null` | Optional response body; a short default text is used when absent. The same placeholders as `respond.body` substitute (`{path}`, `{host}`, `{uri}`, `{request_id}`, …). Ignored for statuses that forbid a body (1xx/204/304). |
 | `status` | integer | `502` | Status code returned to clients (typically 502 or 503). |
 
 ## `UnavailableSchema`

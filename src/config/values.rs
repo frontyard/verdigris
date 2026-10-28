@@ -8,43 +8,6 @@ use schemars::JsonSchema;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// Serde adapter for `BTreeMap<u16, V>`: TOML keys are strings, so keys
-/// like `"404"` are parsed into `u16` status codes.
-pub mod status_map {
-    use std::collections::BTreeMap;
-
-    use serde::de::Error;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    /// Deserialize string keys into `u16` HTTP status codes.
-    pub fn deserialize<'de, D, V>(d: D) -> Result<BTreeMap<u16, V>, D::Error>
-    where
-        D: Deserializer<'de>,
-        V: Deserialize<'de>,
-    {
-        BTreeMap::<String, V>::deserialize(d)?
-            .into_iter()
-            .map(|(k, v)| {
-                k.parse::<u16>()
-                    .map(|k| (k, v))
-                    .map_err(|_| D::Error::custom(format!("invalid HTTP status code {k:?}")))
-            })
-            .collect()
-    }
-
-    /// Serialize status codes back to string keys.
-    pub fn serialize<S, V>(m: &BTreeMap<u16, V>, s: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-        V: Serialize,
-    {
-        m.iter()
-            .map(|(k, v)| (k.to_string(), v))
-            .collect::<BTreeMap<_, _>>()
-            .serialize(s)
-    }
-}
-
 /// Serde adapter for `Vec<T>` fields: `x = "v"` parses as `["v"]` —
 /// scalar sugar for the common single-entry case (see
 /// `docs/config-grammar.md`; `include` deliberately stays strict).
@@ -471,20 +434,5 @@ mod tests {
     struct RateHolder {
         #[allow(dead_code)]
         r: RateSpec,
-    }
-
-    #[test]
-    fn status_map_keys_are_statuses() {
-        use std::collections::BTreeMap;
-        use std::path::PathBuf;
-
-        #[derive(serde::Deserialize)]
-        struct Wrap {
-            #[serde(with = "status_map")]
-            m: BTreeMap<u16, PathBuf>,
-        }
-        let w: Wrap = toml::from_str("m = { \"404\" = \"/404.html\" }").unwrap();
-        assert_eq!(w.m[&404], PathBuf::from("/404.html"));
-        assert!(toml::from_str::<Wrap>("m = { \"oops\" = \"/x\" }").is_err());
     }
 }

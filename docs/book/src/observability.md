@@ -8,7 +8,8 @@ upstream health transitions — go through `[log]`:
 ```toml
 [log]
 level = "info"               # error / warn / info / debug / trace,
-                             # or env-filter style "verd=debug,hyper=info"
+                             # or full tracing EnvFilter syntax:
+                             # "verd=debug,hyper=warn,tower_http=off"
 format = "json"              # or "pretty"
 output = "stderr"            # or "stdout" / a file path
 ```
@@ -42,6 +43,8 @@ Fields: `ts` (RFC 3339 UTC), `req_id`, `client_ip`, `method`, `host`,
 
 Filter terms support `=`/`!=`/`==`, `=~`/`!~` globs, and `>`/`<`/`>=`/`<=`
 on `path`, `host`, `method`, `status`, `upstream`, `cache`, `identity`.
+Terms join with `&&` only — there is no `||` (for disjunctions, filter
+downstream in the collector).
 
 File output is reopened on **SIGUSR1** (logrotate).
 

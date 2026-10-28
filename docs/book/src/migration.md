@@ -19,6 +19,7 @@
 | `access_log /var/log/x` | `log.access = "/var/log/x"` |
 | `return 301 https://…` | `route.redirect = "https://…"` (whole site: `site.redirect`) |
 | `return 404` | `respond = 404` |
+| `error_page 404 /nf.html` | `static.error_pages = { 404 = "nf.html", "5xx" = "oops.html" }` |
 | `ssl_certificate(…)` | `site.tls = { cert="…", key="…" }` |
 
 | Caddy | verd.toml |

@@ -50,7 +50,7 @@ async fn start(
     assert!(loaded.is_valid(), "{:?}", loaded.diagnostics);
     let cfg = loaded.config;
     let port = cfg.server.listen[0].addr.port();
-    let admin_port = cfg.admin.listen.port();
+    let admin_port = cfg.admin.listen[0].port();
 
     let rt = Runtime::build(Arc::new(cfg)).expect("runtime builds");
     let shared = Shared::new(rt);

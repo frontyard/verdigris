@@ -33,9 +33,9 @@ where one field dominates the table — they are a closed set:
 | Field | Accepted forms | Expands to |
 | --- | --- | --- |
 | `server.listen` | `"ip:port"`/`":port"` \| `{ addr, tls }` | `ListenAddr` |
-| `admin.listen` | `"ip:port"`/`":port"` | `SocketAddr` |
+| `admin.listen` | `"ip:port"`/`":port"` \| `["addr",…]` | `Vec<SocketAddr>` |
 | `admin.tls` | `"self_signed"` \| `{cert,key}` | `AdminTls` |
-| `server.server_header` | `false` \| `"value"` | `String` (`""` = omit) |
+| `server.server_header` | `false` \| `"value"` | `String` (`""` = omit; `"off"` deprecated) |
 | `site.proxy` | `upstream` shapes \| table | `ProxyHandler{upstream,…}` |
 | `site.respond` | `"text"` \| `404` \| table | `RespondHandler` |
 | `site.redirect` | `"url"` \| table | `RedirectHandler{to,…}` |
@@ -53,6 +53,7 @@ where one field dominates the table — they are a closed set:
 | `site.security`/`route.security` | `false` \| table | `RouteSecurity{enabled,…}` |
 | `proxy.retries` | `false`/`true` \| `3` \| table | `RetryPolicy` |
 | `proxy.host_header` | `"kw"`/verbatim \| `{ value }` | `HostHeader` |
+| `proxy.request_headers` | `false` \| table | `HeaderOps{enabled,…}` |
 | `upstream.unavailable` | `503` \| table | `UnavailableResponse{status}` |
 | `upstream.health` | `"/path"` \| table | `HealthCheck{active:{path}}` |
 | `upstream.dns` | `"60s"` \| table | `UpstreamDns{grace}` |
@@ -97,7 +98,8 @@ be set — they are mutually exclusive.
 ## Scalar-vs-list
 
 Simple string/scalar lists accept a single value as `["v"]` via the
-`values::one_or_many` adapter: `hosts`, `listen`, `upstream.servers`
+`values::one_or_many` adapter: `hosts`, `listen`, `admin.listen`,
+`upstream.servers`
 (a URL counts as one entry), `ip_allow`, `ip_deny`, `match.methods`,
 `auth.*` token/key lists, `acme.on_demand.allowed_hosts`, all
 `cache.bypass` lists (`methods`, `cookies`, `headers`, `paths`),
@@ -116,6 +118,15 @@ Exceptions (deliberate, strict):
   "must be a list of path strings" is a better teaching error than
   silently treating one path as a set.
 - `error_pages`/`cache_control` and other keyed maps — not lists.
+- `error_pages` keys are exact status codes or the class keys
+  `"4xx"`/`"5xx"`; an exact code wins over its class.
+
+`cache_control` globs evaluate by **specificity, not declaration
+order** (the map sorts keys): fewest `*` first, then most literal
+characters — `"/a.css"` beats `"*.css"` beats `"*"`. `respond` and
+`unavailable` statuses follow `body::response_body_forbidden`: 1xx is
+never a final status (validation error), and 204/304 responses carry
+no body — a configured `body` there warns and is dropped at serve.
 
 ## Off-switches
 
@@ -134,7 +145,10 @@ site-level default. The bare `false` spelling works for all of them —
 dead-config warning (a bare `false` carries no settings). Settings
 left inside a disabled *table* are dead config and `verd validate`
 warns. `server.server_header` takes `false` as its omit spelling
-(`""` also omits).
+(`""` also omits; `"off"` parses but is deprecated and warns).
+`proxy.request_headers` likewise takes `false` — unlike the
+route middleware blocks it isn't inherited, but the spelling is
+kept for symmetry and to disable a `site.proxy` table cleanly.
 
 `server.listen` has no `enabled` — an empty list already means "no
 sockets" and the validator requires at least one listener anyway.
@@ -174,9 +188,14 @@ filesystem.
 
 ## Placeholders
 
-`redirect.to`/`host`/`scheme` and `respond.body` share one closed set:
-`{path}`, `{host}`, `{query}`, `{method}`, `{scheme}`. No others;
-unknown `{...}` text passes through literally.
+`redirect.to`, `respond.body`, and
+`upstream.*.unavailable.body` share one closed set (`redirect.host`/
+`scheme` are literal — no substitution there): `{path}`, `{host}`,
+`{query}` (leading `?`), `{method}`, `{scheme}`, `{uri}` (path +
+query as sent), `{args}` (query without `?`), `{remote_ip}` (client IP
+under the route's trust model), `{request_id}` (`X-Request-Id` —
+extracted or generated; empty outside the request pipeline). No
+others; unknown `{...}` text passes through literally.
 
 ## Diagnostics
 
@@ -196,6 +215,9 @@ unknown `{...}` text passes through literally.
 - Enum spellings are snake_case canonical with kebab-case aliases —
   `dns_01` and `dns-01` both parse; docs and errors show the snake
   form.
+- `${file:}` inside a path-typed field or an `include` entry is a load
+  error — it would inline the file's *contents* as the path. `${VAR}`
+  stays legal in those fields (it substitutes the variable's value).
 
 ## Secrets
 
@@ -217,6 +239,52 @@ weighted round-robin, `least_conn` compares `inflight / weight`, and
 `ip_hash` places the client hash on a weight-proportional ring.
 `backup = true` members serve only when no primary is healthy; the
 `tried`-member retry exclusion applies within each tier.
+
+## Considered and rejected
+
+Recorded with one-line rationale so they aren't re-litigated.
+
+- `[[site.route]]` with no matcher ⇒ `prefix = "/"` — the teaching
+  error beats the inference; site catch-all shorthands cover the
+  intent.
+- `route.path` alias for `route.prefix` — one name per concept.
+- `upstream.tls = false` — TLS is opt-in by absence of the field.
+- `auth`/`cors`/`compress` string shorthands — no dominant single
+  setting.
+- `+.example.com` host sugar — wildcard spelling is already short.
+- `${VAR:?}`/`${VAR:+}` shell operators — one interpolation grammar.
+- `include` scalar — merge order is load-bearing (see above).
+- `trusted_proxies` presets (`"cloudflare"` etc.) — ranges drift;
+  copy the CIDRs.
+- `timeouts`/`limits` reset spell (`timeouts = {}` clearing
+  inherited) — field-wise merge has no reset; document, don't add.
+- `sample = "10%"` percentage strings — `0.1` is unambiguous.
+- `ip_allow = "*"` — `0.0.0.0/0` is the explicit spelling (and warns).
+- `health = 5` — int means failures under `passive`, ambiguous at the
+  `health` level.
+- `upstream.*.timeouts = "5s"` scalar — no dominant field (connect vs
+  response_header).
+- Remote/URL `include` — supply-chain surface; local filesystem only.
+- Env-var-only configuration (`VERD_LISTEN`) — a second config source
+  complicates merge/precedence; `${VAR}` inside the file covers it.
+- `||` in `log.access.filter` — conjunction + glob covers the
+  dominant filters; mixing `&&`/`||` needs a precedence grammar.
+  Workaround: filter downstream in the collector.
+- Bare-int durations incl. `0` — `"0s"` keeps units explicit; `0`
+  invites "ms or s?" ambiguity.
+- `site.static` alias for `site.root` — two names for one field.
+- `verd config --show-secrets` — redaction has no bypass, deliberate.
+- `verd config --changed`/`--no-defaults` — `verd config` plus the
+  source file covers the debugging question.
+- Warning when `log.output` == `log.access.output` — two append-mode
+  writers to one file interleave safely; the warning would mostly
+  fire on intent.
+- `verd reload` — `POST /reload` and `SIGHUP` are the documented
+  paths; a CLI alias would duplicate them.
+- `error_pages` ranges (`"500-599"`) — the `"4xx"`/`"5xx"` class keys
+  cover the common case with less syntax.
+- Unix-domain listeners, `health.active.expect` multi-status — real
+  features, not grammar; tracked separately.
 
 ## Auditing
 

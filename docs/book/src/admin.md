@@ -6,6 +6,8 @@ separate HTTP service from the data plane.
 ```toml
 [admin]
 listen = "127.0.0.1:2019"    # ":2019" binds all interfaces
+# listen = ["127.0.0.1:2019", "127.0.0.1:2020"]   # or several —
+                               # one admin API served on each address
 token = "${ADMIN_TOKEN}"     # mandatory when listen is not loopback
 tls = { cert = "admin.pem", key = "admin.key" }   # optional
 # tls = "self_signed"        # or a generated localhost cert for dev

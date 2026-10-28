@@ -4,6 +4,9 @@
 
 - **Reload config**: `systemctl reload verd` (SIGHUP), `POST /reload`,
   or `--watch`. All are atomic; a bad file keeps the old generation.
+  `${VAR}`/`${file:…}` interpolation runs at load — env-var changes are
+  not file events, so `--watch` alone doesn't catch them; send SIGHUP
+  or `POST /reload` after editing an env var.
 - **Rotate access logs**: move the file, then `kill -USR1` (the systemd
   unit wires this as the second `ExecReload`).
 - **Rotate TLS certs**: overwrite the PEM files — the watcher hot-loads

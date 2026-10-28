@@ -49,7 +49,16 @@ ip_allow = ["10.0.0.0/8", "192.168.0.0/16"]
 ip_deny = ["10.0.0.9/32"]
 ```
 
-Client IP honours `X-Forwarded-For` only from `trusted_proxies`.
+Client IP honours `X-Forwarded-For` only from `trusted_proxies`. A
+site's `trusted_proxies` **replaces** the global
+`server.trusted_proxies` list — set the full CIDR set on the site, not
+just the additions.
+
+## Response headers
+
+`response_headers` (and `proxy.request_headers` upstream-bound) apply
+in a fixed order — **remove → set → add** — so a same-named
+`remove`+`set` means "clear the incoming value, write ours".
 
 ## Authentication
 

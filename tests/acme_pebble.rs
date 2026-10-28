@@ -271,7 +271,7 @@ respond = {{ body = "acme-ok\n" }}
             tls: true,
         });
     }
-    config.admin.listen = SocketAddr::from(([127, 0, 0, 1], 0));
+    config.admin.listen = vec![SocketAddr::from(([127, 0, 0, 1], 0))];
 
     let rt = Runtime::build(Arc::new(config)).expect("runtime builds");
     assert!(rt.acme.is_some(), "acme manager present for tls=auto site");

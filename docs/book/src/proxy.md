@@ -44,7 +44,9 @@ proxy = { upstream = "app", rewrite = { strip_prefix = "/api" } }
   connect/connection-failure (`retries = 3` is the shorthand); a
   cluster-wide `budget_fraction` caps concurrent retries so retries
   can't amplify an outage. `unavailable = 503` sets the
-  all-members-down status.
+  all-members-down status — the table form's `body` substitutes the
+  request placeholders (`{uri}`, `{host}`, `{request_id}`, …), and
+  statuses that forbid a body (1xx/204/304) are served bodyless.
 - **Timeouts**: `connect`, `response_header`, plus the route's
   `timeouts.request_deadline` and body read/write budgets.
 - **DNS**: names resolve through the system resolver with TTL caching,
@@ -67,7 +69,9 @@ list. Inside a route, `proxy.upstream` accepts the same three shapes:
 ## Headers
 
 Request headers can be set/cleared per route under
-`proxy.request_headers`; response headers under `route.response_headers`.
+`proxy.request_headers` (bare `request_headers = false` disables it);
+response headers under `route.response_headers`. Ops apply in order
+remove → set → add.
 `Host` is rewritten to the member authority by default
 (`host_header = "upstream"`); set `host_header = "original"` to pass the
 client's `Host` through, or any hostname (`host_header =

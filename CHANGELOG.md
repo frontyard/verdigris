@@ -38,10 +38,6 @@ workflow publishes the matching section as the GitHub release notes.
   `docs/config-grammar.md` freezes the accepted field shapes, shorthand
   parity rules, scalar-vs-list policy, off-switches, and diagnostic
   conventions; `surface_audit` tests assert each invariant behaviorally.
-- **Config ergonomics review** — `docs/config-ergonomics-review.md`
-  audits the whole `verd.toml` surface against the grammar invariants
-  and records proposed parity fixes, new-form candidates, and
-  deliberately-rejected spellings, prioritized for implementation.
 - **`[log]` server logging is now wired** — `log.level`, `log.format`
   and `log.output` actually configure the server log (they were parsed
   and documented but never applied). Level resolves `--log-level` /
@@ -142,6 +138,18 @@ workflow publishes the matching section as the GitHub release notes.
   against the current directory and sources report `<stdin>`. `verd
   fmt -c -` prints the formatted document to stdout instead of writing
   a file.
+- **`admin.listen` accepts a list** — `listen = ["127.0.0.1:2019",
+  ":2020"]` serves the admin API on every address (one `token`/`tls`
+  applies to all). The canonical dump renders it as an array even for
+  a single listener.
+- **`proxy.request_headers = false`** — the bare off-switch now works
+  on the proxy header block too, matching the other middleware fields.
+- **`error_pages` class keys** — `"4xx"`/`"5xx"` map a page to a whole
+  status class; an exact code (`404`) wins over its class.
+- **Four new placeholders** — `{uri}` (path + query as sent), `{args}`
+  (query without `?`), `{remote_ip}` (client IP under the route's
+  trust model), and `{request_id}` substitute in `respond.body`,
+  `redirect.to`, and — new this release — `upstream.*.unavailable.body`.
 
 ### Build & CI
 
@@ -288,9 +296,48 @@ workflow publishes the matching section as the GitHub release notes.
 - **Cache build errors carry a field path** — disk-store failures
   report `cache.<name>: …` like upstream errors report
   `upstream.<name>: …`.
+- **`admin.listen` normalizes to a list** — `verd config` and admin
+  `/config` render `listen = ["127.0.0.1:2019"]` even when one
+  listener is configured; consumers of the dump should treat it as an
+  array.
+- **`server_header = "off"` deprecated** — it still omits the header,
+  but `verd validate` warns; prefer `false` (or `""`).
+- **More dead-config and footgun diagnostics** — `verd validate` now
+  catches: an `[acme]` block with no `tls = "auto"` site; `site`/`route`
+  `ip_allow` entries that can never admit a client (outside every site
+  allowlist entry or fully covered by `ip_deny`); duplicate
+  `admin.listen` addresses and collisions with `server.listen`;
+  `upstream.tls` settings on upstreams with no `https://` server and
+  `tls.ca` under `verify = false`; `upstream.timeouts.connect`/
+  `response_header = "0s"` (instant timeout — now an error);
+  `rate_limit.burst = 0`; `log.output = "off"` or an empty path (a
+  literal filename/`""`, not an off-switch) and missing log parent
+  directories; `spa = true` with an empty or missing `index` fallback
+  and `spa` + `listing` precedence; `cache.ttl = "0s"`,
+  `cache.*.max_items = 0`, and invalid `cache.vary_headers`;
+  `compress.types` entries that aren't `type/subtype`; `0s`/`0B` site
+  and route `timeouts`/`limits` overrides; `error_pages` targets
+  missing under `static.root`; and hop-by-hop/framing headers
+  (`content-length`, `connection`, `transfer-encoding`, …) set via
+  `respond.headers` or `request_headers`/`response_headers`, which now
+  error instead of corrupting the wire.
 
 ### Fixed
 
+- **`cache_control` globs evaluate by specificity, not map order** —
+  a `"*"` entry previously shadowed every more specific pattern
+  (`BTreeMap` iterates sorted and first match won). Now fewest `*`
+  then most literal characters wins: exact > `"*.css"` > `"*"`.
+- **`proxy.request_headers = { enabled = false, … }` ignored** — the
+  ops were built and applied despite `enabled = false`; the flag is
+  honored now, and leftover settings warn as dead config.
+- **`${file:}` under a path field inlined file contents as the path** —
+  `cert = "${file:/x}"` or an `include` entry now fails at load with a
+  teaching error instead of producing a bogus path (`${VAR}` stays
+  legal).
+- **`unavailable` could emit a body where the status forbids one** —
+  `unavailable = { status = 204 }` produced invalid framing; bodyless
+  statuses (1xx/204/304) now serve an empty body and no Content-Type.
 - **`default = true` + `hosts = ["*"]` on one site** no longer
   double-counts as two default sites and spuriously fails validation.
 - **Duplicate diagnostics removed** — listeners without TLS and

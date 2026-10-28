@@ -156,6 +156,7 @@ impl Proxy {
         let headers = p
             .request_headers
             .as_ref()
+            .filter(|h| h.enabled)
             .map(middleware::HeaderOps::build)
             .transpose()?;
         Ok(Self {
@@ -196,21 +197,42 @@ impl Proxy {
     }
 
     /// The `no healthy upstream` response for this cluster.
-    fn unavailable(&self) -> http::Response<BoxBody> {
+    fn unavailable(
+        &self,
+        parts: &http::request::Parts,
+        ctx: &RequestCtx,
+    ) -> http::Response<BoxBody> {
         let status = StatusCode::from_u16(self.cluster.unavailable.status)
             .unwrap_or(StatusCode::BAD_GATEWAY);
-        let body = self
-            .cluster
-            .unavailable
-            .body
-            .clone()
-            .unwrap_or_else(|| "no healthy upstream".to_string());
-        let mut resp = http::Response::new(body::full(format!("{body}\n")));
+        let body = match &self.cluster.unavailable.body {
+            Some(tpl) => crate::handler::substitute_parts(
+                tpl,
+                &ctx.path,
+                &parts.uri,
+                &parts.method,
+                parts
+                    .extensions
+                    .get::<crate::observe::RequestId>()
+                    .map(|r| r.as_str()),
+                ctx,
+            ),
+            None => "no healthy upstream".to_string(),
+        };
+        // 1xx/204/304 forbid a response body — emit none rather than
+        // produce invalid framing.
+        let forbidden = body::response_body_forbidden(&http::Method::GET, status);
+        let mut resp = http::Response::new(if forbidden {
+            body::empty()
+        } else {
+            body::full(format!("{body}\n"))
+        });
         *resp.status_mut() = status;
-        resp.headers_mut().insert(
-            http::header::CONTENT_TYPE,
-            HeaderValue::from_static("text/plain; charset=utf-8"),
-        );
+        if !forbidden {
+            resp.headers_mut().insert(
+                http::header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            );
+        }
         resp
     }
 
@@ -302,7 +324,7 @@ impl Proxy {
         let mut _budget_slot = None;
         loop {
             let Some(member) = lb::pick(&cluster, ctx.client_ip, &tried) else {
-                return self.unavailable();
+                return self.unavailable(&parts, ctx);
             };
             tried.push(member.id);
             cluster

@@ -477,7 +477,8 @@ pub struct ServerConfig {
     #[serde(deserialize_with = "cidr::deserialize")]
     pub trusted_proxies: Vec<ipnet::IpNet>,
     /// Value of the `Server` response header. `false` or `""` omits it
-    /// (the empty-disables convention).
+    /// (the empty-disables convention). `"off"` also omits but is
+    /// deprecated — prefer `false`.
     #[serde(deserialize_with = "server_header_value")]
     #[schemars(with = "ServerHeaderSchema")]
     pub server_header: String,
@@ -601,11 +602,17 @@ fn parse_listen_addr(s: &str) -> Result<SocketAddr, String> {
     s.parse::<SocketAddr>().map_err(|e| e.to_string())
 }
 
-/// `admin.listen` accepts `"IP:port"` and `":port"` (wildcard) strings —
-/// same grammar as `server.listen` entries.
-fn listen_addr<'de, D: serde::Deserializer<'de>>(d: D) -> Result<SocketAddr, D::Error> {
-    let s = String::deserialize(d)?;
-    parse_listen_addr(&s).map_err(serde::de::Error::custom)
+/// `admin.listen` — one address or a list; each entry is `"IP:port"`
+/// or `":port"`.
+fn listen_addr_list<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<SocketAddr>, D::Error> {
+    let raw: Vec<String> = one_or_many::deserialize(d)?;
+    raw.iter()
+        .map(|s| parse_listen_addr(s).map_err(serde::de::Error::custom))
+        .collect()
+}
+
+fn default_admin_listen() -> Vec<SocketAddr> {
+    vec![SocketAddr::from(([127, 0, 0, 1], 2019))]
 }
 
 /// `server_header` accepts a header-value string or `false` — `false`
@@ -884,11 +891,15 @@ pub struct AdminConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
     /// `IP:port` to bind — `":port"` expands to the wildcard
-    /// `0.0.0.0:port`, same as `server.listen` entries. Use loopback
-    /// unless remote administration is needed.
-    #[serde(deserialize_with = "listen_addr")]
-    #[schemars(with = "String")]
-    pub listen: SocketAddr,
+    /// `0.0.0.0:port`, same as `server.listen` entries. A string binds
+    /// one listener, a list binds several (`tls` and `token` apply to
+    /// all). Use loopback unless remote administration is needed.
+    #[serde(
+        deserialize_with = "listen_addr_list",
+        default = "default_admin_listen"
+    )]
+    #[schemars(with = "Vec<String>")]
+    pub listen: Vec<SocketAddr>,
     /// Bearer token required on all admin requests. Mandatory when `listen`
     /// is not a loopback address; use `${VAR}` interpolation to keep it out
     /// of the file.
@@ -952,7 +963,7 @@ impl Default for AdminConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            listen: SocketAddr::from(([127, 0, 0, 1], 2019)),
+            listen: default_admin_listen(),
             token: None,
             tls: None,
         }
@@ -970,7 +981,7 @@ pub struct ManualTls {
 }
 
 /// ACME account settings (Let's Encrypt or any RFC 8555 directory).
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct AcmeConfig {
     /// Contact email for the ACME account.
@@ -1043,7 +1054,7 @@ impl Default for AcmeConfig {
 
 /// DNS provider used to publish `_acme-challenge` TXT records for the
 /// `dns-01` challenge (`[acme.dns]`).
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub enum AcmeDns {
     /// Cloudflare API v4: `[acme.dns.cloudflare]`.
     #[serde(rename = "cloudflare")]
@@ -1051,7 +1062,7 @@ pub enum AcmeDns {
 }
 
 /// Cloudflare credentials for `dns-01` (`[acme.dns.cloudflare]`).
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CloudflareDns {
     /// API token with `Zone.DNS:Edit` on the zones to validate; zone
@@ -1080,7 +1091,7 @@ fn default_dns_propagation_timeout() -> Duration {
 }
 
 /// External Account Binding credentials.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExternalAccountBinding {
     /// EAB key identifier.
@@ -1090,7 +1101,7 @@ pub struct ExternalAccountBinding {
 }
 
 /// On-demand certificate issuance.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct OnDemandAcme {
     /// Enable issuance for hostnames not present in any site's `hosts` list.
@@ -1275,7 +1286,10 @@ fn default_upstream_max_connections() -> usize {
 pub struct UnavailableResponse {
     /// Status code returned to clients (typically 502 or 503).
     pub status: u16,
-    /// Optional response body; a short default text is used when absent.
+    /// Optional response body; a short default text is used when
+    /// absent. The same placeholders as `respond.body` substitute
+    /// (`{path}`, `{host}`, `{uri}`, `{request_id}`, …). Ignored for
+    /// statuses that forbid a body (1xx/204/304).
     pub body: Option<String>,
 }
 
@@ -1485,7 +1499,7 @@ impl Default for UpstreamDns {
 }
 
 /// TLS verification for `https://` upstreams.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct UpstreamTls {
     /// Verify the upstream certificate against the web PKI or `ca`.
@@ -1874,7 +1888,8 @@ pub struct StaticHandler {
     /// HTML directory listing when no index file exists.
     #[serde(default)]
     pub listing: bool,
-    /// SPA mode: serve `index.html` for unknown paths.
+    /// SPA mode: serve `index[0]` for unknown paths and directory
+    /// requests (before listing).
     #[serde(default)]
     pub spa: bool,
     /// Extra fallback files tried before SPA/listing/404: on a miss each
@@ -1891,10 +1906,12 @@ pub struct StaticHandler {
     #[serde(default)]
     pub cache_control: BTreeMap<String, String>,
     /// Custom error pages: status code → file path, always relative to
-    /// `root` (a leading `/` means "from the document root").
-    #[serde(default, with = "crate::config::values::status_map")]
+    /// `root` (a leading `/` means "from the document root"). Keys are
+    /// exact codes (`404`) or class keys (`"4xx"`/`"5xx"`); an exact
+    /// code wins over its class.
+    #[serde(default)]
     #[schemars(with = "BTreeMap<String, PathBuf>")]
-    pub error_pages: BTreeMap<u16, PathBuf>,
+    pub error_pages: ErrorPages,
     /// MIME type overrides by file extension (without dot).
     #[serde(default)]
     pub mime_types: BTreeMap<String, String>,
@@ -1910,7 +1927,7 @@ impl Default for StaticHandler {
             try_files: Vec::new(),
             precompressed: true,
             cache_control: BTreeMap::new(),
-            error_pages: BTreeMap::new(),
+            error_pages: ErrorPages::default(),
             mime_types: BTreeMap::new(),
         }
     }
@@ -1919,6 +1936,62 @@ impl Default for StaticHandler {
 impl StaticHandler {
     fn default_index() -> Vec<String> {
         vec!["index.html".into()]
+    }
+}
+
+/// `static.error_pages` — exact status codes plus `"4xx"`/`"5xx"`
+/// class keys; an exact code wins over its class.
+#[derive(Debug, Clone, Default)]
+pub struct ErrorPages {
+    /// Exact status → page path.
+    pub exact: BTreeMap<u16, PathBuf>,
+    /// Status class (4 = 400–499, 5 = 500–599) → page path.
+    pub classes: BTreeMap<u8, PathBuf>,
+}
+
+impl ErrorPages {
+    /// The page for `status` — exact match wins, else its class.
+    pub fn get(&self, status: u16) -> Option<&PathBuf> {
+        self.exact
+            .get(&status)
+            .or_else(|| self.classes.get(&((status / 100) as u8)))
+    }
+
+    /// Every configured (key description, path) pair — for validation.
+    pub fn entries(&self) -> impl Iterator<Item = (String, &PathBuf)> {
+        self.exact
+            .iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .chain(self.classes.iter().map(|(k, v)| (format!("{k}xx"), v)))
+    }
+}
+
+impl<'de> Deserialize<'de> for ErrorPages {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = BTreeMap::<String, PathBuf>::deserialize(d)?;
+        let mut pages = Self::default();
+        for (k, v) in raw {
+            if let Ok(n) = k.parse::<u16>() {
+                pages.exact.insert(n, v);
+            } else if let Some(class) = k
+                .strip_suffix("xx")
+                .and_then(|d| d.parse::<u8>().ok())
+                .filter(|d| (4..=5).contains(d))
+            {
+                pages.classes.insert(class, v);
+            } else {
+                return Err(serde::de::Error::custom(format!(
+                    "error_pages key {k:?} is not a status code or a class key (\"4xx\"/\"5xx\")"
+                )));
+            }
+        }
+        Ok(pages)
+    }
+}
+
+impl Serialize for ErrorPages {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.entries().collect::<BTreeMap<_, _>>().serialize(s)
     }
 }
 
@@ -1932,7 +2005,9 @@ pub struct ProxyHandler {
     #[serde(default)]
     pub rewrite: Option<Rewrite>,
     /// Request header manipulation applied before forwarding upstream.
-    #[serde(default)]
+    /// `request_headers = false` disables it explicitly.
+    #[serde(default, deserialize_with = "opt_header_ops")]
+    #[schemars(with = "Option<HeaderOpsSchema>")]
     pub request_headers: Option<HeaderOps>,
     /// Retry policy for idempotent requests on connection failure.
     /// `retries = false` disables retries entirely.
@@ -2138,8 +2213,9 @@ impl Default for RetryPolicy {
 #[serde(default, deny_unknown_fields)]
 pub struct RedirectHandler {
     /// Redirect to a fixed URL template. `{host}`, `{path}`, `{query}`
-    /// (leading `?` included), `{method}`, `{scheme}` substitute from the
-    /// request.
+    /// (leading `?` included), `{method}`, `{scheme}`, `{uri}` (path +
+    /// query as sent), `{args}` (query without `?`), `{remote_ip}`, and
+    /// `{request_id}` substitute from the request.
     pub to: Option<String>,
     /// Redirect to the same path on another host (and optional port).
     pub host: Option<String>,
@@ -2167,7 +2243,10 @@ pub struct RespondHandler {
     /// Status code.
     pub status: u16,
     /// Response body (text). `{path}`, `{host}`, `{query}` (leading `?`
-    /// included), `{method}`, `{scheme}` substitute from the request.
+    /// included), `{method}`, `{scheme}`, `{uri}` (path + query as
+    /// sent), `{args}` (query without `?`), `{remote_ip}` (client IP
+    /// under the route's trust model), and `{request_id}` substitute
+    /// from the request.
     pub body: String,
     /// Extra response headers — e.g. `content-type = "text/plain"`; the
     /// body is text, so pick a non-HTML type when placeholders are used.

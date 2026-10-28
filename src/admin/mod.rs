@@ -342,13 +342,16 @@ async fn purge(
 pub async fn serve(
     shared: Arc<Shared>,
     reload_tx: tokio::sync::mpsc::Sender<Reload>,
-    mut shutdown: tokio::sync::watch::Receiver<bool>,
+    shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> std::io::Result<()> {
     let rt = shared.load();
-    let addr = rt.config.admin.listen;
-    let listener = TcpListener::bind(addr).await.map_err(|e| {
-        std::io::Error::new(e.kind(), format!("cannot bind admin listener {addr}: {e}"))
-    })?;
+    let addrs = &rt.config.admin.listen;
+    let mut listeners = Vec::with_capacity(addrs.len());
+    for &addr in addrs {
+        listeners.push(TcpListener::bind(addr).await.map_err(|e| {
+            std::io::Error::new(e.kind(), format!("cannot bind admin listener {addr}: {e}"))
+        })?);
+    }
 
     let acceptor = match &rt.config.admin.tls {
         Some(t) => {
@@ -356,7 +359,9 @@ pub async fn serve(
                 AdminTls::Manual(m) => crate::tls::manual::load_pair(m)
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?,
                 AdminTls::SelfSigned => {
-                    let hosts = vec!["localhost".to_string(), addr.ip().to_string()];
+                    let hosts: Vec<String> = std::iter::once("localhost".to_string())
+                        .chain(addrs.iter().map(|a| a.ip().to_string()))
+                        .collect();
                     crate::tls::selfsigned::generate(&hosts)
                         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?
                 }
@@ -373,24 +378,35 @@ pub async fn serve(
     };
 
     let state = Arc::new(AdminState { shared, reload_tx });
-    tracing::info!(%addr, tls = acceptor.is_some(), "admin listener bound");
+    for &addr in addrs {
+        tracing::info!(%addr, tls = acceptor.is_some(), "admin listener bound");
+    }
     if rt.config.admin.token.is_none() {
         tracing::warn!(
-            %addr,
+            ?addrs,
             "admin listener has no token — restricted to loopback-originated requests; \
              set admin.token to enable remote management"
         );
     }
-    match acceptor {
-        None => {
-            axum::serve(listener, router(state))
-                .with_graceful_shutdown(async move {
-                    let _ = shutdown.changed().await;
-                })
-                .await
-        }
-        Some(acc) => serve_tls(listener, acc, router(state), shutdown).await,
+    let mut set = tokio::task::JoinSet::new();
+    for listener in listeners {
+        let app = router(state.clone());
+        let mut sd = shutdown.clone();
+        match &acceptor {
+            None => set.spawn(async move {
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(async move {
+                        let _ = sd.changed().await;
+                    })
+                    .await
+            }),
+            Some(acc) => set.spawn(serve_tls(listener, acc.clone(), app, sd)),
+        };
     }
+    while let Some(res) = set.join_next().await {
+        res.map_err(|e| std::io::Error::other(format!("admin listener task: {e}")))??;
+    }
+    Ok(())
 }
 
 /// Minimal TLS accept loop for the admin app: one `hyper` connection per

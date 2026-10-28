@@ -33,6 +33,17 @@ pub enum LoadError {
     /// The TOML did not match the configuration schema.
     #[error("{0}: invalid configuration: {1}")]
     Schema(PathBuf, String),
+    /// The config path is a directory — `-c` needs a file.
+    #[error(
+        "{0} is a directory — point -c at a file, e.g. -c {0}/verd.toml; directories load via `include`"
+    )]
+    IsDirectory(PathBuf),
+    /// `${file:}` substituted into a path-typed field or `include` —
+    /// the file's *contents* became the path.
+    #[error(
+        "{0}: {1} = \"${{file:{2}}}\" — `${{file:}}` reads a file's contents into a value, but {1} names a path; write {1} = \"{2}\" directly"
+    )]
+    InterpolatedPathField(PathBuf, String, String),
     /// An `include` key is present but not a list of path strings.
     #[error("{0}: `include` must be a list of path strings")]
     IncludeType(PathBuf),
@@ -161,6 +172,9 @@ impl WatchPlan {
 /// Load a configuration file: read → interpolate → merge includes →
 /// deserialize → validate.
 pub fn load(path: &Path) -> Result<Loaded, LoadError> {
+    if path.is_dir() {
+        return Err(LoadError::IsDirectory(path.to_path_buf()));
+    }
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     load_inner(&path, None)
 }
@@ -175,6 +189,7 @@ pub fn load_stdin(text: &str) -> Result<Loaded, LoadError> {
 fn load_inner(path: &Path, root_text: Option<&str>) -> Result<Loaded, LoadError> {
     let mut report = LoadReport::default();
     let (value, origins) = load_document(path, 0, &mut report, root_text)?;
+    check_file_ref_targets(path, &report, &origins)?;
     let config: Config = serde_path_to_error::deserialize(value).map_err(|e| {
         LoadError::Schema(
             path.to_path_buf(),
@@ -375,6 +390,46 @@ const PATH_FIELDS: &[&str] = &[
     "log.output",
     "log.access.output",
 ];
+
+/// Root-relative path fields — excluded from [`PATH_FIELDS`] rebasing,
+/// but `${file:}` under them inlines contents as a bogus path too.
+const FILE_REF_FORBIDDEN: &[&str] = &[
+    "site.*.route.*.static.try_files.*",
+    "site.*.route.*.static.index.*",
+    "site.*.route.*.static.error_pages.*",
+];
+
+/// `${file:}` inside a path-typed field or `include` substitutes the
+/// file's *contents* — a guaranteed-bogus path and a confusing error
+/// downstream. Fail with a teaching error; `${VAR}` stays legal in
+/// these fields.
+fn check_file_ref_targets(
+    path: &Path,
+    report: &LoadReport,
+    origins: &std::collections::HashMap<String, PathBuf>,
+) -> Result<(), LoadError> {
+    for (at, f) in &report.file_refs {
+        let segs: Vec<String> = at.split('.').map(String::from).collect();
+        let under_path_field = PATH_FIELDS
+            .iter()
+            .chain(FILE_REF_FORBIDDEN)
+            .any(|p| path_pattern_matches(p, &segs));
+        let under_include = segs.first().is_some_and(|s| s == "include");
+        if under_path_field || under_include {
+            // blame the fragment that wrote the marker, not just the root
+            let source = origins
+                .get(at)
+                .cloned()
+                .unwrap_or_else(|| path.to_path_buf());
+            return Err(LoadError::InterpolatedPathField(
+                source,
+                at.clone(),
+                f.display().to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
 
 /// `log.*.output` destinations that are not paths.
 fn is_output_sentinel(v: &str) -> bool {
@@ -2674,7 +2729,7 @@ response_headers = { enabled = false }
 
             // admin.listen = ":port" → wildcard, same as server.listen
             let l = load_str("[admin]\nlisten = \":2019\"\ntoken = \"t\"").unwrap();
-            assert_eq!(l.config.admin.listen.to_string(), "0.0.0.0:2019");
+            assert_eq!(l.config.admin.listen[0].to_string(), "0.0.0.0:2019");
 
             // rate_limit table `key` defaults to "ip"
             let l = load_str(
@@ -2766,6 +2821,98 @@ response_headers = { enabled = false }
                     .host_header,
                 model::HostHeader::Verbatim("upstream".into())
             );
+        }
+
+        #[test]
+        fn round_three_ergonomics() {
+            // admin.listen — scalar or list, each entry "ip:port"/":port"
+            let l = load_str("[admin]\nlisten = [\"127.0.0.1:2019\", \":2020\"]").unwrap();
+            assert_eq!(l.config.admin.listen.len(), 2);
+            assert_eq!(l.config.admin.listen[1].to_string(), "0.0.0.0:2020");
+
+            // proxy.request_headers = false → { enabled = false }
+            let l = load_str(
+                "[[site]]\n[[site.route]]\n[site.route.proxy]\nupstream = \"http://x:1\"\nrequest_headers = false",
+            )
+            .unwrap();
+            assert!(
+                !l.config.site[0].route[0]
+                    .proxy
+                    .as_ref()
+                    .unwrap()
+                    .request_headers
+                    .as_ref()
+                    .unwrap()
+                    .enabled
+            );
+
+            // error_pages class keys — exact wins over class
+            let l = load_str(
+                "[[site]]\nroot = \"/tmp\"\n[[site.route]]\n[site.route.static]\nroot = \"/tmp\"\nerror_pages = { \"4xx\" = \"e4.html\", 404 = \"nf.html\", \"5xx\" = \"e5.html\" }",
+            )
+            .unwrap();
+            let ep = &l.config.site[0].route[0]
+                .static_files
+                .as_ref()
+                .unwrap()
+                .error_pages;
+            assert_eq!(ep.get(404).unwrap().to_str().unwrap(), "nf.html");
+            assert_eq!(ep.get(403).unwrap().to_str().unwrap(), "e4.html");
+            assert_eq!(ep.get(503).unwrap().to_str().unwrap(), "e5.html");
+            assert!(ep.get(302).is_none());
+            match load_str(
+                "[[site]]\nroot = \"/tmp\"\n[[site.route]]\n[site.route.static]\nroot = \"/tmp\"\nerror_pages = { \"6xx\" = \"x.html\" }",
+            ) {
+                Err(LoadError::Schema(_, _)) => {}
+                Err(e) => panic!("expected Schema, got {e}"),
+                Ok(_) => panic!("\"6xx\" should fail"),
+            }
+
+            // ${file:} under a path field → teaching error, not an
+            // inlined path
+            let dir = tempfile::tempdir().unwrap();
+            write(dir.path(), "secret.txt", "hunter2");
+            let cfg = write(
+                dir.path(),
+                "verd.toml",
+                "[[site]]\nhosts = [\"x\"]\nroot = \"/tmp\"\n[site.tls]\ncert = \"${file:secret.txt}\"\nkey = \"k.pem\"\n",
+            );
+            match load(&cfg) {
+                Err(LoadError::InterpolatedPathField(_, at, _)) => {
+                    assert_eq!(at, "site.0.tls.cert")
+                }
+                Err(e) => panic!("expected InterpolatedPathField, got {e}"),
+                Ok(_) => panic!("${{file:}} under a path field should fail"),
+            }
+            // root-relative path fields are guarded too — contents
+            // would inline as a bogus page/index name
+            let cfg = write(
+                dir.path(),
+                "verd.toml",
+                "[[site]]\nhosts = [\"x\"]\n[[site.route]]\n[site.route.static]\nroot = \"/tmp\"\nerror_pages = { 404 = \"${file:secret.txt}\" }\n",
+            );
+            match load(&cfg) {
+                Err(LoadError::InterpolatedPathField(_, at, _)) => {
+                    assert_eq!(at, "site.0.route.0.static.error_pages.404")
+                }
+                Err(e) => panic!("expected InterpolatedPathField, got {e}"),
+                Ok(_) => panic!("${{file:}} under error_pages should fail"),
+            }
+
+            // ${file:} stays legal for non-path fields; ${VAR} stays
+            // legal under path fields
+            let l = load_str("[admin]\ntoken = \"${file:/dev/null}\"\n[[site]]\nhosts = [\"x\"]\nroot = \"${HOME}\"").unwrap();
+            assert_eq!(
+                l.config.site[0].root.as_deref().unwrap(),
+                std::path::Path::new(&std::env::var("HOME").unwrap())
+            );
+
+            // -c <directory> → a naming error, not a bare io failure
+            match load(dir.path()) {
+                Err(LoadError::IsDirectory(p)) => assert_eq!(p, dir.path()),
+                Err(e) => panic!("expected IsDirectory, got {e}"),
+                Ok(_) => panic!("-c <dir> should fail"),
+            }
         }
 
         #[test]

@@ -65,6 +65,17 @@ ergonomic conveniences apply broadly:
   `site.respond` and `site.redirect` materialize an implicit `/` route
   — a whole site becomes `redirect = "https://apex.example{path}"` for
   the www → apex case. At most one catch-all shorthand per site.
+  `site.root` is the same idea for `route.static` — `root = "/srv/www"`
+  is exactly a catch-all `static = { root = "/srv/www" }` route.
+
+  `site.redirect` is the general catch-all redirect (template or
+  table). `site.redirect_https` and `site.redirect_host` are narrower
+  pipeline behavior, not routes: `redirect_https = true` upgrades
+  plain-HTTP requests to https before routing, and `redirect_host`
+  only changes the hostname *of that upgrade* — it is ignored when
+  `redirect_https = false` or `tls = "off"`. Prefer `site.redirect`
+  for anything else; the narrow names exist for the two one-line
+  cases.
 
   The closed shorthand list and the cap — at most two shorthand forms
   beside the table — live in `docs/config-grammar.md`; the per-field
@@ -80,8 +91,15 @@ default — and all of them take the bare spelling too: `auth = false`,
 `cors = false`, `rate_limit = false`, `response_headers = false`,
 `security = false`, `cache = false`, `compress = false`,
 `log.access = false`. `server_header = false` omits the `Server`
-header (as does `""`). A bare `false` carries no settings and never
+header (as does `""`; `"off"` parses for compatibility but is
+deprecated and warns). A bare `false` carries no settings and never
 warns; stray keys inside a disabled *table* do.
+
+`respond.headers` and `route.response_headers` both reach a `respond`
+route but are different layers: `respond.headers` is the handler's own
+verbatim response map (e.g. `location`, `content-type`), while
+`response_headers` is the route middleware that edits whatever
+response the handler produced — apply order is remove → set → add.
 
 ## Durations
 
@@ -112,8 +130,9 @@ never change which route wins on path specificity.
 
 ## Placeholders
 
-`redirect.to`/`host`/`scheme` and `respond.body` substitute request
-attributes written `{name}`:
+`redirect.to`, `respond.body`, and `upstream.*.unavailable.body`
+substitute request attributes written `{name}` (`redirect.host` and
+`redirect.scheme` are literal):
 
 | Placeholder | Value |
 | --- | --- |
@@ -122,8 +141,13 @@ attributes written `{name}`:
 | `{query}` | raw query string including the leading `?` — empty when absent |
 | `{method}` | request method |
 | `{scheme}` | `http` or `https` |
+| `{uri}` | path + query as sent (`/x?a=1`) |
+| `{args}` | query string without `?` — empty when absent |
+| `{remote_ip}` | client IP under the route's trust model (honours `trusted_proxies`) |
+| `{request_id}` | the `X-Request-Id` — propagated or generated |
 
-The set is closed — any other `{…}` text passes through literally
+`upstream.*.unavailable.body` substitutes the same set. The set is
+closed — any other `{…}` text passes through literally
 (and `verd validate` warns, since it's usually a typo). Redirect
 templates re-encode `{path}` before it lands in `Location`, so
 `redirect = "https://new.example{path}"` is safe to copy-paste.
@@ -146,7 +170,7 @@ Split large configs across files:
 include = ["conf.d", "extra-*.toml"]
 ```
 
-``include` accepts files, directories (`*.toml` directly inside,
+`include` accepts files, directories (`*.toml` directly inside,
 sorted), and glob patterns (`*` matches any characters in the file
 name), and its entries interpolate like any other string —
 `include = ["${VERD_EXTRA}"]` is valid. A named file or directory
@@ -173,6 +197,11 @@ Absolute paths are untouched either way.
 Two fields are exceptions by design: `static.error_pages` and
 `static.try_files` name files *inside* `root`, so they stay
 root-relative.
+
+`${file:}` never belongs under a path-typed field or inside
+`include` — it reads the file's *contents* into the value, so
+`cert = "${file:/x}"` fails at load with a pointer to write the path
+directly. `${VAR}` stays legal there.
 
 > **Breaking change:** these fields used to resolve against the
 > process working directory. If you relied on that, prefix the

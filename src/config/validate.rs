@@ -114,7 +114,17 @@ fn check_host_target(ctx: &mut Ctx, path: String, v: &str, extra: &str) {
 /// literally at request time — almost always a typo, but possibly
 /// intentional text, so warn rather than error.
 fn check_placeholder_tokens(ctx: &mut Ctx, path: &str, template: &str) {
-    const KNOWN: [&str; 5] = ["path", "host", "query", "method", "scheme"];
+    const KNOWN: [&str; 9] = [
+        "path",
+        "host",
+        "query",
+        "method",
+        "scheme",
+        "uri",
+        "args",
+        "remote_ip",
+        "request_id",
+    ];
     let mut seen = HashSet::new();
     for cap in placeholder_re().captures_iter(template) {
         let name = cap[1].to_string();
@@ -122,7 +132,7 @@ fn check_placeholder_tokens(ctx: &mut Ctx, path: &str, template: &str) {
             ctx.warn(
                 path.to_string(),
                 format!(
-                    "unknown placeholder {{{name}}} in {template:?} — the closed set is {{path}}, {{host}}, {{query}}, {{method}}, {{scheme}}; other text passes through literally"
+                    "unknown placeholder {{{name}}} in {template:?} — the closed set is {{path}}, {{host}}, {{query}}, {{method}}, {{scheme}}, {{uri}}, {{args}}, {{remote_ip}}, {{request_id}}; other text passes through literally"
                 ),
             );
         }
@@ -342,10 +352,16 @@ fn check_listeners(ctx: &mut Ctx, cfg: &Config) {
             "per-IP limit exceeds the global connection limit",
         );
     }
-    // `""`/`"off"` omit the header; anything else is emitted verbatim —
-    // an invalid value would be silently dropped at build time
+    // `""`/`"off"`/`false` omit the header; anything else is emitted
+    // verbatim — an invalid value would be silently dropped at build
+    // time. `"off"` is the legacy spelling — `false` is preferred.
     let sh = cfg.server.server_header.as_str();
-    if sh != "off" && !sh.is_empty() && http::HeaderValue::from_str(sh).is_err() {
+    if sh == "off" {
+        ctx.warn(
+            "server.server_header",
+            "\"off\" is deprecated — prefer `server_header = false` (or \"\")",
+        );
+    } else if !sh.is_empty() && http::HeaderValue::from_str(sh).is_err() {
         ctx.error(
             "server.server_header",
             format!("{sh:?} is not a valid header value"),
@@ -476,8 +492,20 @@ fn check_sites(ctx: &mut Ctx, cfg: &Config) {
                 // only warn — redirect on a plain site is a no-op
                 ctx.warn(site_path.clone(), "redirect_https is set but tls = \"off\"");
             }
+            if site.redirect_host.is_some() {
+                ctx.warn(
+                    format!("{site_path}.redirect_host"),
+                    "redirect_host is ignored — it only affects the http→https upgrade, which never runs with tls = \"off\"",
+                );
+            }
         } else {
             any_tls = true;
+        }
+        if site.redirect_https == Some(false) && site.redirect_host.is_some() {
+            ctx.warn(
+                format!("{site_path}.redirect_host"),
+                "redirect_host is ignored — it only affects the http→https upgrade, which redirect_https = false disables",
+            );
         }
         if let SiteTls::Manual(m) = &site.tls {
             if !m.cert.is_file() {
@@ -654,7 +682,7 @@ fn check_site_defaults(ctx: &mut Ctx, cfg: &Config, site_path: &str, site: &Site
         check_compress(ctx, site_path, comp);
     }
     if let Some(ops) = &site.response_headers {
-        check_header_ops(ctx, site_path, ops);
+        check_header_ops(ctx, site_path, "response_headers", ops);
     }
     if let Some(sec) = &site.security {
         check_route_security(ctx, &format!("{site_path}.security"), sec);
@@ -665,6 +693,7 @@ fn check_site_defaults(ctx: &mut Ctx, cfg: &Config, site_path: &str, site: &Site
         &site.ip_allow,
         "a /0 CIDR matches every client — the allowlist is a no-op",
     );
+    check_overrides(ctx, site_path, &site.timeouts, &site.limits);
     check_catchall_nets(
         ctx,
         format!("{site_path}.ip_deny"),
@@ -781,7 +810,8 @@ fn check_route(
     }
 
     if let Some(st) = &route.static_files {
-        if !st.root.is_dir() {
+        let root_exists = st.root.is_dir();
+        if !root_exists {
             ctx.warn(
                 format!("{path}.static.root"),
                 format!(
@@ -790,7 +820,7 @@ fn check_route(
                 ),
             );
         }
-        for status in st.error_pages.keys() {
+        for status in st.error_pages.exact.keys() {
             if !(400..=599).contains(status) {
                 ctx.warn(
                     format!("{path}.static.error_pages"),
@@ -800,10 +830,47 @@ fn check_route(
                 );
             }
         }
+        // pages resolve against `root` at serve time — a missing file
+        // silently falls back to the default error body
+        if root_exists {
+            for (key, page) in st.error_pages.entries() {
+                let resolved = st.root.join(page.to_string_lossy().trim_start_matches('/'));
+                if !resolved.is_file() {
+                    ctx.warn(
+                        format!("{path}.static.error_pages"),
+                        format!("page {key} → {} does not exist under root", page.display()),
+                    );
+                }
+            }
+        }
         if st.index.is_empty() && !st.listing && !st.spa {
             ctx.warn(
                 format!("{path}.static"),
                 "no index files, listing disabled, and spa disabled — directory requests will 403/404",
+            );
+        }
+        // `spa` serves `index[0]` from root as the catch-all — with no
+        // index configured or the file missing it can never fire
+        let spa_dead = st.index.is_empty()
+            || (root_exists && st.index.first().is_some_and(|i| !st.root.join(i).is_file()));
+        if st.spa && st.index.is_empty() {
+            ctx.warn(
+                format!("{path}.static.spa"),
+                "spa serves index[0] as its fallback — index = [] means spa never applies",
+            );
+        } else if st.spa && root_exists && spa_dead {
+            let i = &st.index[0];
+            ctx.warn(
+                format!("{path}.static.spa"),
+                format!("spa fallback {i:?} does not exist under root — spa never applies"),
+            );
+        }
+        if st.spa && st.listing && !spa_dead {
+            // directory requests hit the SPA file before listing runs;
+            // listing is only reachable while the SPA file is missing
+            ctx.warn(
+                format!("{path}.static.listing"),
+                "listing only applies when the SPA fallback file is missing — spa takes precedence over listing",
             );
         }
     }
@@ -858,7 +925,7 @@ fn check_route(
         check_compress(ctx, &path, comp);
     }
     if let Some(ops) = &route.response_headers {
-        check_header_ops(ctx, &path, ops);
+        check_header_ops(ctx, &path, "response_headers", ops);
     }
     if let Some(sec) = &route.security {
         check_route_security(ctx, &format!("{path}.security"), sec);
@@ -875,18 +942,75 @@ fn check_route(
         &route.ip_deny,
         "a /0 CIDR denies every client — all requests get 403",
     );
+    check_overrides(ctx, &path, &route.timeouts, &route.limits);
+    // A route's ip_allow can only narrow the site's — entries that
+    // admit nothing the site allows, or that the site denylist covers,
+    // can never pass
+    for net in &route.ip_allow {
+        if !site.ip_allow.is_empty()
+            && !site.ip_allow.iter().any(|s| {
+                same_family(s, net) && (s.contains(&net.network()) || net.contains(&s.network()))
+            })
+        {
+            ctx.warn(
+                format!("{path}.ip_allow"),
+                format!(
+                    "{net} is outside every {site_label}.ip_allow entry — it can never admit a client"
+                ),
+            );
+        }
+        if site.ip_deny.iter().any(|d| {
+            same_family(d, net) && d.prefix_len() <= net.prefix_len() && d.contains(&net.network())
+        }) {
+            ctx.warn(
+                format!("{path}.ip_allow"),
+                format!(
+                    "{net} is fully denied by {site_label}.ip_deny — it can never admit a client"
+                ),
+            );
+        }
+    }
+}
+
+fn same_family(a: &ipnet::IpNet, b: &ipnet::IpNet) -> bool {
+    matches!(a, ipnet::IpNet::V4(_)) == matches!(b, ipnet::IpNet::V4(_))
 }
 
 /// Dead-config check for a disabled `response_headers` block — field
 /// syntax itself is enforced when the ops compile at build.
-fn check_header_ops(ctx: &mut Ctx, path: &str, ops: &HeaderOps) {
+fn check_header_ops(ctx: &mut Ctx, path: &str, leaf: &str, ops: &HeaderOps) {
     if !ops.enabled && (!ops.set.is_empty() || !ops.add.is_empty() || !ops.remove.is_empty()) {
         ctx.warn(
-            format!("{path}.response_headers"),
-            "settings are ignored — response_headers.enabled = false",
+            format!("{path}.{leaf}"),
+            format!("settings are ignored — {leaf}.enabled = false"),
         );
     }
+    // hop-by-hop/framing headers are managed by the server — a manual
+    // value lands next to the computed one and corrupts framing on
+    // either direction (a set `content-length` duplicates the real one)
+    for (field, map) in [("set", &ops.set), ("add", &ops.add)] {
+        for k in map.keys() {
+            if HOP_BY_HOP.contains(&k.to_ascii_lowercase().as_str()) {
+                ctx.error(
+                    format!("{path}.{leaf}.{field}.{k}"),
+                    "managed by the server — setting it here corrupts request/response framing",
+                );
+            }
+        }
+    }
 }
+
+const HOP_BY_HOP: &[&str] = &[
+    "connection",
+    "keep-alive",
+    "transfer-encoding",
+    "content-length",
+    "te",
+    "trailer",
+    "upgrade",
+    "proxy-authenticate",
+    "proxy-authorization",
+];
 
 /// Cache checks shared by site defaults and routes.
 fn check_route_cache(ctx: &mut Ctx, cfg: &Config, path: &str, cache: &RouteCache) {
@@ -945,6 +1069,20 @@ fn check_route_cache(ctx: &mut Ctx, cfg: &Config, path: &str, cache: &RouteCache
             );
         }
     }
+    if cache.ttl.is_some_and(|t| t.is_zero()) {
+        ctx.warn(
+            format!("{path}.cache.ttl"),
+            "ttl = 0s expires responses instantly — nothing is ever served from cache",
+        );
+    }
+    for h in &cache.vary_headers {
+        if http::HeaderName::from_bytes(h.as_bytes()).is_err() {
+            ctx.error(
+                format!("{path}.cache.vary_headers"),
+                format!("invalid header name {h:?}"),
+            );
+        }
+    }
 }
 
 /// Compression checks shared by site defaults and routes.
@@ -965,6 +1103,25 @@ fn check_compress(ctx: &mut Ctx, path: &str, comp: &CompressConfig) {
             ctx.error(
                 format!("{path}.compress.algorithms"),
                 format!("unknown algorithm {alg:?}; use br, zstd, or gzip"),
+            );
+        }
+    }
+    if comp.types.is_empty() {
+        ctx.warn(
+            format!("{path}.compress.types"),
+            "types is empty — nothing is compressed; use compress = false to disable",
+        );
+    }
+    for t in &comp.types {
+        // `type/subtype` or `type/*` — anything else can never equal a
+        // Content-Type value
+        let ok = t
+            .split_once('/')
+            .is_some_and(|(a, b)| !a.is_empty() && !b.is_empty() && !b.contains('/'));
+        if !ok {
+            ctx.warn(
+                format!("{path}.compress.types"),
+                format!("{t:?} is not a type/subtype — it can never match a Content-Type"),
             );
         }
     }
@@ -1112,12 +1269,66 @@ fn check_redirect(ctx: &mut Ctx, path: &str, redir: &RedirectHandler) {
 
 /// Shared respond checks — `path` is the owning route or site; field
 /// paths are `{path}.respond.*`.
+/// Status/body legality — 1xx is an interim status (never a final
+/// response), and 204/304 must not carry a body; a configured body is
+/// silently dropped at serve time, so flag it.
+fn check_status_body_rules(ctx: &mut Ctx, path: String, status: u16, has_body: bool) {
+    if (100..200).contains(&status) {
+        ctx.error(
+            path.clone(),
+            "1xx is an interim status, not a final response",
+        );
+    }
+    if has_body && matches!(status, 204 | 304) {
+        ctx.warn(path, "the body is ignored — 204/304 forbid a response body");
+    }
+}
+
 fn check_respond(ctx: &mut Ctx, path: &str, resp: &RespondHandler) {
     check_placeholder_tokens(ctx, &format!("{path}.respond.body"), &resp.body);
     if !(100..=599).contains(&resp.status) {
         ctx.error(
             path.to_owned(),
             format!("respond status {} is not a valid HTTP status", resp.status),
+        );
+    }
+    check_status_body_rules(
+        ctx,
+        format!("{path}.respond"),
+        resp.status,
+        !resp.body.is_empty(),
+    );
+    // framing/hop-by-hop headers are managed by the server — a manual
+    // value appends next to the computed one and corrupts framing
+    for k in resp.headers.keys() {
+        if [
+            "content-length",
+            "transfer-encoding",
+            "connection",
+            "keep-alive",
+            "upgrade",
+        ]
+        .contains(&k.to_ascii_lowercase().as_str())
+        {
+            ctx.error(
+                format!("{path}.respond.headers.{k}"),
+                "managed by the server — setting it here corrupts response framing",
+            );
+        }
+    }
+    // a redirect status with no Location won't redirect anywhere
+    if matches!(resp.status, 301 | 302 | 303 | 307 | 308)
+        && !resp
+            .headers
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case("location"))
+    {
+        ctx.warn(
+            format!("{path}.respond"),
+            format!(
+                "{} without a `Location` header won't redirect — set respond.headers.location",
+                resp.status
+            ),
         );
     }
     // reflected-request placeholders + text/html = XSS by config
@@ -1166,6 +1377,9 @@ fn check_proxy(ctx: &mut Ctx, cfg: &Config, path: &str, proxy: &ProxyHandler) {
                 }
             }
         }
+    }
+    if let Some(ops) = &proxy.request_headers {
+        check_header_ops(ctx, &format!("{path}.proxy"), "request_headers", ops);
     }
     if let Some(ops) = &proxy.request_headers
         && ops
@@ -1382,6 +1596,12 @@ fn check_rate_limit(ctx: &mut Ctx, path: &str, rl: &RateLimitConfig) {
         ),
         Some(_) => {}
     }
+    if rl.burst == Some(0) {
+        ctx.error(
+            format!("{path}.rate_limit.burst"),
+            "burst = 0 leaves no token capacity — every request is rejected",
+        );
+    }
 }
 
 fn check_cors(ctx: &mut Ctx, path: &str, cors: &CorsConfig) {
@@ -1517,6 +1737,39 @@ fn check_upstreams(ctx: &mut Ctx, cfg: &Config) {
                 "tls.verify = false disables upstream certificate verification — traffic to this upstream is MITM-able; prefer a custom ca or sni override",
             );
         }
+        if up.tls != crate::config::model::UpstreamTls::default()
+            && !up.servers.iter().any(|u| u.url.starts_with("https://"))
+        {
+            ctx.warn(
+                format!("{path}.tls"),
+                "tls settings are ignored — no https:// server in this upstream",
+            );
+        }
+        if !up.tls.verify && up.tls.ca.is_some() {
+            ctx.warn(
+                format!("{path}.tls.ca"),
+                "tls.ca is ignored — verify = false skips certificate verification entirely",
+            );
+        }
+        // unlike server timeouts, a 0s upstream timeout doesn't disable
+        // anything — tokio times out instantly, killing every request
+        for (field, d) in [
+            ("connect", up.timeouts.connect),
+            ("response_header", up.timeouts.response_header),
+        ] {
+            if d.is_zero() {
+                ctx.error(
+                    format!("{path}.timeouts.{field}"),
+                    "0s times out instantly — every upstream request fails",
+                );
+            }
+        }
+        if up.timeouts.idle.is_zero() {
+            ctx.warn(
+                format!("{path}.timeouts.idle"),
+                "0s retires pooled connections immediately — every request opens a fresh connection",
+            );
+        }
         if let Some(sni) = &up.tls.sni
             && sni.parse::<std::net::IpAddr>().is_err()
             && !looks_like_dns_name(sni)
@@ -1547,6 +1800,15 @@ fn check_upstreams(ctx: &mut Ctx, cfg: &Config) {
                 format!("{path}.unavailable.status"),
                 "unavailable status must be 100–599",
             );
+        }
+        check_status_body_rules(
+            ctx,
+            format!("{path}.unavailable.status"),
+            up.unavailable.status,
+            up.unavailable.body.is_some(),
+        );
+        if let Some(b) = &up.unavailable.body {
+            check_placeholder_tokens(ctx, &format!("{path}.unavailable.body"), b);
         }
         if let Some(p) = &up.health.passive
             && p.failures == 0
@@ -1605,8 +1867,12 @@ fn check_caches(ctx: &mut Ctx, cfg: &Config) {
     let used: HashSet<&str> = cfg
         .site
         .iter()
-        .flat_map(|s| s.route.iter())
-        .filter_map(|r| r.cache.as_ref().map(|c| c.store.as_str()))
+        .flat_map(|s| {
+            s.route
+                .iter()
+                .filter_map(|r| r.cache.as_ref().map(|c| c.store.as_str()))
+                .chain(s.cache.as_ref().map(|c| c.store.as_str()))
+        })
         .collect();
     for (name, store) in &cfg.cache {
         let path = format!("cache.{name}");
@@ -1651,6 +1917,9 @@ fn check_caches(ctx: &mut Ctx, cfg: &Config) {
         if store.max_object_bytes.0 == 0 {
             ctx.error(path.clone(), "max_object_bytes must be > 0");
         }
+        if store.max_items == 0 {
+            ctx.error(path.clone(), "max_items = 0 caches nothing");
+        }
     }
 }
 
@@ -1659,7 +1928,14 @@ fn check_admin(ctx: &mut Ctx, cfg: &Config) {
     if !a.enabled {
         // The listener is never bound; flag settings that silently do
         // nothing so the config doesn't read as if it serves.
-        for (field, set) in [("token", a.token.is_some()), ("tls", a.tls.is_some())] {
+        for (field, set) in [
+            ("token", a.token.is_some()),
+            ("tls", a.tls.is_some()),
+            (
+                "listen",
+                a.listen != crate::config::model::AdminConfig::default().listen,
+            ),
+        ] {
             if set {
                 ctx.warn(
                     format!("admin.{field}"),
@@ -1669,7 +1945,28 @@ fn check_admin(ctx: &mut Ctx, cfg: &Config) {
         }
         return;
     }
-    if !a.listen.ip().is_loopback() {
+    if a.listen.is_empty() {
+        ctx.error(
+            "admin.listen",
+            "admin.listen = [] binds no listener — remove the key or set admin.enabled = false",
+        );
+    }
+    let mut seen = HashSet::new();
+    for (i, l) in a.listen.iter().enumerate() {
+        if !seen.insert(*l) {
+            ctx.error(
+                format!("admin.listen[{i}]"),
+                format!("duplicate listen address {l}"),
+            );
+        }
+        if cfg.server.listen.iter().any(|sl| sl.addr == *l) {
+            ctx.error(
+                format!("admin.listen[{i}]"),
+                format!("{l} is also in server.listen — the bind will fail"),
+            );
+        }
+    }
+    if a.listen.iter().any(|l| !l.ip().is_loopback()) {
         if a.token.is_none() {
             ctx.error(
                 "admin.listen",
@@ -1693,7 +1990,7 @@ fn check_admin(ctx: &mut Ctx, cfg: &Config) {
             }
         }
     }
-    if a.listen.ip().is_loopback() && a.token.is_none() {
+    if !a.listen.is_empty() && a.listen.iter().all(|l| l.ip().is_loopback()) && a.token.is_none() {
         ctx.warn(
             "admin.token",
             "admin listener has no token — requests are restricted to loopback Host headers, but any local process can still manage the server; set admin.token",
@@ -1703,6 +2000,18 @@ fn check_admin(ctx: &mut Ctx, cfg: &Config) {
 
 fn check_acme(ctx: &mut Ctx, cfg: &Config) {
     let acme = &cfg.acme;
+    // [acme] only activates through site.tls = "auto" — a configured
+    // block with no such site silently does nothing
+    if *acme != crate::config::model::AcmeConfig::default()
+        && !cfg.site.iter().any(|s| {
+            matches!(
+                s.tls,
+                crate::config::model::SiteTls::Mode(crate::config::model::TlsMode::Auto)
+            )
+        })
+    {
+        ctx.warn("acme", "settings are ignored — no site uses tls = \"auto\"");
+    }
     if !acme.directory.starts_with("https://") && !acme.directory.starts_with("http://") {
         ctx.error(
             "acme.directory",
@@ -1836,9 +2145,93 @@ fn check_timeouts_limits(ctx: &mut Ctx, cfg: &Config) {
             "0s disables the send inactivity timeout — clients that stop reading can pin connections indefinitely",
         );
     }
+    if t.body_read.is_zero() {
+        ctx.warn(
+            "timeouts.body_read",
+            "0s disables the request body read timeout — slow uploads can pin connections",
+        );
+    }
+    if t.idle.is_zero() {
+        ctx.warn(
+            "timeouts.idle",
+            "0s closes connections after each request — keep-alive never applies",
+        );
+    }
+    // request_deadline = 0s is deliberate (SSE/WebSocket/long-polling)
+    // — documented, not warned
+}
+
+/// `0s`/`0B` overrides carry the same meanings as the global keys —
+/// a route opting out of inherited timeouts still opts into the risk.
+fn check_overrides(
+    ctx: &mut Ctx,
+    path: &str,
+    t: &Option<TimeoutOverrides>,
+    l: &Option<LimitOverrides>,
+) {
+    if let Some(t) = t {
+        for (name, v, msg) in [
+            (
+                "header_read",
+                t.header_read,
+                "disables the header read timeout — vulnerable to slowloris",
+            ),
+            (
+                "body_read",
+                t.body_read,
+                "disables the request body read timeout — slow uploads can pin connections",
+            ),
+            (
+                "idle",
+                t.idle,
+                "closes connections after each request — keep-alive never applies",
+            ),
+            (
+                "send",
+                t.send,
+                "disables the send inactivity timeout — stalled clients can pin connections",
+            ),
+        ] {
+            if v.is_some_and(|d| d.is_zero()) {
+                ctx.warn(format!("{path}.timeouts.{name}"), format!("0s {msg}"));
+            }
+        }
+    }
+    if let Some(l) = l {
+        if l.header_bytes.is_some_and(|b| b.0 == 0) {
+            ctx.error(
+                format!("{path}.limits.header_bytes"),
+                "0B rejects every request — headers can't be read",
+            );
+        }
+        if l.body_bytes.is_some_and(|b| b.0 == 0) {
+            ctx.warn(
+                format!("{path}.limits.body_bytes"),
+                "0B rejects every request with a body",
+            );
+        }
+    }
 }
 
 fn check_log(ctx: &mut Ctx, cfg: &Config) {
+    let a = &cfg.log.access;
+    if !a.enabled {
+        let d = AccessLog::default();
+        let set = [
+            ("format", a.format != d.format),
+            ("output", a.output != d.output),
+            ("filter", a.filter.is_some()),
+            ("sample", a.sample != d.sample),
+        ];
+        for (field, set) in set {
+            if set {
+                ctx.warn(
+                    format!("log.access.{field}"),
+                    "settings are ignored — log.access.enabled = false",
+                );
+            }
+        }
+    }
     let ok_levels = ["error", "warn", "info", "debug", "trace", "off"];
     if !ok_levels.contains(&cfg.log.level.as_str()) && !cfg.log.level.contains('=')
     // allow env-filter style "verd=debug,hyper=info"
@@ -1858,6 +2251,56 @@ fn check_log(ctx: &mut Ctx, cfg: &Config) {
         && let Err(e) = crate::observe::Filter::parse(f)
     {
         ctx.error("log.access.filter", format!("invalid filter {f:?}: {e}"));
+    }
+    // outputs open at startup — a missing parent dir fails with a bare
+    // io error; flag it at validate time instead
+    for (path, out) in [
+        ("log.output", cfg.log.output.as_str()),
+        ("log.access.output", cfg.log.access.output.as_str()),
+    ] {
+        let access = path == "log.access.output";
+        // "off" is a literal filename to both sinks — a plausible
+        // misread of the real off-switches (`enabled = false` for the
+        // access log, `log.level = "off"` for the server log). `""`
+        // means stdout for the access log but a broken path upstream.
+        if out == "off" && (!access || a.enabled) {
+            ctx.warn(
+                path,
+                if access {
+                    "output = \"off\" opens a file named `off` — use enabled = false to disable access logging"
+                } else {
+                    "output = \"off\" opens a file named `off` — use log.level = \"off\" to silence logging"
+                },
+            );
+            continue;
+        }
+        if out.is_empty() && !access {
+            ctx.error(
+                path,
+                "log.output is empty — use \"stdout\", \"stderr\", or a file path",
+            );
+            continue;
+        }
+        if (access && !a.enabled) || matches!(out, "stdout" | "stderr" | "") {
+            continue;
+        }
+        if let Err(e) = crate::observe::check_log_path(out) {
+            ctx.error(path, e);
+            continue;
+        }
+        let parent = std::path::Path::new(out).parent();
+        if let Some(d) = parent
+            && !d.as_os_str().is_empty()
+            && !d.is_dir()
+        {
+            ctx.warn(
+                path,
+                format!(
+                    "log directory {} does not exist — startup will fail to open the file",
+                    d.display()
+                ),
+            );
+        }
     }
 }
 
@@ -3446,6 +3889,230 @@ sample = 1.5
         assert!(!has_err(&cfg, "server.server_header", ""));
         let cfg = parse_test_config("[server]\nserver_header = \"verd 1.0\"");
         assert!(!has_err(&cfg, "server.server_header", ""));
+    }
+
+    #[test]
+    fn status_class_rules() {
+        // 1xx is never a final response — error on respond+unavailable
+        let cfg = parse_test_config(
+            "[[site]]\nhosts = [\"x\"]\nroot = \"/tmp\"\n[[site.route]]\nrespond = { status = 101 }",
+        );
+        assert!(has_err(&cfg, "site[\"x\"].route[0].respond", "interim"));
+        let cfg =
+            parse_test_config("[upstream.u]\nservers = \"x:1\"\nunavailable = { status = 100 }");
+        assert!(has_err(&cfg, "upstream.u.unavailable.status", "interim"));
+
+        // a redirect-class respond without Location won't redirect
+        let cfg = parse_test_config(
+            "[[site]]\nhosts = [\"x\"]\nroot = \"/tmp\"\n[[site.route]]\nrespond = { status = 302 }",
+        );
+        assert!(has_warn(&cfg, "site[\"x\"].route[0].respond", "Location"));
+        let cfg = parse_test_config(
+            "[[site]]\nhosts = [\"x\"]\nroot = \"/tmp\"\n[[site.route]]\nrespond = { status = 307, headers = { location = \"/x\" } }",
+        );
+        assert!(!has_warn(&cfg, "site[\"x\"].route[0].respond", "Location"));
+
+        // a configured body under 204/304 is dropped at serve — warn
+        let cfg = parse_test_config(
+            "[[site]]\nhosts = [\"x\"]\nroot = \"/tmp\"\n[[site.route]]\nrespond = { status = 204, body = \"x\" }",
+        );
+        assert!(has_warn(&cfg, "site[\"x\"].route[0].respond", "ignored"));
+        let cfg = parse_test_config(
+            "[upstream.u]\nservers = \"x:1\"\nunavailable = { status = 304, body = \"x\" }",
+        );
+        assert!(has_warn(&cfg, "upstream.u.unavailable.status", "ignored"));
+        // defaults (502 + no body) stay quiet
+        let cfg = parse_test_config("[upstream.u]\nservers = \"x:1\"");
+        assert!(!has_warn(&cfg, "upstream.u.unavailable.status", "ignored"));
+    }
+
+    #[test]
+    fn server_header_off_deprecated() {
+        let cfg = parse_test_config("[server]\nserver_header = \"off\"");
+        assert!(has_warn(&cfg, "server.server_header", "deprecated"));
+        let cfg = parse_test_config("[server]\nserver_header = false");
+        assert!(!has_warn(&cfg, "server.server_header", "deprecated"));
+    }
+
+    #[test]
+    fn request_headers_disabled_warns_on_dead_settings() {
+        let cfg = parse_test_config(
+            "[[site]]\nhosts = [\"x\"]\nroot = \"/tmp\"\n[[site.route]]\n[site.route.proxy]\nupstream = \"http://x:1\"\nrequest_headers = { enabled = false, set = { x-a = \"1\" } }",
+        );
+        assert!(has_warn(
+            &cfg,
+            "site[\"x\"].route[0].proxy.request_headers",
+            "enabled = false"
+        ));
+        let cfg = parse_test_config(
+            "[[site]]\nhosts = [\"x\"]\nroot = \"/tmp\"\n[[site.route]]\n[site.route.proxy]\nupstream = \"http://x:1\"\nrequest_headers = false",
+        );
+        assert!(!has_warn(
+            &cfg,
+            "site[\"x\"].route[0].proxy.request_headers",
+            "enabled = false"
+        ));
+    }
+
+    #[test]
+    fn admin_listen_list_rules() {
+        let cfg = parse_test_config("[admin]\nlisten = []");
+        assert!(has_err(&cfg, "admin.listen", "binds no listener"));
+        // any non-loopback entry triggers the token requirement
+        let cfg = parse_test_config("[admin]\nlisten = [\"127.0.0.1:2019\", \"0.0.0.0:2020\"]");
+        assert!(has_err(&cfg, "admin.listen", "non-loopback"));
+    }
+
+    #[test]
+    fn redirect_host_dead_when_no_https_upgrade() {
+        // redirect_host only affects the http→https upgrade — dead
+        // when the upgrade can't run
+        let cfg = parse_test_config(
+            "[[site]]\nhosts = [\"x\"]\ntls = \"off\"\nredirect_host = \"y\"\nroot = \"/tmp\"",
+        );
+        assert!(has_warn(&cfg, "site[\"x\"].redirect_host", "ignored"));
+        let cfg = parse_test_config(
+            "[[site]]\nhosts = [\"x\"]\nredirect_https = false\nredirect_host = \"y\"\nroot = \"/tmp\"",
+        );
+        assert!(has_warn(&cfg, "site[\"x\"].redirect_host", "ignored"));
+    }
+
+    #[test]
+    fn access_log_disabled_warns_on_dead_settings() {
+        let cfg = parse_test_config(
+            "[log.access]\nenabled = false\noutput = \"/var/log/x\"\nfilter = \"status >= 500\"",
+        );
+        assert!(has_warn(&cfg, "log.access.output", "enabled = false"));
+        assert!(has_warn(&cfg, "log.access.filter", "enabled = false"));
+        let cfg = parse_test_config("[log]\naccess = false");
+        assert!(
+            warnings(&cfg)
+                .iter()
+                .all(|d| !d.path.starts_with("log.access."))
+        );
+    }
+
+    #[test]
+    fn reaudit_dead_config_rules() {
+        // [acme] configured but no site uses tls = "auto"
+        let cfg = parse_test_config(
+            "[acme]\nemail = \"a@b.c\"\n[[site]]\nhosts = [\"x\"]\ntls = \"off\"\nroot = \"/tmp\"",
+        );
+        assert!(has_warn(&cfg, "acme", "no site uses tls"));
+        // route ip_allow outside the site's allowlist can never pass
+        let cfg = parse_test_config(
+            "[[site]]\nhosts = [\"x\"]\nip_allow = \"10.0.0.0/8\"\n[[site.route]]\nrespond = 200\nip_allow = \"192.168.0.0/16\"",
+        );
+        assert!(has_warn(
+            &cfg,
+            "site[\"x\"].route[0].ip_allow",
+            "can never admit"
+        ));
+        // admin.listen duplicates + server.listen collision error
+        let cfg = parse_test_config(
+            "[admin]\nlisten = [\"127.0.0.1:9\", \"127.0.0.1:9\"]\n[[site]]\nhosts = [\"x\"]\nroot = \"/tmp\"",
+        );
+        assert!(has_err(&cfg, "admin.listen[1]", "duplicate"));
+        // upstream.tls on an all-http cluster is dead
+        let cfg = parse_test_config(
+            "[upstream.u]\nservers = \"http://x:1\"\n[upstream.u.tls]\nsni = \"x\"\n[[site]]\nhosts = [\"x\"]\nproxy = \"u\"",
+        );
+        assert!(has_warn(&cfg, "upstream.u.tls", "no https://"));
+        // 0s upstream timeouts fail instantly; burst = 0 rejects all
+        let cfg = parse_test_config(
+            "[upstream.u]\nservers = \"http://x:1\"\n[upstream.u.timeouts]\nconnect = \"0s\"\n[[site]]\nhosts = [\"x\"]\nproxy = \"u\"\nrate_limit = { rate = \"10/s\", burst = 0 }",
+        );
+        assert!(has_err(&cfg, "upstream.u.timeouts.connect", "instantly"));
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].rate_limit.burst",
+            "token capacity"
+        ));
+        // log.output "off" is a filename; missing parent warns
+        let cfg = parse_test_config(
+            "[log]\noutput = \"off\"\n[[site]]\nhosts = [\"x\"]\nroot = \"/tmp\"",
+        );
+        assert!(has_warn(&cfg, "log.output", "file named `off`"));
+        let cfg = parse_test_config(
+            "[log]\noutput = \"/no/such/dir/x.log\"\n[[site]]\nhosts = [\"x\"]\nroot = \"/tmp\"",
+        );
+        assert!(has_warn(&cfg, "log.output", "does not exist"));
+        // spa + empty index never fires; spa + listing precedence
+        let cfg = parse_test_config(
+            "[[site]]\nhosts = [\"x\"]\n[[site.route]]\n[site.route.static]\nroot = \"/tmp\"\nindex = []\nspa = true",
+        );
+        assert!(has_warn(
+            &cfg,
+            "site[\"x\"].route[0].static.spa",
+            "never applies"
+        ));
+        // cache ttl = 0s caches nothing; max_items = 0 errors
+        let cfg = parse_test_config(
+            "[cache.c]\nmax_items = 0\n[[site]]\nhosts = [\"x\"]\n[[site.route]]\nrespond = 200\ncache = { store = \"c\", ttl = \"0s\" }",
+        );
+        assert!(has_err(&cfg, "cache.c", "caches nothing"));
+        assert!(has_warn(
+            &cfg,
+            "site[\"x\"].route[0].cache.ttl",
+            "nothing is ever served"
+        ));
+        // compress.types shape + empty
+        let cfg = parse_test_config(
+            "[[site]]\nhosts = [\"x\"]\nroot = \"/tmp\"\ncompress = { types = [\"texthtml\"] }",
+        );
+        assert!(has_warn(&cfg, "site[\"x\"].compress.types", "type/subtype"));
+        // 0s timeout overrides warn at scope
+        let cfg = parse_test_config(
+            "[[site]]\nhosts = [\"x\"]\nroot = \"/tmp\"\n[site.timeouts]\nheader_read = \"0s\"\n[[site.route]]\nrespond = 200\n[site.route.limits]\nheader_bytes = \"0B\"",
+        );
+        assert!(has_warn(
+            &cfg,
+            "site[\"x\"].timeouts.header_read",
+            "slowloris"
+        ));
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].route[0].limits.header_bytes",
+            "rejects every request"
+        ));
+        // framing headers in respond.headers / header ops corrupt the wire
+        let cfg = parse_test_config(
+            "[[site]]\nhosts = [\"x\"]\n[[site.route]]\nrespond = { status = 204, headers = { content-length = \"10\" } }",
+        );
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].route[0].respond.headers.content-length",
+            "framing"
+        ));
+        let cfg = parse_test_config(
+            "[[site]]\nhosts = [\"x\"]\n[[site.route]]\nproxy = { upstream = \"http://x:1\", request_headers = { set = { connection = \"close\" } } }",
+        );
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].route[0].proxy.request_headers.set.connection",
+            "framing"
+        ));
+    }
+
+    #[test]
+    fn new_placeholders_known() {
+        // the expanded closed set doesn't trip the unknown-token warn
+        let cfg = parse_test_config(
+            "[[site]]\nhosts = [\"x\"]\nroot = \"/tmp\"\n[[site.route]]\nrespond = \"{uri}|{args}|{remote_ip}|{request_id}\"",
+        );
+        assert!(
+            !warnings(&cfg)
+                .iter()
+                .any(|d| d.message.contains("unknown placeholder"))
+        );
+        let cfg = parse_test_config(
+            "[upstream.u]\nservers = \"x:1\"\nunavailable = { status = 503, body = \"down for {uri}\" }",
+        );
+        assert!(
+            !warnings(&cfg)
+                .iter()
+                .any(|d| d.message.contains("unknown placeholder"))
+        );
     }
 
     #[test]

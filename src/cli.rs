@@ -776,6 +776,14 @@ fn fmt_one(path: &std::path::Path, check: bool, diff: bool) -> bool {
     if path.as_os_str() == "-" {
         return fmt_stdin(check, diff);
     }
+    if path.is_dir() {
+        eprintln!(
+            "error: {} is a directory — point -c at a file, e.g. -c {}/verd.toml",
+            path.display(),
+            path.display()
+        );
+        return false;
+    }
     if check {
         return match std::fs::read_to_string(path)
             .map_err(|e| e.to_string())
