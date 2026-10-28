@@ -93,7 +93,10 @@ default — and all of them take the bare spelling too: `auth = false`,
 `log.access = false`. `server_header = false` omits the `Server`
 header (as does `""`; `"off"` parses for compatibility but is
 deprecated and warns). A bare `false` carries no settings and never
-warns; stray keys inside a disabled *table* do.
+warns; stray keys inside a disabled *table* do. `true` parses
+everywhere `false` does — the table with defaults and `enabled = true`;
+settings a block still needs (`auth`'s method, `cache`'s store) error
+as usual.
 
 `respond.headers` and `route.response_headers` both reach a `respond`
 route but are different layers: `respond.headers` is the handler's own

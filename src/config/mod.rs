@@ -382,6 +382,7 @@ const PATH_FIELDS: &[&str] = &[
     "site.*.tls.key",
     "admin.tls.cert",
     "admin.tls.key",
+    "site.*.auth.basic.htpasswd",
     "site.*.route.*.auth.basic.htpasswd",
     "cache.*.disk_path",
     "acme.storage",
@@ -2386,6 +2387,51 @@ proxy = "app"
                     "[[site]]\nroot = \"/tmp\"\n[[site.route]]\n[site.route.auth]\n[site.route.auth.bearer]\ntokens = \"t\"",
                 ),
                 ("server.listen", "[server]\nlisten = \"127.0.0.1:18080\""),
+                ("admin.listen", "[admin]\nlisten = \"127.0.0.1:12019\""),
+                (
+                    "site.ip_allow + site.ip_deny",
+                    "[[site]]\nroot = \"/tmp\"\nip_allow = \"10.0.0.0/8\"\nip_deny = \"10.0.0.9\"",
+                ),
+                (
+                    "route.ip_deny",
+                    "[[site]]\nroot = \"/tmp\"\n[[site.route]]\nip_deny = \"10.0.0.9\"",
+                ),
+                (
+                    "api_key.keys",
+                    "[[site]]\nroot = \"/tmp\"\n[[site.route]]\n[site.route.auth]\n[site.route.auth.api_key]\nlocation = \"header\"\nname = \"x-key\"\nkeys = \"k1\"",
+                ),
+                (
+                    "acme.on_demand.allowed_hosts",
+                    "[acme]\n[acme.on_demand]\nallowed_hosts = \"a.example.com\"",
+                ),
+                (
+                    "server.trusted_proxies",
+                    "[server]\ntrusted_proxies = \"10.0.0.1\"",
+                ),
+                (
+                    "site.trusted_proxies",
+                    "[[site]]\nroot = \"/tmp\"\ntrusted_proxies = \"10.0.0.1\"",
+                ),
+                (
+                    "rate_limit.exempt",
+                    "[[site]]\nroot = \"/tmp\"\n[site.rate_limit]\nrate = \"10/s\"\nexempt = \"10.0.0.1\"",
+                ),
+                (
+                    "cors lists",
+                    "[[site]]\nroot = \"/tmp\"\n[site.cors]\norigins = \"https://a.example.com\"\nmethods = \"GET\"\nheaders = \"x-a\"\nexpose = \"x-b\"",
+                ),
+                (
+                    "compress lists",
+                    "[[site]]\nroot = \"/tmp\"\n[site.compress]\nalgorithms = \"gzip\"\ntypes = \"text/html\"",
+                ),
+                (
+                    "cache.bypass.methods + headers",
+                    "[cache.c]\n[[site]]\nroot = \"/tmp\"\n[[site.route]]\n[site.route.cache]\nstore = \"c\"\n[site.route.cache.bypass]\nmethods = \"POST\"\nheaders = \"x-skip\"",
+                ),
+                (
+                    "cache.vary_headers",
+                    "[cache.c]\n[[site]]\nroot = \"/tmp\"\n[[site.route]]\n[site.route.cache]\nstore = \"c\"\nvary_headers = \"x-tenant\"",
+                ),
                 (
                     "cache.bypass.cookies",
                     "[cache.c]\n[[site]]\nroot = \"/tmp\"\n[[site.route]]\n[site.route.cache]\nstore = \"c\"\n[site.route.cache.bypass]\ncookies = \"sess\"",
@@ -2678,7 +2724,7 @@ response_headers = { enabled = false }
             write(
                 &sub,
                 "one.toml",
-                "[[site]]\nhosts = [\"b\"]\nroot = \"./pub\"\n",
+                "[[site]]\nhosts = [\"b\"]\nroot = \"./pub\"\nauth = { basic = { htpasswd = \"./users.htpasswd\" } }\n",
             );
             let loaded = load(&main).unwrap();
             assert_eq!(
@@ -2688,6 +2734,15 @@ response_headers = { enabled = false }
             assert_eq!(
                 loaded.config.site[1].root.as_deref(),
                 Some(sub.join("pub").as_path())
+            );
+            // site-scoped auth rebases too — same rule as route auth
+            assert_eq!(
+                loaded.config.site[1]
+                    .auth
+                    .as_ref()
+                    .and_then(|a| a.basic.as_ref())
+                    .and_then(|b| b.htpasswd.as_deref()),
+                Some(sub.join("users.htpasswd").as_path())
             );
 
             // absolute paths and output sentinels pass through untouched

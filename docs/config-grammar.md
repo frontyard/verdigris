@@ -144,7 +144,10 @@ here why not: `log.access` (`false` or `{ enabled = false }`),
 `server.security` (`false` or `{ enabled = false }` — the baseline the
 site/route `security` blocks refine), `proxy.retries`
 (`false` ⇒ `max_per_request = 0`), `route.compress`/`route.cache`
-(`false` ⇒ disabled table).
+(`false` ⇒ disabled table). `true` parses everywhere `false` does —
+the same table with `enabled = true` and defaults (an explicit
+opt-in); blocks that still need settings (`auth`'s method,
+`cache`'s store) error on them as usual.
 
 Route middleware blocks (`auth`, `cors`, `rate_limit`, `cache`,
 `compress`, `response_headers`, `security`) carry `enabled = true` by
@@ -299,6 +302,17 @@ Recorded with one-line rationale so they aren't re-litigated.
 - Unix-domain listeners, `health.active.expect` multi-status — real
   features, not grammar; tracked separately.
 
+Rejected *diagnostics* (audit checks considered and declined):
+
+- Route-shadow warnings ("route B can never match because A is
+  first") — ordered first-match is the documented feature; the
+  warning would fire on intended layering.
+- `try_files`/`error_pages` existence probes beyond the current warn
+  — missing files are the mechanism (probe-and-fall-through), and
+  `try_files` targets legitimately appear after deploy.
+- `dns.grace = "0s"` warning — zero is coherent fail-fast intent,
+  not a footgun; `renew_before`-style thresholds do warn.
+
 ## Auditing
 
 The checklist is the items above, in order. The mechanical half lives
@@ -331,7 +345,7 @@ whether a field actually does something:
 | `admin.*` | `admin/` listener fan-out, `cli.rs` admin task spawn |
 | `acme.*` | `acme/` (`mod.rs` issuance + renewal, `dns.rs` provider client, `storage.rs` persistence) |
 | `upstream.<name>.*` | `proxy/cluster.rs` (servers, `lb`, `dns`, `health`, `max_connections`), `proxy/` (`tls`, `timeouts`, `unavailable`) |
-| `cache.<name>.*` | `cache/` stores; route-side `bypass`/`vary_headers`/`x_cache` in `middleware/` |
+| `cache.<name>.*` | `cache/` stores (`ram`/`disk`/`hybrid`, `policy`); route-side fields evaluated in `cache/stage.rs` (`bypass`, `ttl`, `stale_*`, `negative_ttl`, `x_cache`) and `cache/key.rs` (`vary_headers`); `middleware/` only resolves the store name and merges the `RouteCache` block |
 | `site.*` matchers/handlers | `router/` (`hosts`, `default`, routes, `match`, `priority`), `handler/` (static/proxy/respond/redirect) |
 | `site.*`/`route.*` middleware | `middleware/` (auth, cors, rate_limit, ACL, headers, security, compress, cache) |
 | `site.tls`, `redirect_https` | `tls/` cert loading + HTTP→HTTPS redirects, `acme/` for `"auto"` |

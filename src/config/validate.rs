@@ -1037,7 +1037,12 @@ fn check_route_cache(ctx: &mut Ctx, cfg: &Config, path: &str, cache: &RouteCache
         }
         return;
     }
-    if !cfg.cache.contains_key(&cache.store) {
+    if cache.store.is_empty() {
+        ctx.error(
+            format!("{path}.cache.store"),
+            "cache needs a store — `cache = \"<name>\"` or `{ store = \"<name>\" }` (`cache = true` can't pick one)",
+        );
+    } else if !cfg.cache.contains_key(&cache.store) {
         let suggestion = name_hint(&cache.store, cfg.cache.keys());
         ctx.error(
             format!("{path}.cache.store"),
@@ -3596,6 +3601,27 @@ auth = { api_key = { location = "query", name = "k", keys = ["x"] } }
             &cfg,
             "site[\"x\"].route[1].auth.api_key",
             "credentials in URLs"
+        ));
+    }
+
+    #[test]
+    fn cache_true_needs_a_store() {
+        // `cache = true` enables with no store — the error must name the
+        // fix, not leak `unknown cache store ""`
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+prefix = "/a"
+respond = { status = 200 }
+cache = true
+"#,
+        );
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].route[0].cache.store",
+            "cache needs a store"
         ));
     }
 

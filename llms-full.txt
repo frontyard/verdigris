@@ -913,7 +913,10 @@ default — and all of them take the bare spelling too: `auth = false`,
 `log.access = false`. `server_header = false` omits the `Server`
 header (as does `""`; `"off"` parses for compatibility but is
 deprecated and warns). A bare `false` carries no settings and never
-warns; stray keys inside a disabled *table* do.
+warns; stray keys inside a disabled *table* do. `true` parses
+everywhere `false` does — the table with defaults and `enabled = true`;
+settings a block still needs (`auth`'s method, `cache`'s store) error
+as usual.
 
 `respond.headers` and `route.response_headers` both reach a `respond`
 route but are different layers: `respond.headers` is the handler's own
@@ -990,7 +993,7 @@ Split large configs across files:
 include = ["conf.d", "extra-*.toml"]
 ```
 
-``include` accepts files, directories (`*.toml` directly inside,
+`include` accepts files, directories (`*.toml` directly inside,
 sorted), and glob patterns (`*` matches any characters in the file
 name), and its entries interpolate like any other string —
 `include = ["${VERD_EXTRA}"]` is valid. A named file or directory
@@ -1049,10 +1052,10 @@ validate` resolves them, so CI can catch missing secrets.
 | Section | Contents |
 | --- | --- |
 | `[server]` | listeners, limits, timeouts, connection caps, trusted proxies |
-| `[admin]` | admin listener (`enabled` to disable), bearer token, optional TLS |
+| `[admin]` | admin listener (`admin = false` or `enabled = false` to disable), bearer token, optional TLS |
 | `[log]` | server log + access log (format/output/filter/sample) |
 | `[[site]]` | virtual hosts: hostnames, TLS mode, routes, trusted proxies |
-| `[upstream.*]` | named upstream clusters for proxy routes |
+| `[upstream.*]` | named upstream clusters for proxy routes — `upstream.name = "url"` or a URL list is the no-table shorthand |
 | `[cache.*]` | named cache stores (RAM/disk/hybrid) for routes |
 | `[acme]` | ACME account + certificate storage |
 
@@ -1170,6 +1173,11 @@ proxy = { upstream = "app", rewrite = { strip_prefix = "/api" } }
   ```
 
   `backup` members serve only while no primary is healthy.
+
+  When only `servers` matters, the table itself is optional:
+  `upstream.app = "http://app1:9000"` is a one-member cluster, and a URL
+  list or `{ url, weight, backup }` entry works the same —
+  `upstream.app = ["http://a:9000", "http://b:9000"]`.
 - **Health**: passive (kick members out after N consecutive failures for
   a cooldown) and/or active (periodic HTTP probes on `path`, honours h1/h2).
 - **Retries**: `retries.max_per_request` replays idempotent requests on
@@ -1297,7 +1305,8 @@ prefer it over a literal so the config file stays non-sensitive.
 permanent redirect once a certificate exists for the host;
 `site.redirect_host` overrides the target host. Security headers
 (HSTS, CSP, X-Frame-Options, …) are set globally under
-`[server.security]` and refined per route under
+`[server.security]` — `security = false` inside `[server]` turns the
+baseline off — and refined per route under
 `route.security` — HSTS is only emitted over TLS.
 
 
@@ -1581,6 +1590,10 @@ tls = { cert = "admin.pem", key = "admin.key" }   # optional
 # tls = "self_signed"        # or a generated localhost cert for dev
 ```
 
+`admin = false` disables the listener entirely (the table's
+`enabled = false` says the same thing); leftover `[admin]` fields are
+reported as dead config.
+
 | Endpoint | Description |
 | --- | --- |
 | `GET /health` | liveness |
@@ -1822,13 +1835,13 @@ covers each knob.
 | Flag | Env var | Applies to | Effect |
 | --- | --- | --- | --- |
 | `-c, --config PATH` | `VERD_CONFIG` | `run`, `validate`, `config`, `fmt` | Config file path. Without it, `verd` searches `./verd.toml` and `/etc/verd/verd.toml`. A directory argument errors with a pointer to `-c <dir>/verd.toml` — directories load via `include`, not `-c`. `-c -` reads the config from stdin — `include` and `${file:…}` resolve against the current directory and sources report `<stdin>` (`verd fmt -c -` prints the formatted document to stdout; `--check`/`--diff` compare instead). |
-| `--watch` | — | `run` | Reload config when it changes on disk (in addition to `POST /reload`). Observes the parent directories of every loaded source — the config file, `include`d files, `include` dirs/globs, and `${file:…}` secret files — so atomic renames, editor save-swaps, k8s `..data` swaps, and newly dropped-in `*.toml` include fragments all trigger a reload. Events on unrelated files in those directories (e.g. a log file written next to the config) are ignored. The watched set is re-derived after each reload. Environment variables are captured at load — a `${VAR}` change needs `SIGHUP` or `POST /reload`. |
+| `--watch` | — | `run` | Reload config when it changes on disk (in addition to `POST /reload`). Observes the parent directories of every loaded source — the config file, `include`d files, `include` dirs/globs, and `${file:…}` secret files — so atomic renames, editor save-swaps, k8s `..data` swaps, and newly dropped-in `*.toml` include fragments all trigger a reload. Events on unrelated files in those directories (e.g. a log file written next to the config) are ignored. The watched set is re-derived after each reload. Environment variables are captured at load — a `${VAR}` change needs `SIGHUP` or `POST /reload`. With `-c -` the config comes from stdin — there is no file to watch, so `verd` warns that `--watch` has no effect. |
 | `--format FMT` | — | `validate` | `text` (default) prints diagnostics on stderr; `json` prints a machine-readable report on stdout — always `{ valid, strict, diagnostics, sources }`, plus `"error"` on load/dry-build failures. |
 | `--format FMT` | — | `config` | `toml` (default) prints canonical TOML; `json` prints the same redacted JSON the admin `/config` endpoint serves. |
 | `--strict` | — | `validate` | Fail on warnings too, not just errors. |
 | `--check` | — | `fmt` | Exit non-zero if unformatted instead of rewriting. |
 | `--diff` | — | `fmt` | Print a line-level diff of pending changes (implies `--check`). |
-| `--all` | — | `fmt` | Also format every file reachable through `include`. |
+| `--all` | — | `fmt` | Also format every file reachable through `include`. Sources are discovered with a syntax-only walk, so formatting still works when a file has schema errors (a warning says validation was skipped); malformed TOML and missing `include` targets still fail. |
 | `-o, --output PATH` | — | `schema`, `init` | `schema`: write the schema to a file instead of stdout. `init`: where to write the config (default `./verd.toml`; `-` is stdout). |
 | `--force` | — | `init` | Overwrite an existing file. |
 | `--log-level LVL` | `VERD_LOG` | `run`, `validate` | Server log level filter (`error` / `warn` / `info` / `debug` / `trace`, or an env-filter spec like `verd=debug,hyper=info`). Overrides `[log] level`; default `info`. |
@@ -1867,7 +1880,7 @@ Root configuration for a verdigris instance.
 | field | type | default | description |
 |---|---|---|---|
 | `acme` | AcmeConfig | `{"ca_roots": null, "challenge": "auto", "directory": "https://acme-v02.api.letsencrypt.org/directory", "dns": null, "eab": null, "email": null, "on_demand": {"allowed_hosts": [], "enabled": false, "rate": null}, "renew_before": "30d", "storage": "./verd-state/acme"}` | ACME account settings used by sites with `tls = "auto"`. |
-| `admin` | AdminConfig | `{"enabled": true, "listen": ["127.0.0.1:2019"], "tls": null, "token": null}` | Admin API listener (metrics, health, reload, purge, inspection). |
+| `admin` | AdminConfigSchema | `{"enabled": true, "listen": ["127.0.0.1:2019"], "tls": null, "token": null}` | Admin API listener (metrics, health, reload, purge, inspection); `admin = false` disables it entirely. |
 | `cache` | object | `{}` | Named cache stores for routes with `cache` enabled. |
 | `include` | [string] |  | Additional files or directories of `*.toml` fragments merged into this configuration, relative to the directory containing this file. Fragment files are loaded in sorted order; scalar conflicts between fragments and the main file are errors. A glob pattern matching no files is a no-op; a missing file or directory is an error. |
 | `limits` | Limits | `{"body_bytes": "10MiB", "header_bytes": "16KiB"}` | Default request limits; individual routes may override. |
@@ -1875,7 +1888,7 @@ Root configuration for a verdigris instance.
 | `server` | ServerConfig | `{"graceful_timeout": "30s", "listen": [{"addr": "0.0.0.0:80", "tls": false}], "max_connections": 65536, "max_connections_per_ip": 256, "security": {"content_type_options": true, "cross_domain_policy": "", "csp": null, "enabled": true, "frame_options": "DENY", "hsts": true, "hsts_max_age": "180d", "hsts_subdomains": false, "referrer_policy": "strict-origin-when-cross-origin"}, "server_header": "verd", "trusted_proxies": []}` | Server-wide settings: listeners, connection limits, shutdown. |
 | `site` | [SiteConfig] | `[]` | Virtual sites. Requests are routed by the Host header. |
 | `timeouts` | Timeouts | `{"body_read": "1m", "header_read": "20s", "idle": "75s", "request_deadline": "5m", "send": "1m", "tls_handshake": "10s"}` | Default timeouts; individual routes may override. |
-| `upstream` | object | `{}` | Named upstream clusters for reverse proxy routes. |
+| `upstream` | object | `{}` | Named upstream clusters for reverse proxy routes. Each entry is a `[upstream.<name>]` table or, for the common case, just a server URL (`upstream.app = "http://a"`), a URL list, or a `{ url, weight, backup }` entry — shorthand for `servers`. |
 
 ## `ServerConfig`
 
@@ -1887,7 +1900,7 @@ Server-wide settings.
 | `listen` | [ListenAddrSchema] | `[{"addr": "0.0.0.0:80", "tls": false}]` | Addresses to listen on. Defaults to a single plaintext listener on port 80. Entries are either `"ip:port"` strings or `{ addr = "ip:port", tls = true }` tables to terminate TLS. |
 | `max_connections` | integer | `65536` | Maximum concurrent connections across all listeners. |
 | `max_connections_per_ip` | integer | `256` | Maximum concurrent connections per client IP address. |
-| `security` | SecurityConfig | `{"content_type_options": true, "cross_domain_policy": "", "csp": null, "enabled": true, "frame_options": "DENY", "hsts": true, "hsts_max_age": "180d", "hsts_subdomains": false, "referrer_policy": "strict-origin-when-cross-origin"}` | Baseline security response headers applied to every route. |
+| `security` | SecurityConfigSchema | `{"content_type_options": true, "cross_domain_policy": "", "csp": null, "enabled": true, "frame_options": "DENY", "hsts": true, "hsts_max_age": "180d", "hsts_subdomains": false, "referrer_policy": "strict-origin-when-cross-origin"}` | Baseline security response headers applied to every route; `security = false` emits none of them. |
 | `server_header` | ServerHeaderSchema | `"verd"` | Value of the `Server` response header. `false` or `""` omits it (the empty-disables convention). `"off"` also omits but is deprecated — prefer `false`. |
 | `trusted_proxies` | [string] | `[]` | CIDRs whose `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`, `X-Real-IP` and `Forwarded` headers are trusted. Empty: trust none. |
 
@@ -2231,7 +2244,7 @@ Rate limiting.
 | `enabled` | boolean | `true` | Set `false` to opt a route out of an inherited site `rate_limit`. |
 | `exempt` | [string] | `[]` | CIDRs exempt from limiting. |
 | `key` | string | `"ip"` | What the limit applies to: `ip`, `identity` (authenticated identity), `route`, or `header:<Name>` for an arbitrary header value. Defaults to `ip`. |
-| `rate` | RateSpec \| null | `null` | Sustained rate, e.g. `100/s`, `600/m`, `10000/h`. Required when enabled. |
+| `rate` | string \| null | `null` | Sustained rate, e.g. `100/s`, `600/m`, `10000/h`. Required when enabled. |
 
 ## `HeaderOps`
 
@@ -2356,6 +2369,11 @@ DNS provider used to publish `_acme-challenge` TXT records for the
 Schema shape for `upstream.health.active` (a probe path or a table).
 
 
+## `AdminConfigSchema`
+
+Schema shape for `admin` — `false` or a table.
+
+
 ## `AdminTlsSchema`
 
 Schema shape for `admin.tls` — `"self_signed"` or a table.
@@ -2404,13 +2422,6 @@ Schema shape for `route.compress` (`true` or a table).
 
 Schema shape for `cors` — `false` or a table.
 
-
-## `Duration`
-
-| field | type | default | description |
-|---|---|---|---|
-| `nanos` | integer **required** |  |  |
-| `secs` | integer **required** |  |  |
 
 ## `EvictionPolicy`
 
@@ -2492,7 +2503,7 @@ On-demand certificate issuance.
 |---|---|---|---|
 | `allowed_hosts` | [string] | `[]` | Hostnames or `*.suffix` patterns allowed to trigger issuance. Empty list means on-demand never issues — an explicit allowlist is required. |
 | `enabled` | boolean | `false` | Enable issuance for hostnames not present in any site's `hosts` list. |
-| `rate` | RateSpec \| null | `null` | Maximum issuance rate, e.g. `5/hour`. |
+| `rate` | string \| null | `null` | Maximum issuance rate, e.g. `5/hour`. |
 
 ## `PassiveHealthSchema`
 
@@ -2517,18 +2528,6 @@ Schema shape for `route.proxy` (upstream shorthand or a table).
 
 Schema shape for `route.rate_limit` (a rate or a table).
 
-
-## `RateSpec`
-
-A rate like `100/s`, `600/m`, `10000/h`, `50000/day`, or `10/30s`
-for arbitrary periods. Units: `s`, `m`, `h`, `d` or the words
-`second`, `minute`, `hour`, `day` (also plural), or a humantime
-duration.
-
-| field | type | default | description |
-|---|---|---|---|
-| `period` | Duration **required** |  | Length of one period. |
-| `permits` | integer **required** |  | Number of permits granted per `period`. |
 
 ## `RedirectSchema`
 
@@ -2562,6 +2561,11 @@ Schema shape for `route.cache` (`"store-name"` or a table).
 ## `RouteSecuritySchema`
 
 Schema shape for `security` — `false` or a table.
+
+
+## `SecurityConfigSchema`
+
+Schema shape for `server.security` — `false` or a table.
 
 
 ## `ServerHeaderSchema`
@@ -2611,6 +2615,12 @@ DNS re-resolution for hostname upstreams.
 ## `UpstreamDnsSchema`
 
 Schema shape for `upstream.dns` (a grace duration or a table).
+
+
+## `UpstreamEntrySchema`
+
+Schema shape for one `upstream.<name>` entry — a URL, a URL list, a
+single server entry, or a full table.
 
 
 ## `UpstreamServerEntry`

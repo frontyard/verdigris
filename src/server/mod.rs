@@ -571,4 +571,30 @@ mod tests {
         assert_eq!(limits.active(), 0);
         assert!(limits.per_ip.get(&ip).is_none());
     }
+
+    #[test]
+    fn conn_limits_reject_at_global_and_per_ip_caps() {
+        let mut cfg = cfg::ServerConfig {
+            max_connections: 1,
+            max_connections_per_ip: 8,
+            ..Default::default()
+        };
+        let limits = Arc::new(ConnLimits::new(&cfg));
+        let ip1 = "10.0.0.1".parse().unwrap();
+        let ip2 = "10.0.0.2".parse().unwrap();
+        let g = limits.admit(ip1).unwrap();
+        // global cap: any further connection is refused, whatever the IP
+        assert!(limits.admit(ip2).is_none());
+        drop(g);
+        assert!(limits.admit(ip2).is_some());
+
+        // per-IP cap: same IP can't double up while global still allows
+        cfg.max_connections = 8;
+        cfg.max_connections_per_ip = 1;
+        let limits = Arc::new(ConnLimits::new(&cfg));
+        let g = limits.admit(ip1).unwrap();
+        assert!(limits.admit(ip1).is_none());
+        assert!(limits.admit(ip2).is_some());
+        drop(g);
+    }
 }

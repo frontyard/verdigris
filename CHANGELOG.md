@@ -197,6 +197,10 @@ workflow publishes the matching section as the GitHub release notes.
   for CLI usage errors.
 - **Wildcard hosts match longest suffix first** — `*.b.example.com`
   wins over `*.example.com` regardless of declaration order.
+- **`true` documented on `false`-gated blocks** — every block that
+  accepts `false` also parses `true` (the table with defaults and
+  `enabled = true`); the docs now say so explicitly rather than
+  leaving it an accident of the parser.
 - **Malformed password hashes rejected at startup** — `auth.basic`
   argon2/bcrypt values are fully parsed (not just prefix-sniffed), so
   truncated or corrupt hashes fail `verd validate`/`verd run` instead
@@ -331,6 +335,14 @@ workflow publishes the matching section as the GitHub release notes.
 
 ### Fixed
 
+- **Site-scoped `auth.basic.htpasswd` didn't rebase against its
+  fragment** — a relative path in an `include`d file resolved against
+  the CWD instead of the fragment's directory (route-level
+  `htpasswd` was already covered). Site and route auth now anchor the
+  same way.
+- **`cache = true` produced `unknown cache store ""`** — an enabled
+  cache with no store name now errors at validate time with
+  `cache needs a store — cache = "<name>" or { store = "<name>" }`.
 - **`cache_control` globs evaluate by specificity, not map order** —
   a `"*"` entry previously shadowed every more specific pattern
   (`BTreeMap` iterates sorted and first match won). Now fewest `*`

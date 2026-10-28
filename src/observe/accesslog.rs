@@ -594,6 +594,28 @@ mod coverage_tests {
         }
     }
 
+    /// `sample` gates emission: 0.0 drops every record, 1.0 keeps all.
+    /// (Mid-range values are hash-distributed; the extremes pin the
+    /// contract.)
+    #[test]
+    fn sample_gates_emission() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("access.log");
+        for (sample, expect_lines) in [(0.0, 0), (1.0, 1)] {
+            let cfg = cfg::AccessLog {
+                enabled: true,
+                output: path.to_string_lossy().into(),
+                sample,
+                ..Default::default()
+            };
+            let log = AccessLogger::build(&cfg, crate::BuildMode::Live).unwrap();
+            log.log(&rec());
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert_eq!(text.lines().count(), expect_lines, "sample={sample}");
+            std::fs::remove_file(&path).unwrap();
+        }
+    }
+
     #[test]
     fn filter_operators() {
         // each op family on each field kind

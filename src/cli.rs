@@ -1299,6 +1299,30 @@ root = "/tmp"
     }
 
     #[test]
+    fn cmd_config_dumps_and_redacts() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = write_cfg(
+            &dir,
+            "[[site]]\nhosts = [\"x\"]\nroot = \"/tmp\"\n[admin]\ntoken = \"sekrit\"\n",
+        );
+        assert_eq!(
+            cmd_config(Some(cfg.clone()), ConfigFormat::Toml),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(
+            cmd_config(Some(cfg.clone()), ConfigFormat::Json),
+            ExitCode::SUCCESS
+        );
+        // the dump redacts secrets — the same pass admin /config runs
+        let loaded = crate::config::load(&cfg).unwrap();
+        let json = crate::config::dump_json(&loaded.config).unwrap();
+        assert!(json.contains("***") && !json.contains("sekrit"));
+        // invalid configs fail rather than dump
+        let bad = write_cfg(&dir, "bogus_key = 1\n");
+        assert_eq!(cmd_config(Some(bad), ConfigFormat::Toml), ExitCode::FAILURE);
+    }
+
+    #[test]
     fn cmd_init_writes_template() {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("verd.toml");

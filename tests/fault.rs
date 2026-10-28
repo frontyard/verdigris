@@ -108,6 +108,27 @@ async fn resetting_upstream_fails_over_to_502() {
 }
 
 #[tokio::test]
+async fn route_request_deadline_beats_slow_upstream() {
+    // upstream hangs and its own response_header timeout is generous —
+    // the route's request_deadline is what produces the 504
+    let up = imposter(|_conn| std::thread::sleep(Duration::from_secs(30)));
+    let (base, sd) = start(&proxy_cfg(up, "timeouts = { request_deadline = \"50ms\" }")).await;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap();
+    let t0 = std::time::Instant::now();
+    let resp = client.get(format!("{base}/")).send().await.unwrap();
+    assert_eq!(resp.status(), 504);
+    assert!(
+        t0.elapsed() < Duration::from_secs(1),
+        "deadline fired but slowly: {:?}",
+        t0.elapsed()
+    );
+    let _ = sd.send(true);
+}
+
+#[tokio::test]
 async fn slowloris_upstream_hits_response_header_timeout() {
     // writes the status line one byte per 500ms
     let up = imposter(|mut conn| {

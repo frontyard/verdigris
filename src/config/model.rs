@@ -2927,4 +2927,19 @@ mod tests {
         assert_eq!(l2.header_bytes, base.header_bytes);
         assert_eq!(l2.body_bytes, base.body_bytes);
     }
+
+    #[test]
+    fn error_pages_exact_wins_over_class() {
+        let mut pages = ErrorPages::default();
+        pages.exact.insert(404, PathBuf::from("/404.html"));
+        pages.classes.insert(4, PathBuf::from("/4xx.html"));
+        pages.classes.insert(5, PathBuf::from("/5xx.html"));
+        // exact beats its own class; other statuses fall back to class
+        assert_eq!(pages.get(404).unwrap(), &PathBuf::from("/404.html"));
+        assert_eq!(pages.get(403).unwrap(), &PathBuf::from("/4xx.html"));
+        assert_eq!(pages.get(502).unwrap(), &PathBuf::from("/5xx.html"));
+        // no exact, no class → no page
+        assert!(pages.get(301).is_none());
+        assert!(pages.get(200).is_none());
+    }
 }
