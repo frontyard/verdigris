@@ -503,6 +503,13 @@ workflow publishes the matching section as the GitHub release notes.
   pages, the first recipe validated `tls = "auto"` by accident (now
   `tls = "off"`), stale `0.2.2`/`v0.1.0` version strings, and
   book-relative links in `llms-full.txt` that resolved nowhere.
+- **Config parse and `client_ip` perf regressions** — the shorthand
+  deserializers (`route.respond`/`proxy`/`match`/`cache`, `upstream.*`
+  entries and their server lists, scalar-or-list sugar) no longer
+  buffer each value into serde's `Content` and retry per variant, and
+  the X-Forwarded-For trust walk no longer allocates a list per
+  request. Errors inside the table/list forms now also name the
+  offending key instead of the generic "must be a …" fallback.
 
 ## [0.4.1] - 2026-10-27
 
