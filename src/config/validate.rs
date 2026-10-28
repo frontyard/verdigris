@@ -167,7 +167,7 @@ fn placeholder_re() -> &'static Regex {
 
 /// Security-header token sets, shared by the global `[security]` table
 /// and `RouteSecurity` overrides. Values are emitted verbatim — an
-/// out-of-set token is dead config, and an unparseable one is silently
+/// out-of-set token is dead config, and an unparsable one is silently
 /// dropped at request time. Empty means "emit nothing" at every layer.
 fn check_security_tokens(
     ctx: &mut Ctx,

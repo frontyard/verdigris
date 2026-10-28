@@ -15,7 +15,7 @@ TLS and a readable TOML configuration.
   (br/zstd/gzip), and a full HTTP response cache (RAM/disk/hybrid)
 - Prometheus metrics, structured access logs, admin API, atomic reloads
 
-## Documentation
+## Docs
 
 See [REFERENCE.md](docs/book/src/reference.md) for the complete configuration schema
 and [QUICKSTART.md](docs/book/src/quickstart.md) for a hands-on tour.

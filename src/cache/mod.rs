@@ -121,7 +121,7 @@ impl Cache {
     /// disk rebuild is sync std::fs; it's a one-shot boot cost). `prior`
     /// carries the previous generation's stores: a store whose config is
     /// unchanged is reused whole — RAM contents, open disk index and all.
-    /// `mode` [`BuildMode::Check`] skips directory creation and the index
+    /// `mode` [`crate::BuildMode::Check`] skips directory creation and the index
     /// rebuild: disk tiers are path-checked and stand in as RAM — the
     /// checked generation never serves traffic.
     pub fn build_all(

@@ -337,7 +337,7 @@ impl Write for Sink {
 }
 
 impl AccessLogger {
-    /// Build from config. `mode` gates the file open: [`BuildMode::Check`]
+    /// Build from config. `mode` gates the file open: [`crate::BuildMode::Check`]
     /// verifies the destination looks writable without creating it.
     pub fn build(cfg: &cfg::AccessLog, mode: crate::BuildMode) -> Result<Self, String> {
         let filter = match &cfg.filter {

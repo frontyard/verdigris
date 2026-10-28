@@ -63,7 +63,7 @@ impl Runtime {
 
     /// Build a runtime, optionally reusing unchanged pieces (cache stores)
     /// from `prior` — the reload path. `mode` gates filesystem side
-    /// effects: [`BuildMode::Check`] performs every compile-time check
+    /// effects: [`crate::BuildMode::Check`] performs every compile-time check
     /// read-only.
     pub fn build_with(
         config: Arc<cfg::Config>,

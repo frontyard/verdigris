@@ -41,7 +41,7 @@ const PROPAGATION_POLL: Duration = Duration::from_secs(2);
 
 type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// What [`Provider::present`] created — enough to retract it later.
+/// What `Provider::present` created — enough to retract it later.
 #[derive(Debug)]
 pub struct Record {
     /// Provider-specific container the record lives in (Cloudflare zone).

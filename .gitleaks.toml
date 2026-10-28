@@ -1,0 +1,9 @@
+title = "verdigris gitleaks config"
+
+# Everything below is a test/doc fixture, not a real credential. Keep
+# entries narrowly scoped to the flagged literal so real leaks still scan.
+[allowlist]
+description = "known test fixtures"
+regexes = [
+  '''aGVsbG8gd29ybGQ=''', # base64("hello world") EAB key in config tests
+]
