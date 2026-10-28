@@ -25,6 +25,16 @@ workflow publishes the matching section as the GitHub release notes.
   and `route.proxy` accepts an upstream name, URL, or URL list —
   `[[site.route]] proxy = "https://api.internal"` now expands to
   `{ upstream = "…" }`, matching `site.proxy`.
+- **Dominant-field shorthands** — `route.match` accepts a method or
+  method list (`match = "GET"` → `{ methods = […] }`), `compress`
+  accepts an algorithm or list (`compress = "br"`,
+  `compress = ["br","zstd"]` at site and route level), and `auth.bearer`
+  /`auth.basic` accept a bare string (`bearer = "tok"` →
+  `{ tokens = ["tok"] }`, `basic = "u.htpasswd"` →
+  `{ htpasswd = "u.htpasswd" }`). All expand to the full table with
+  defaults; `bearer = "tok"` counts as an inline secret for
+  file-permission warnings and `basic = "…"` anchors relative to its
+  document like `htpasswd` does.
 - **`admin.enabled = false`** — disables the admin listener entirely
   (default `127.0.0.1:2019` previously had no off-switch); `token`/`tls`
   set under `enabled = false` produce dead-config warnings.

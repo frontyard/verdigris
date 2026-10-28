@@ -874,7 +874,11 @@ ergonomic conveniences apply broadly:
   respond = 410                             # { status = 410, body = "" }
   ```
 
-  More one-liners in the same spirit: `retries = 3` (a
+  More one-liners in the same spirit: `match = "GET"` (a methods
+  list — `match = ["GET","HEAD"]` also works, as does
+  `compress = "br"`/`["br","zstd"]` for the algorithm set),
+  `bearer = "${TOKEN}"` and `basic = "users.htpasswd"` under `auth`
+  (the `tokens`/`htpasswd` fields), `retries = 3` (a
   `max_per_request` count), `unavailable = 503` (the no-healthy-member
   status), `health = "/hc"` on an upstream (an `active` probe),
   `log.access = "/var/log/x.log"` (just the output destination), and
@@ -934,8 +938,10 @@ Bare integers are rejected: write the unit explicitly (`hsts_max_age =
 ## Match conditions
 
 A route's `[route.match]` table adds conditions beyond the path:
-`methods`, `headers`, and `query` maps. Values match exactly, or as a
-regular expression when prefixed with `re:`:
+`methods`, `headers`, and `query` maps — and when methods are all you
+need, `match = "GET"` or `match = ["GET", "HEAD"]` is the shorthand
+for `{ methods = […] }`. Values match exactly, or as a regular
+expression when prefixed with `re:`:
 
 ```toml
 [[site.route]]
@@ -1381,12 +1387,15 @@ in a fixed order — **remove → set → add** — so a same-named
 auth = { basic = { realm = "ops",
                    users = { ned = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$3nGf8u5Z2p2mJx0yq9Rk3g" } }}
 # or: auth = { bearer = { tokens = ["${API_TOKEN}"] } }
+# or the token shorthand: auth = { bearer = "${API_TOKEN}" }
 # or: auth = { api_key = { location = "header", name = "x-api-key", keys = ["${KEY1}"] } }
 ```
 
 Basic-auth passwords must be argon2id or bcrypt hashes (plaintext is
-rejected at validation). The authenticated identity rides request
-extensions into handlers, the access log, and rate-limit keys.
+rejected at validation). `basic = "users.htpasswd"` is shorthand for
+`{ htpasswd = "users.htpasswd" }` — a bcrypt `$2y$` file instead of
+inline users. The authenticated identity rides request extensions into
+handlers, the access log, and rate-limit keys.
 
 ## CORS
 
@@ -1416,6 +1425,7 @@ Idle buckets are swept automatically.
 compress = { types = ["text/*", "application/json"], min_bytes = "1KiB",
              algorithms = ["br", "zstd", "gzip"], level = 5 }
 # or just: compress = true
+# or pick algorithms: compress = "br" / compress = ["br", "zstd"]
 ```
 
 Streams br/zstd/gzip by `Accept-Encoding` q-values; skips small bodies,
@@ -2038,13 +2048,13 @@ One route: a matcher, one handler, and middleware.
 |---|---|---|---|
 | `auth` | AuthConfigSchema \| null | `null` | Authentication configuration; `auth = false` disables it, including any inherited site default. |
 | `cache` | RouteCacheSchema \| null | `null` | Response caching: a store name (`cache = "main"`) or a table. |
-| `compress` | CompressConfigSchema \| null | `null` | Response compression: `true` for defaults, or a table. |
+| `compress` | CompressConfigSchema \| null | `null` | Response compression: `true` for defaults, an algorithm name or list (`compress = "br"`, `compress = ["br", "zstd"]`), or a table. |
 | `cors` | CorsConfigSchema \| null | `null` | CORS handling; `cors = false` disables it, including any inherited site default. |
 | `exact` | string \| null | `null` | Match this exact path only. |
 | `ip_allow` | [string] | `[]` | Client CIDRs allowed; others get 403. |
 | `ip_deny` | [string] | `[]` | Client CIDRs denied; they get 403 before allow rules. |
 | `limits` | LimitOverrides \| null | `null` | Per-route limit overrides. |
-| `match` | MatchConditions \| null | `null` | Additional match conditions: methods, headers, query parameters. |
+| `match` | MatchSchema \| null | `null` | Additional match conditions: methods, headers, query parameters. `match = "GET"` or `match = ["GET", "POST"]` is shorthand for `{ methods = […] }`. |
 | `prefix` | string \| null | `null` | Match paths starting with this prefix. Prefix matching is segment-aware: `/api` matches `/api` and `/api/…` but not `/apix`. |
 | `priority` | integer | `0` | Priority among routes that tie on specificity. Higher wins. |
 | `proxy` | ProxySchema \| null | `null` | Reverse proxy: an upstream reference (`"name"`/`"url"`/`[urls]`, like `site.proxy`) or a full table. |
@@ -2186,8 +2196,8 @@ Authentication configuration; exactly one method per route.
 | field | type | default | description |
 |---|---|---|---|
 | `api_key` | ApiKeyAuth \| null | `null` | API key in a header or query parameter. |
-| `basic` | BasicAuth \| null | `null` | HTTP Basic authentication. |
-| `bearer` | BearerAuth \| null | `null` | Bearer token authentication (`Authorization: Bearer <token>`). |
+| `basic` | BasicAuthSchema \| null | `null` | HTTP Basic authentication; `basic = "path.htpasswd"` is shorthand for `{ htpasswd = "…" }`. |
+| `bearer` | BearerAuthSchema \| null | `null` | Bearer token authentication (`Authorization: Bearer <token>`); `bearer = "tok"` or `bearer = ["t1", "t2"]` is shorthand for `{ tokens = […] }`. |
 | `enabled` | boolean | `true` | Set `false` to opt a route out of an inherited site `auth`. |
 
 ## `BasicAuth`
@@ -2389,6 +2399,16 @@ API key location.
 Schema shape for `auth` — `false` or a table.
 
 
+## `BasicAuthSchema`
+
+Schema shape for `auth.basic` — an htpasswd path or a table.
+
+
+## `BearerAuthSchema`
+
+Schema shape for `auth.bearer` — a token or a table.
+
+
 ## `ByteSize`
 
 A byte size parsed from `123`, `"123B"`, `"16KiB"`, `"10MB"`, `"4GiB"`.
@@ -2415,7 +2435,7 @@ Cloudflare credentials for `dns-01` (`[acme.dns.cloudflare]`).
 
 ## `CompressConfigSchema`
 
-Schema shape for `route.compress` (`true` or a table).
+Schema shape for `route.compress` (`true`, an algorithm, or a table).
 
 
 ## `CorsConfigSchema`
@@ -2494,6 +2514,11 @@ not affect path precedence.
 | `headers` | object | `{}` | Required request headers. Values match exactly, or as regex when prefixed with `re:`. A value of `""` requires only presence — same rule as `query` (match an empty value with `re:^$`). |
 | `methods` | [string] | `[]` | HTTP methods, e.g. `["GET", "HEAD"]`. |
 | `query` | object | `{}` | Required query parameters (`key` must equal or regex-match the value). A value of `""` requires only presence. |
+
+## `MatchSchema`
+
+Schema shape for `route.match` (a method or a table).
+
 
 ## `OnDemandAcme`
 

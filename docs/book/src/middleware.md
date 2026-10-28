@@ -66,12 +66,15 @@ in a fixed order — **remove → set → add** — so a same-named
 auth = { basic = { realm = "ops",
                    users = { ned = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$3nGf8u5Z2p2mJx0yq9Rk3g" } }}
 # or: auth = { bearer = { tokens = ["${API_TOKEN}"] } }
+# or the token shorthand: auth = { bearer = "${API_TOKEN}" }
 # or: auth = { api_key = { location = "header", name = "x-api-key", keys = ["${KEY1}"] } }
 ```
 
 Basic-auth passwords must be argon2id or bcrypt hashes (plaintext is
-rejected at validation). The authenticated identity rides request
-extensions into handlers, the access log, and rate-limit keys.
+rejected at validation). `basic = "users.htpasswd"` is shorthand for
+`{ htpasswd = "users.htpasswd" }` — a bcrypt `$2y$` file instead of
+inline users. The authenticated identity rides request extensions into
+handlers, the access log, and rate-limit keys.
 
 ## CORS
 
@@ -101,6 +104,7 @@ Idle buckets are swept automatically.
 compress = { types = ["text/*", "application/json"], min_bytes = "1KiB",
              algorithms = ["br", "zstd", "gzip"], level = 5 }
 # or just: compress = true
+# or pick algorithms: compress = "br" / compress = ["br", "zstd"]
 ```
 
 Streams br/zstd/gzip by `Accept-Encoding` q-values; skips small bodies,

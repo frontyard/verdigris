@@ -247,6 +247,11 @@ pub(crate) fn secret_at(ancestors: &[String], key: &str, is_table: bool) -> bool
     if tail_is(ancestors, &["auth", "basic", "users"]) {
         return true;
     }
+    // `bearer = "tok"` / `= ["tok", …]` — the shorthand value IS a
+    // token; the table form leaves it to the `tokens` key inside
+    if !is_table && key == "bearer" && ancestors.last().map(String::as_str) == Some("auth") {
+        return true;
+    }
     let k = key.to_ascii_lowercase();
     // `key`/`key_file` under a `tls` table is a PEM path, not material
     if matches!(k.as_str(), "key" | "key_file")
@@ -382,6 +387,9 @@ const PATH_FIELDS: &[&str] = &[
     "site.*.tls.key",
     "admin.tls.cert",
     "admin.tls.key",
+    // `basic = "x.htpasswd"` shorthand — the scalar IS the path
+    "site.*.auth.basic",
+    "site.*.route.*.auth.basic",
     "site.*.auth.basic.htpasswd",
     "site.*.route.*.auth.basic.htpasswd",
     "cache.*.disk_path",
@@ -3133,6 +3141,184 @@ response_headers = { enabled = false }
         }
 
         #[test]
+        fn dominant_field_shorthands() {
+            // match = "GET" | ["GET","POST"] → { methods } — the dominant
+            // field; the table still carries headers/query
+            for (v, want) in [("\"GET\"", 1usize), ("[\"GET\", \"POST\"]", 2)] {
+                let l = load_str(&format!(
+                    "[[site]]\nroot = \"/tmp\"\n[[site.route]]\nstatic = \"/tmp\"\nmatch = {v}"
+                ))
+                .unwrap_or_else(|e| panic!("match = {v} should parse: {e}"));
+                assert_eq!(
+                    l.config.site[0].route[0]
+                        .match_
+                        .as_ref()
+                        .unwrap()
+                        .methods
+                        .len(),
+                    want,
+                    "match = {v}"
+                );
+            }
+
+            // compress = "br" | ["br","zstd"] → { algorithms }, site+route
+            for (v, want) in [
+                ("\"br\"", &["br"][..]),
+                ("[\"br\", \"zstd\"]", &["br", "zstd"][..]),
+            ] {
+                let l = load_str(&format!(
+                    "[[site]]\nroot = \"/tmp\"\n[[site.route]]\nrespond = 200\ncompress = {v}"
+                ))
+                .unwrap_or_else(|e| panic!("compress = {v} should parse: {e}"));
+                let c = l.config.site[0].route[0].compress.as_ref().unwrap();
+                assert_eq!(c.algorithms, want, "compress = {v}");
+            }
+            let l = load_str("[[site]]\nroot = \"/tmp\"\ncompress = \"zstd\"\n").unwrap();
+            assert_eq!(
+                l.config.site[0].compress.as_ref().unwrap().algorithms,
+                ["zstd"]
+            );
+
+            // compress = "deflate" parses (it's a string); validation
+            // flags the unknown algorithm
+            let l =
+                load_str("[[site]]\nroot = \"/tmp\"\n[[site.route]]\nrespond = 200\ncompress = \"deflate\"\n")
+                    .unwrap();
+            assert!(
+                l.diagnostics
+                    .iter()
+                    .any(|d| d.severity == Severity::Error
+                        && d.message.contains("unknown algorithm")),
+                "{:?}",
+                l.diagnostics
+            );
+
+            // bearer = "t" | ["t1","t2"] → { tokens }
+            for (v, want) in [("\"t\"", 1usize), ("[\"t1\", \"t2\"]", 2)] {
+                let l = load_str(&format!(
+                    "[[site]]\nroot = \"/tmp\"\n[[site.route]]\nrespond = 200\nauth = {{ bearer = {v} }}"
+                ))
+                .unwrap_or_else(|e| panic!("bearer = {v} should parse: {e}"));
+                assert_eq!(
+                    l.config.site[0].route[0]
+                        .auth
+                        .as_ref()
+                        .unwrap()
+                        .bearer
+                        .as_ref()
+                        .unwrap()
+                        .tokens
+                        .len(),
+                    want,
+                    "bearer = {v}"
+                );
+            }
+
+            // basic = "x.htpasswd" → { htpasswd } — a path field, so a
+            // relative value anchors on the document dir like its
+            // table-form sibling
+            let dir = tempfile::tempdir().unwrap();
+            let cfg = write(
+                dir.path(),
+                "verd.toml",
+                "[[site]]\nroot = \"/tmp\"\n[[site.route]]\nrespond = 200\nauth = { basic = \"./u.htpasswd\" }\n",
+            );
+            let l = load(&cfg).unwrap();
+            assert_eq!(
+                l.config.site[0].route[0]
+                    .auth
+                    .as_ref()
+                    .unwrap()
+                    .basic
+                    .as_ref()
+                    .unwrap()
+                    .htpasswd
+                    .as_deref(),
+                Some(dir.path().join("u.htpasswd").as_path())
+            );
+            // …and ${file:} under it gets the same teaching error as the
+            // table form — the contents would inline as a bogus path
+            write(dir.path(), "secret.txt", "u:hash");
+            let cfg = write(
+                dir.path(),
+                "v2.toml",
+                "[[site]]\nroot = \"/tmp\"\n[[site.route]]\nrespond = 200\nauth = { basic = \"${file:secret.txt}\" }\n",
+            );
+            match load(&cfg) {
+                Err(LoadError::InterpolatedPathField(_, at, _)) => {
+                    assert_eq!(at, "site.0.route.0.auth.basic")
+                }
+                Err(e) => panic!("expected InterpolatedPathField, got {e}"),
+                Ok(_) => panic!("${{file:}} under basic should fail"),
+            }
+
+            // wrong types are schema errors, not silent drops
+            for body in [
+                "[[site]]\nroot = \"/tmp\"\n[[site.route]]\nstatic = \"/tmp\"\nmatch = 5",
+                "[[site]]\nroot = \"/tmp\"\n[[site.route]]\nrespond = 200\ncompress = 5",
+                "[[site]]\nroot = \"/tmp\"\n[[site.route]]\nrespond = 200\nauth = { bearer = 5 }",
+                "[[site]]\nroot = \"/tmp\"\n[[site.route]]\nrespond = 200\nauth = { basic = 5 }",
+                "[[site]]\nroot = \"/tmp\"\n[[site.route]]\nrespond = 200\nauth = { basic = [\"a\", \"b\"] }",
+            ] {
+                match load_str(body) {
+                    Err(LoadError::Schema(_, _)) => {}
+                    Err(e) => panic!("{body} → expected Schema, got {e}"),
+                    Ok(_) => panic!("{body} should fail"),
+                }
+            }
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn bearer_shorthand_is_secret_bearing() {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tempfile::tempdir().unwrap();
+            // a literal token under the shorthand counts as an inline
+            // secret — the same flag `bearer = { tokens = ["…"] }` gets
+            let path = write(
+                dir.path(),
+                "verd.toml",
+                "[[site]]\nhosts = [\"x\"]\nroot = \"/tmp\"\n[[site.route]]\nrespond = 200\nauth = { bearer = \"hunter2\" }\n",
+            );
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            let loaded = load(&path).unwrap();
+            assert!(
+                loaded
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.message.contains("group/other-readable")),
+                "{:?}",
+                loaded.diagnostics
+            );
+            // ${file:} under it is a secret source, not a literal — no
+            // readable warning, and a writable source file is flagged
+            let secret = dir.path().join("tok");
+            std::fs::File::create(&secret)
+                .unwrap()
+                .write_all(b"t\n")
+                .unwrap();
+            std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o666)).unwrap();
+            let path = write(
+                dir.path(),
+                "v2.toml",
+                &format!(
+                    "[[site]]\nhosts = [\"x\"]\nroot = \"/tmp\"\n[[site.route]]\nrespond = 200\nauth = {{ bearer = \"${{file:{}}}\" }}\n",
+                    secret.display()
+                ),
+            );
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            let loaded = load(&path).unwrap();
+            assert!(
+                loaded
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.message.contains("secret file")),
+                "{:?}",
+                loaded.diagnostics
+            );
+        }
+
+        #[test]
         fn load_stdin_reads_root_from_text() {
             // `verd … -c -` — the root doc comes from `text`, shown as
             // `<stdin>`; includes resolve against the CWD
@@ -3250,28 +3436,29 @@ response_headers = { enabled = false }
 
     /// "Every config item is tested", mechanically: the generated JSON
     /// schema enumerates every accepted field path, and the kitchen-sink
-    /// config below must set each one so the canonical `dump_json` shows
-    /// it. A new model field lands in the schema automatically and fails
-    /// here until a fixture exercises it — or a deliberate EXCLUDED entry
-    /// explains where it is covered instead.
+    /// config below must *set* each one in its TOML source — a path that
+    /// only ever appears because a default serialized would prove nothing.
+    /// A new model field lands in the schema automatically and fails here
+    /// until a fixture exercises it. A second check walks `dump_json` so
+    /// serializable fields that fixtures set also survive a dump — a new
+    /// `skip_serializing` field fails that check until an EXCLUDED entry
+    /// explains where the field is covered instead.
     mod field_census {
         use super::*;
         use std::collections::BTreeSet;
 
-        /// Schema paths a `dump_json` walk can never produce:
-        /// * `include` is `skip_serializing` — exercised by `include_*`.
-        /// * `upstream.<name>` sugar (`"url"`, `["url"]`, `{ url, … }`)
-        ///   normalizes into `servers` at parse — asserted in
-        ///   `surface_audit::top_level_off_switches_and_upstream_shorthand`.
-        /// * `proxy = ["url", …]` normalizes into `proxy.upstream` at
-        ///   parse — asserted in
-        ///   `surface_audit::route_proxy_accepts_site_proxy_shapes`.
-        /// * `host_header = { value = "…" }` serializes back to a string —
-        ///   asserted in
-        ///   `surface_audit::off_switches_and_scalar_table_shorthands`.
+        /// Schema paths a `dump_json` walk can never produce — input
+        /// forms that normalize into another shape at parse (asserted in
+        /// `surface_audit`), or fields skipped at serialization. The
+        /// source walk below covers all of them from the fixture TOML.
         const EXCLUDED: &[&str] = &[
+            // `include` is `skip_serializing` — the fixture sets it
+            // directly (`include = ["inc.d"]` below).
             "include",
             "include[*]",
+            // `upstream.<name>` sugar (`"url"`, `["url"]`, `{ url, … }`)
+            // normalizes into `servers` at parse — asserted in
+            // `surface_audit::top_level_off_switches_and_upstream_shorthand`.
             "upstream.*.backup",
             "upstream.*.url",
             "upstream.*.weight",
@@ -3279,10 +3466,24 @@ response_headers = { enabled = false }
             "upstream.*[*].backup",
             "upstream.*[*].url",
             "upstream.*[*].weight",
+            // `proxy = ["url", …]` normalizes into `proxy.upstream` at
+            // parse — asserted in
+            // `surface_audit::route_proxy_accepts_site_proxy_shapes`.
             "site[*].proxy[*]",
-            "site[*].proxy.host_header.value",
             "site[*].route[*].proxy[*]",
+            // `host_header = { value = "…" }` serializes back to a
+            // string — asserted in
+            // `surface_audit::off_switches_and_scalar_table_shorthands`.
+            "site[*].proxy.host_header.value",
             "site[*].route[*].proxy.host_header.value",
+            // `match`/`compress`/`bearer` list shorthands normalize into
+            // `methods`/`algorithms`/`tokens` at parse — asserted in
+            // `surface_audit::dominant_field_shorthands`.
+            "site[*].route[*].match[*]",
+            "site[*].compress[*]",
+            "site[*].route[*].compress[*]",
+            "site[*].auth.bearer[*]",
+            "site[*].route[*].auth.bearer[*]",
         ];
 
         /// Collect every field path the schema accepts. Object keys walk
@@ -3347,6 +3548,31 @@ response_headers = { enabled = false }
             }
         }
 
+        /// Collect every schema-shaped path the fixture *source* sets.
+        /// Same emission rules as `dump_paths`: table keys contribute
+        /// their name AND `.*` (map fields like `upstream.<name>` match
+        /// their schema wildcard — struct keys gain harmless extras the
+        /// schema never asks for), array elements contribute `[*]`.
+        fn fixture_paths(v: &toml::Value, path: &str, out: &mut BTreeSet<String>) {
+            if !path.is_empty() {
+                out.insert(path.to_string());
+            }
+            match v {
+                toml::Value::Table(m) => {
+                    for (k, v) in m {
+                        fixture_paths(v, &at(path, k), out);
+                        fixture_paths(v, &format!("{path}.*"), out);
+                    }
+                }
+                toml::Value::Array(a) => {
+                    for v in a {
+                        fixture_paths(v, &format!("{path}[*]"), out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
         /// Collect every path a dump actually contains. Array indices
         /// normalize to `[*]`; every object key *also* contributes `.*`
         /// so map fields (`upstream.<name>`, `set.<header>`) match their
@@ -3401,14 +3627,15 @@ response_headers = { enabled = false }
             // them to the root.
             let body = format!(
                 r#"
+include = ["inc.d"]
 upstream.url_one = "http://a1:9000"
 upstream.list = ["http://a2:9000", {{ url = "http://b2:9000", weight = 2, backup = true }}]
-upstream.entry = {{ url = "http://c3:9000", weight = 4 }}
+upstream.entry = {{ url = "http://c3:9000", weight = 4, backup = true }}
 
 [server]
 listen = [{{ addr = "127.0.0.1:18080", tls = true }}]
 graceful_timeout = "25s"
-trusted_proxies = "10.0.0.0/8"
+trusted_proxies = ["10.0.0.0/8"]
 server_header = "edge"
 max_connections = 4096
 max_connections_per_ip = 64
@@ -3434,7 +3661,7 @@ access = {{ enabled = true, format = "pretty", output = "{dir}/access.log", filt
 
 [admin]
 enabled = true
-listen = "127.0.0.1:19090"
+listen = ["127.0.0.1:19090"]
 token = "admintok"
 tls = {{ cert = "{dir}/cert.pem", key = "{dir}/key.pem" }}
 
@@ -3475,42 +3702,43 @@ tls = {{ cert = "{dir}/cert.pem", key = "{dir}/key.pem" }}
 redirect_https = false
 redirect_host = "apex.example"
 root = "{dir}/www"
-trusted_proxies = "192.168.0.0/16"
-auth = {{ basic = {{ users = {{ u = "$argon2id$x" }}, realm = "realm" }} }}
-cors = {{ origins = ["https://a.example", "https://b.example"], methods = "GET", headers = "X-Req", expose = "X-Out", credentials = true, max_age = "300s" }}
-rate_limit = {{ rate = "100/s", key = "header:X-Team", burst = 10, exempt = "10.1.0.0/16", dry_run = true }}
-cache = {{ store = "main", ttl = "60s", stale_while_revalidate = "30s", stale_if_error = "120s", negative_ttl = "5s", vary_headers = "X-Grp", x_cache = false, bypass = {{ authenticated = false, methods = "POST", cookies = "sess", headers = "X-No", paths = "/p/*" }} }}
-compress = {{ enabled = true, algorithms = "gzip", min_bytes = "2KiB", types = "text/plain", level = 9 }}
-response_headers = {{ set = {{ x-a = "1" }}, add = {{ x-b = "2" }}, remove = "x-c" }}
+trusted_proxies = ["192.168.0.0/16"]
+auth = {{ enabled = true, basic = {{ users = {{ u = "$argon2id$x" }}, realm = "realm" }} }}
+cors = {{ enabled = true, origins = ["https://a.example", "https://b.example"], methods = ["GET"], headers = ["X-Req"], expose = ["X-Out"], credentials = true, max_age = "300s" }}
+rate_limit = {{ enabled = true, rate = "100/s", key = "header:X-Team", burst = 10, exempt = ["10.1.0.0/16"], dry_run = true }}
+cache = {{ enabled = true, store = "main", ttl = "60s", stale_while_revalidate = "30s", stale_if_error = "120s", negative_ttl = "5s", vary_headers = ["X-Grp"], x_cache = false, bypass = {{ authenticated = false, methods = ["POST"], cookies = ["sess"], headers = ["X-No"], paths = ["/p/*"] }} }}
+compress = {{ enabled = true, algorithms = ["gzip"], min_bytes = "2KiB", types = ["text/plain"], level = 9 }}
+response_headers = {{ enabled = true, set = {{ x-a = "1" }}, add = {{ x-b = "2" }}, remove = ["x-c"] }}
 security = {{ enabled = false, hsts = true, hsts_max_age = "10d", hsts_subdomains = true, content_type_options = true, frame_options = "DENY", referrer_policy = "origin", csp = "default-src 'none'", cross_domain_policy = "master-only" }}
 ip_allow = ["10.0.0.0/8", "10.1.0.0/16"]
-ip_deny = "10.0.0.9"
+ip_deny = ["10.0.0.9"]
 timeouts = {{ header_read = "10s", body_read = "30s", idle = "40s", send = "30s", request_deadline = "90s" }}
 limits = {{ header_bytes = "8KiB", body_bytes = "4MiB" }}
 
 [[site.route]]
 prefix = "/files"
-static = {{ root = "{dir}/www", index = ["i.html", "i.htm"], listing = true, spa = true, try_files = "f.html", precompressed = false, cache_control = {{ "*.css" = "max-age=60" }}, error_pages = {{ "404" = "/404.html", "5xx" = "/5xx.html" }}, mime_types = {{ data = "text/plain" }} }}
+static = {{ root = "{dir}/www", index = ["i.html", "i.htm"], listing = true, spa = true, try_files = ["f.html"], precompressed = false, cache_control = {{ "*.css" = "max-age=60" }}, error_pages = {{ "404" = "/404.html", "5xx" = "/5xx.html" }}, mime_types = {{ data = "text/plain" }} }}
+auth = {{ bearer = ["bf1", "bf2"] }}
 
 [[site.route]]
 exact = "/exact"
 respond = {{ status = 201, body = "hi", headers = {{ x-e = "1" }} }}
-auth = {{ bearer = {{ tokens = ["t1", "t2"] }} }}
-rate_limit = {{ rate = "50/m", key = "route", burst = 5, exempt = ["10.0.0.1"], dry_run = false }}
-cors = {{ origins = ["https://c.example"], methods = ["GET", "POST"], headers = ["x"], expose = ["y"], credentials = false, max_age = "60s" }}
-cache = {{ store = "main", ttl = "10s", stale_while_revalidate = "5s", stale_if_error = "30s", negative_ttl = "3s", vary_headers = ["X-A"], x_cache = true, bypass = {{ authenticated = true, methods = ["PUT"], cookies = ["c"], headers = ["h"], paths = ["/x/*"] }} }}
-compress = {{ algorithms = ["br"], min_bytes = "4KiB", types = ["text/*"], level = 5 }}
-response_headers = {{ set = {{ x = "1" }}, add = {{ y = "2" }}, remove = ["z"] }}
+auth = {{ enabled = true, bearer = {{ tokens = ["t1", "t2"] }} }}
+rate_limit = {{ enabled = true, rate = "50/m", key = "route", burst = 5, exempt = ["10.0.0.1"], dry_run = false }}
+cors = {{ enabled = true, origins = ["https://c.example"], methods = ["GET", "POST"], headers = ["x"], expose = ["y"], credentials = false, max_age = "60s" }}
+cache = {{ enabled = true, store = "main", ttl = "10s", stale_while_revalidate = "5s", stale_if_error = "30s", negative_ttl = "3s", vary_headers = ["X-A"], x_cache = true, bypass = {{ authenticated = true, methods = ["PUT"], cookies = ["c"], headers = ["h"], paths = ["/x/*"] }} }}
+compress = {{ enabled = true, algorithms = ["br"], min_bytes = "4KiB", types = ["text/*"], level = 5 }}
+response_headers = {{ enabled = true, set = {{ x = "1" }}, add = {{ y = "2" }}, remove = ["z"] }}
 security = {{ enabled = false, hsts = true, hsts_max_age = "10d", hsts_subdomains = true, content_type_options = true, frame_options = "DENY", referrer_policy = "origin", csp = "default-src 'self'", cross_domain_policy = "all" }}
-ip_allow = "127.0.0.1"
+ip_allow = ["127.0.0.1"]
 ip_deny = ["10.9.9.9"]
 timeouts = {{ header_read = "5s", body_read = "10s", idle = "20s", send = "10s", request_deadline = "60s" }}
 limits = {{ header_bytes = "4KiB", body_bytes = "1MiB" }}
 
 [[site.route]]
 regex = "^/rx/[0-9]+$"
-proxy = {{ upstream = ["http://u1:9000", "http://u2:9000"], rewrite = {{ strip_prefix = "/rx" }}, request_headers = {{ set = {{ x-f = "1" }}, add = {{ x-g = "2" }}, remove = ["x-h"] }}, retries = {{ max_per_request = 3, budget_fraction = 0.4 }}, host_header = {{ value = "vhost" }} }}
-auth = {{ api_key = {{ location = "header", name = "X-Api-Key", keys = "k1" }} }}
+proxy = {{ upstream = ["http://u1:9000", "http://u2:9000"], rewrite = {{ strip_prefix = "/rx" }}, request_headers = {{ enabled = true, set = {{ x-f = "1" }}, add = {{ x-g = "2" }}, remove = ["x-h"] }}, retries = {{ max_per_request = 3, budget_fraction = 0.4 }}, host_header = {{ value = "vhost" }} }}
+auth = {{ api_key = {{ location = "header", name = "X-Api-Key", keys = ["k1", "k2"] }} }}
 
 [[site.route]]
 prefix = "/redir"
@@ -3522,6 +3750,10 @@ prefix = "/rh"
 redirect = {{ host = "n2.example" }}
 
 [[site.route]]
+prefix = "/rs"
+redirect = {{ scheme = "https" }}
+
+[[site.route]]
 prefix = "/match"
 match = {{ methods = ["POST", "PUT"], headers = {{ X-T = "re:^v", X-E = "" }}, query = {{ q = "1" }} }}
 priority = 5
@@ -3531,6 +3763,7 @@ auth = {{ basic = {{ users = {{ v = "$argon2id$x" }}, realm = "r" }} }}
 [[site.route]]
 prefix = "/named"
 proxy = "plain"
+match = ["GET", "HEAD"]
 
 [[site.route]]
 prefix = "/replace"
@@ -3543,18 +3776,29 @@ proxy = {{ upstream = "url_one", rewrite = {{ regex = {{ pattern = "x", replace 
 [[site.route]]
 prefix = "/list"
 proxy = "list"
+compress = ["br", "zstd"]
+
+[[site.route]]
+prefix = "/pl"
+proxy = ["http://u3:9000", "http://u4:9000"]
 
 [[site]]
 hosts = ["p1.example"]
 tls = "self_signed"
 auth = {{ bearer = {{ tokens = ["bt"] }} }}
-proxy = {{ upstream = ["http://p1:9000", "http://p2:9000"], rewrite = {{ strip_prefix = "/s" }}, request_headers = {{ set = {{ s = "1" }}, add = {{ t = "2" }}, remove = ["u"] }}, retries = {{ max_per_request = 1, budget_fraction = 0.1 }}, host_header = "original" }}
+proxy = {{ upstream = ["http://p1:9000", "http://p2:9000"], rewrite = {{ strip_prefix = "/s" }}, request_headers = {{ enabled = true, set = {{ s = "1" }}, add = {{ t = "2" }}, remove = ["u"] }}, retries = {{ max_per_request = 1, budget_fraction = 0.1 }}, host_header = {{ value = "vh.example" }} }}
 
 [[site]]
 hosts = ["p2.example"]
 tls = "off"
 auth = {{ api_key = {{ location = "query", name = "key", keys = ["k"] }} }}
+compress = ["gzip"]
 proxy = {{ upstream = "plain", rewrite = {{ replace_prefix = {{ from = "/a", to = "/b" }} }} }}
+
+[[site]]
+hosts = ["pl.example"]
+tls = "off"
+proxy = ["http://pl1:9000", "http://pl2:9000"]
 
 [[site]]
 hosts = ["p3.example"]
@@ -3565,6 +3809,7 @@ proxy = {{ upstream = "entry", rewrite = {{ regex = {{ pattern = "x", replace = 
 [[site]]
 hosts = ["resp.example"]
 tls = "off"
+auth = {{ bearer = ["bs1"] }}
 respond = {{ status = 202, body = "accepted", headers = {{ x-r = "1" }} }}
 
 [[site]]
@@ -3590,6 +3835,11 @@ respond = "fallback"
 "#,
                 dir = dir.path().display()
             );
+            // `include` target — a real directory of fragments. An
+            // all-comment file merges nothing but still parses.
+            let inc = dir.path().join("inc.d");
+            std::fs::create_dir(&inc).unwrap();
+            write(&inc, "extra.toml", "# fragment merged by include\n");
             let path = write(dir.path(), "verd.toml", &body);
             let loaded = load(&path).unwrap_or_else(|e| panic!("kitchen sink must load: {e}"));
             assert!(
@@ -3602,20 +3852,47 @@ respond = "fallback"
                     .join("\n")
             );
 
-            let dumped: serde_json::Value =
-                serde_json::from_str(&dump_json(&loaded.config).unwrap()).unwrap();
-            let mut have = BTreeSet::new();
-            dump_paths(&dumped, "", &mut have);
+            let schema = schema_paths();
 
-            let missing: Vec<String> = schema_paths()
-                .into_iter()
-                .filter(|p| !have.contains(p) && !EXCLUDED.contains(&p.as_str()))
+            // Authoritative check: every schema path must be *set* in
+            // the fixture TOML — a defaulted field that merely
+            // serializes proves nothing.
+            let fixture: toml::Value = toml::from_str(&body).unwrap();
+            let mut have = BTreeSet::new();
+            fixture_paths(&fixture, "", &mut have);
+            let missing: Vec<String> = schema
+                .iter()
+                .filter(|p| !have.contains(*p))
+                .cloned()
                 .collect();
             assert!(
                 missing.is_empty(),
-                "schema fields never exercised — set them in the kitchen \
-                 sink or justify an EXCLUDED entry:\n{}",
+                "schema fields never set in the kitchen sink — exercise \
+                 them in the fixture:\n{}",
                 missing
+                    .iter()
+                    .map(|p| format!("  {p}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+
+            // Serialization check: paths the dump *can* produce must
+            // appear — a new `skip_serializing` field fails here until
+            // an EXCLUDED entry explains where it is covered instead.
+            let dumped: serde_json::Value =
+                serde_json::from_str(&dump_json(&loaded.config).unwrap()).unwrap();
+            let mut dumped_paths = BTreeSet::new();
+            dump_paths(&dumped, "", &mut dumped_paths);
+            let missing_dump: Vec<String> = schema
+                .iter()
+                .filter(|p| !dumped_paths.contains(*p) && !EXCLUDED.contains(&p.as_str()))
+                .cloned()
+                .collect();
+            assert!(
+                missing_dump.is_empty(),
+                "schema fields missing from dump_json — serialize them or \
+                 justify an EXCLUDED entry:\n{}",
+                missing_dump
                     .iter()
                     .map(|p| format!("  {p}"))
                     .collect::<Vec<_>>()

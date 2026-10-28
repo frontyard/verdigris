@@ -46,12 +46,15 @@ where one field dominates the table — they are a closed set:
 | `route.static` | `"root"` \| table | `StaticHandler{root,…}` |
 | `route.redirect` | `"url"` \| table | `RedirectHandler{to,…}` |
 | `route.respond` | `"text"` \| `404` \| table | `RespondHandler{body,…}` |
+| `route.match` | `"METHOD"` \| `["METHOD",…]` \| table | `MatchConditions{methods,…}` |
 | `site.auth`/`route.auth` | `false` \| table | `AuthConfig{enabled,…}` |
+| `auth.basic` | `"path.htpasswd"` \| table | `BasicAuth{htpasswd}` |
+| `auth.bearer` | `"token"` \| `["token",…]` \| `{tokens}` | `BearerAuth{tokens}` |
 | `site.cors`/`route.cors` | `false` \| table | `CorsConfig{enabled,…}` |
 | `site.response_headers`/`route.response_headers` | `false` \| table | `HeaderOps{enabled,…}` |
 | `site.rate_limit`/`route.rate_limit` | `false` \| `"100/s"` \| table | `RateLimitConfig{key:"ip",…}` |
 | `site.cache`/`route.cache` | `false` \| `"store"` \| table | `RouteCache{store,…}` |
-| `site.compress`/`route.compress` | `true`/`false` \| table | `CompressConfig` |
+| `site.compress`/`route.compress` | `true`/`false` \| `"alg"` \| `["alg",…]` \| table | `CompressConfig{algorithms}` |
 | `site.security`/`route.security` | `false` \| table | `RouteSecurity{enabled,…}` |
 | `proxy.retries` | `false`/`true` \| `3` \| table | `RetryPolicy` |
 | `proxy.host_header` | `"kw"`/verbatim \| `{ value }` | `HostHeader` |
@@ -82,7 +85,12 @@ address-level nicety inside the string form, not a third form;
 value, no second shape). `upstream.<name>`'s `server-entry` is the same
 `"url" | { url, weight, backup }` pair documented for `servers`
 entries, and its `[entries]` list is the scalar-or-list sugar below —
-one shorthand form beside the table, not three.
+one shorthand form beside the table, not three. The same counting
+applies to the dominant-field shorthands `route.match`
+(`"GET" | ["GET",…]`), `compress` (`"br" | ["br",…]`), and
+`auth.bearer` (`"tok" | ["tok",…]`): the list is the scalar's
+plural, one form — `compress` still carries exactly two shorthands
+(`bool`, algorithms) beside the table.
 
 `upstream.health` is the one *parent*-field shorthand — `"/path"`
 targets `health.active`. No other grouping field gets one: `active`
@@ -100,6 +108,14 @@ site-level middleware defaults (`site.auth`, `site.cors`,
 `site.rate_limit = "100/s"` works just like the route's. At most one
 site catch-all shorthand (`root`, `proxy`, `respond`, `redirect`) may
 be set — they are mutually exclusive.
+
+`site.root` is the deliberate parity exception. It exists only at
+site level — the route counterpart is *named* `static`, and its full
+table (`{ root, index, spa, try_files, … }`) is already reachable via
+`[[site.route]]` — so the shared-forms rule does not bind it. A
+`root = { root = "…", spa = true }` nesting was rejected as confusing,
+and a `site.static` table alias would duplicate a name the grammar
+already rejected (see below).
 
 ## Scalar-vs-list
 
@@ -229,8 +245,11 @@ others; unknown `{...}` text passes through literally.
 - Semantic rules prefer *errors* for "will not work" and *warnings*
   for "works but almost certainly not what you meant".
 - Enum spellings are snake_case canonical with kebab-case aliases —
-  `dns_01` and `dns-01` both parse; docs and errors show the snake
-  form.
+  `round_robin` and `round-robin` both parse; docs and errors show
+  the snake form. `acme.challenge` is the deliberate exception: its
+  values are RFC 8555 challenge-type identifiers, so the canonical
+  spellings are the spec's kebab-case `http-01`/`tls-alpn-01`/`dns-01`
+  and the snake forms are the aliases.
 - `${file:}` inside a path-typed field or an `include` entry is a load
   error — it would inline the file's *contents* as the path. `${VAR}`
   stays legal in those fields (it substitutes the variable's value).
@@ -246,6 +265,13 @@ The permission check runs per file: any fragment containing an inline
 secret (not a `${file:}` reference) must be owner-only (`0600`-ish),
 and every `${file:}` target is checked — a world-readable secret file
 warns on the field that references it.
+
+The `auth` shorthands keep the same rules: `bearer = "tok"` is an
+inline secret (a single token — `bearer = "${TOKENS}"` substitutes the
+variable's whole value as *one* token, no comma-splitting), and
+`basic = "x.htpasswd"` names an htpasswd *file path* — never an inline
+user — so it anchors like `auth.basic.htpasswd` and rejects `${file:}`
+the same way path-typed fields do.
 
 ## Load balancing
 
@@ -280,6 +306,10 @@ Recorded with one-line rationale so they aren't re-litigated.
   `health` level.
 - `upstream.*.timeouts = "5s"` scalar — no dominant field (connect vs
   response_header).
+- `timeouts = "30s"`/`limits = "10MiB"` dominant-field shorthands on
+  routes/sites — five timeouts and two limits all have plausible
+  claims (is `"30s"` `idle`? `send`? `request_deadline`?); a guess
+  would silently mislead, so the blocks stay table-only.
 - Remote/URL `include` — supply-chain surface; local filesystem only.
 - Env-var-only configuration (`VERD_LISTEN`) — a second config source
   complicates merge/precedence; `${VAR}` inside the file covers it.
@@ -326,9 +356,16 @@ the test's.
 A second test, `field_census`, guards coverage rather than shape: it
 walks the generated JSON schema to enumerate every leaf field path
 (`server.security.hsts`, `site[*].route[*].match.methods`,
-`upstream.*.dns.grace`, …) and asserts kitchen-sink fixture bodies
-exercise each one. A new model field fails the test until a fixture
-sets it — the census is the "every config item is tested" invariant.
+`upstream.*.dns.grace`, …) and asserts the kitchen-sink fixture *sets*
+each one. The fixture TOML source itself is walked — not the
+serialized dump, which always contains defaulted fields and so proves
+nothing outside `Option` subtrees. A retained dump walk checks the
+other direction: every serializable schema path must appear in
+`dump_json` output, so a new `skip_serializing` field (or a shorthand
+whose input shape normalizes at parse, like `match = ["GET","HEAD"]`)
+fails until an `EXCLUDED` entry names where it is covered instead. A
+new model field fails the test until a fixture sets it — the census
+is the "every config item is tested" invariant.
 
 ## Consumer map
 
@@ -339,14 +376,17 @@ whether a field actually does something:
 | --- | --- |
 | `include` | `config::load` merge machinery only |
 | `server.listen`, `graceful_timeout`, `max_connections*` | `server/` listeners, `server/service.rs` connection caps |
-| `server.trusted_proxies`, `server_header`, `server.security` | `middleware/mod.rs` client-IP trust, `Server` header, baseline security headers |
-| `timeouts`, `limits` (global) | `Timeouts::apply_overrides`/`Limits::apply_overrides`, layered global → site → route in `router/` |
+| `server.trusted_proxies` | `server/service.rs` client-IP trust (`real_ip`); `site.trusted_proxies` overrides per site |
+| `server.server_header` | `server/mod.rs` (`Runtime.server_header`), `server/service.rs` response writer |
+| `server.security` | `middleware/mod.rs` (`Security::build` baseline), `server/service.rs` response-headers step |
+| `timeouts`, `limits` (global) | `Timeouts::apply_overrides`/`Limits::apply_overrides`, layered global → site → route in `router/`; applied in `server/conn.rs` (`tls_handshake`, `header_read`, `idle`, `header_bytes`), `server/timeout.rs` (read/send deadline machinery), `server/service.rs` (`body_read`, `request_deadline`, `body_bytes`) |
 | `log.*` | `cli::init_tracing`, `observe/accesslog.rs` |
 | `admin.*` | `admin/` listener fan-out, `cli.rs` admin task spawn |
 | `acme.*` | `acme/` (`mod.rs` issuance + renewal, `dns.rs` provider client, `storage.rs` persistence) |
 | `upstream.<name>.*` | `proxy/cluster.rs` (servers, `lb`, `dns`, `health`, `max_connections`), `proxy/` (`tls`, `timeouts`, `unavailable`) |
 | `cache.<name>.*` | `cache/` stores (`ram`/`disk`/`hybrid`, `policy`); route-side fields evaluated in `cache/stage.rs` (`bypass`, `ttl`, `stale_*`, `negative_ttl`, `x_cache`) and `cache/key.rs` (`vary_headers`); `middleware/` only resolves the store name and merges the `RouteCache` block |
-| `site.*` matchers/handlers | `router/` (`hosts`, `default`, routes, `match`, `priority`), `handler/` (static/proxy/respond/redirect) |
+| `site.*` matchers/handlers | `router/` (`hosts`, `default`, routes, `priority`), `router/condition.rs` (`match` conditions), `handler/` (static/proxy/respond/redirect) |
 | `site.*`/`route.*` middleware | `middleware/` (auth, cors, rate_limit, ACL, headers, security, compress, cache) |
-| `site.tls`, `redirect_https` | `tls/` cert loading + HTTP→HTTPS redirects, `acme/` for `"auto"` |
+| `site.trusted_proxies` | `server/service.rs` client-IP trust — overrides `server.trusted_proxies` for the site's requests |
+| `site.tls`, `redirect_https`, `redirect_host` | `tls/` cert loading, `acme/` for `"auto"`, `server/service.rs` HTTP→HTTPS upgrade (`redirect_https`, `redirect_host`) |
 | `route.*` | same consumers as `site.*`, narrowed to the route |

@@ -54,7 +54,11 @@ ergonomic conveniences apply broadly:
   respond = 410                             # { status = 410, body = "" }
   ```
 
-  More one-liners in the same spirit: `retries = 3` (a
+  More one-liners in the same spirit: `match = "GET"` (a methods
+  list — `match = ["GET","HEAD"]` also works, as does
+  `compress = "br"`/`["br","zstd"]` for the algorithm set),
+  `bearer = "${TOKEN}"` and `basic = "users.htpasswd"` under `auth`
+  (the `tokens`/`htpasswd` fields), `retries = 3` (a
   `max_per_request` count), `unavailable = 503` (the no-healthy-member
   status), `health = "/hc"` on an upstream (an `active` probe),
   `log.access = "/var/log/x.log"` (just the output destination), and
@@ -114,8 +118,10 @@ Bare integers are rejected: write the unit explicitly (`hsts_max_age =
 ## Match conditions
 
 A route's `[route.match]` table adds conditions beyond the path:
-`methods`, `headers`, and `query` maps. Values match exactly, or as a
-regular expression when prefixed with `re:`:
+`methods`, `headers`, and `query` maps — and when methods are all you
+need, `match = "GET"` or `match = ["GET", "HEAD"]` is the shorthand
+for `{ methods = […] }`. Values match exactly, or as a regular
+expression when prefixed with `re:`:
 
 ```toml
 [[site.route]]

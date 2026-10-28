@@ -42,7 +42,9 @@ fn opt_route_cache<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Rout
     }))
 }
 
-/// `route.compress` accepts `true` (enable with defaults) or a table.
+/// `route.compress` accepts `true` (enable with defaults), an algorithm
+/// name or list (`compress = "br"`, `compress = ["br", "zstd"]`), or a
+/// table.
 fn opt_compress<'de, D: serde::Deserializer<'de>>(
     d: D,
 ) -> Result<Option<CompressConfig>, D::Error> {
@@ -50,13 +52,24 @@ fn opt_compress<'de, D: serde::Deserializer<'de>>(
     #[serde(untagged)]
     enum Repr {
         On(bool),
+        Alg(String),
+        Algs(Vec<String>),
         Full(CompressConfig),
     }
-    let r = Option::<Repr>::deserialize(d)
-        .map_err(|_| serde::de::Error::custom("compress must be true or a table"))?;
+    let r = Option::<Repr>::deserialize(d).map_err(|_| {
+        serde::de::Error::custom("compress must be a bool, an algorithm name or list, or a table")
+    })?;
     Ok(r.map(|r| match r {
         Repr::On(enabled) => CompressConfig {
             enabled,
+            ..Default::default()
+        },
+        Repr::Alg(alg) => CompressConfig {
+            algorithms: vec![alg],
+            ..Default::default()
+        },
+        Repr::Algs(algorithms) => CompressConfig {
+            algorithms,
             ..Default::default()
         },
         Repr::Full(c) => c,
@@ -343,6 +356,70 @@ pub enum AuthConfigSchema {
     Full(Box<AuthConfig>),
 }
 
+/// `auth.basic` accepts an htpasswd file path (`basic = "x.htpasswd"`)
+/// or a table — `htpasswd` is the ops-common case.
+fn opt_basic<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<BasicAuth>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Htpasswd(PathBuf),
+        Full(BasicAuth),
+    }
+    let r = Option::<Repr>::deserialize(d)
+        .map_err(|_| serde::de::Error::custom("basic must be an htpasswd path or a table"))?;
+    Ok(r.map(|r| match r {
+        Repr::Htpasswd(p) => BasicAuth {
+            htpasswd: Some(p),
+            ..Default::default()
+        },
+        Repr::Full(b) => b,
+    }))
+}
+
+/// Schema shape for `auth.basic` — an htpasswd path or a table.
+#[derive(JsonSchema)]
+#[schemars(untagged)]
+pub enum BasicAuthSchema {
+    /// `"path.htpasswd"` — a bcrypt `$2y$` htpasswd file.
+    Htpasswd(String),
+    /// Table form: `users`, `htpasswd`, `realm`.
+    Full(BasicAuth),
+}
+
+/// `auth.bearer` accepts a token (`bearer = "tok"`), a token list, or a
+/// table — `tokens` is the only field, so it dominates.
+fn opt_bearer<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<BearerAuth>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Token(String),
+        Tokens(Vec<String>),
+        Full(BearerAuth),
+    }
+    let r = Option::<Repr>::deserialize(d).map_err(|_| {
+        serde::de::Error::custom("bearer must be a token, a token list, or a table")
+    })?;
+    Ok(r.map(|r| match r {
+        Repr::Token(token) => BearerAuth {
+            tokens: vec![token],
+        },
+        Repr::Tokens(tokens) => BearerAuth { tokens },
+        Repr::Full(b) => b,
+    }))
+}
+
+/// Schema shape for `auth.bearer` — a token or a table.
+#[derive(JsonSchema)]
+#[schemars(untagged)]
+pub enum BearerAuthSchema {
+    /// `"tok"` — one valid token.
+    Token(String),
+    /// `["t1", "t2"]` — valid tokens.
+    Tokens(Vec<String>),
+    /// Table form.
+    Full(BearerAuth),
+}
+
 /// `cors` accepts `false` (opt out of inherited CORS handling) or a table.
 fn opt_cors<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<CorsConfig>, D::Error> {
     #[derive(Deserialize)]
@@ -397,6 +474,32 @@ pub enum HeaderOpsSchema {
     Off(bool),
     /// Table form.
     Full(Box<HeaderOps>),
+}
+
+/// `route.match` accepts a method (`match = "GET"`), a method list
+/// (`match = ["GET", "POST"]`), or a table — `methods` dominates.
+fn opt_match<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<MatchConditions>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Method(String),
+        Methods(Vec<String>),
+        Full(MatchConditions),
+    }
+    let r = Option::<Repr>::deserialize(d).map_err(|_| {
+        serde::de::Error::custom("match must be a method, a method list, or a table")
+    })?;
+    Ok(r.map(|r| match r {
+        Repr::Method(m) => MatchConditions {
+            methods: vec![m],
+            ..Default::default()
+        },
+        Repr::Methods(methods) => MatchConditions {
+            methods,
+            ..Default::default()
+        },
+        Repr::Full(m) => m,
+    }))
 }
 
 /// `route.proxy` accepts an upstream reference — cluster name, URL, or
@@ -1889,7 +1992,10 @@ pub struct RouteConfig {
     /// route never overrides a prefix route.
     pub regex: Option<String>,
     /// Additional match conditions: methods, headers, query parameters.
-    #[serde(rename = "match")]
+    /// `match = "GET"` or `match = ["GET", "POST"]` is shorthand for
+    /// `{ methods = […] }`.
+    #[serde(rename = "match", deserialize_with = "opt_match")]
+    #[schemars(with = "Option<MatchSchema>")]
     pub match_: Option<MatchConditions>,
     /// Priority among routes that tie on specificity. Higher wins.
     pub priority: i32,
@@ -1942,7 +2048,8 @@ pub struct RouteConfig {
     #[serde(deserialize_with = "opt_route_cache")]
     #[schemars(with = "Option<RouteCacheSchema>")]
     pub cache: Option<RouteCache>,
-    /// Response compression: `true` for defaults, or a table.
+    /// Response compression: `true` for defaults, an algorithm name or
+    /// list (`compress = "br"`, `compress = ["br", "zstd"]`), or a table.
     #[serde(deserialize_with = "opt_compress")]
     #[schemars(with = "Option<CompressConfigSchema>")]
     pub compress: Option<CompressConfig>,
@@ -2440,9 +2547,16 @@ pub struct AuthConfig {
     /// Set `false` to opt a route out of an inherited site `auth`.
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// HTTP Basic authentication.
+    /// HTTP Basic authentication; `basic = "path.htpasswd"` is shorthand
+    /// for `{ htpasswd = "…" }`.
+    #[serde(deserialize_with = "opt_basic")]
+    #[schemars(with = "Option<BasicAuthSchema>")]
     pub basic: Option<BasicAuth>,
-    /// Bearer token authentication (`Authorization: Bearer <token>`).
+    /// Bearer token authentication (`Authorization: Bearer <token>`);
+    /// `bearer = "tok"` or `bearer = ["t1", "t2"]` is shorthand for
+    /// `{ tokens = […] }`.
+    #[serde(deserialize_with = "opt_bearer")]
+    #[schemars(with = "Option<BearerAuthSchema>")]
     pub bearer: Option<BearerAuth>,
     /// API key in a header or query parameter.
     pub api_key: Option<ApiKeyAuth>,
@@ -2745,12 +2859,16 @@ impl Default for CompressConfig {
     }
 }
 
-/// Schema shape for `route.compress` (`true` or a table).
+/// Schema shape for `route.compress` (`true`, an algorithm, or a table).
 #[derive(JsonSchema)]
 #[schemars(untagged)]
 pub enum CompressConfigSchema {
     /// `compress = true` — enable with default settings.
     Flag(bool),
+    /// `compress = "br"` — enable only this algorithm.
+    Alg(String),
+    /// `compress = ["br", "zstd"]` — enable these algorithms.
+    Algs(Vec<String>),
     /// Full table form.
     Full(CompressConfig),
 }
@@ -2850,6 +2968,18 @@ pub enum RespondSchema {
     Body(String),
     /// Full table form.
     Full(RespondHandler),
+}
+
+/// Schema shape for `route.match` (a method or a table).
+#[derive(JsonSchema)]
+#[schemars(untagged)]
+pub enum MatchSchema {
+    /// `"GET"` — match this HTTP method.
+    Method(String),
+    /// `["GET", "POST"]` — match any of these methods.
+    Methods(Vec<String>),
+    /// Table form: `methods`, `headers`, `query`.
+    Full(MatchConditions),
 }
 
 /// Schema shape for `route.rate_limit` (a rate or a table).

@@ -172,13 +172,13 @@ One route: a matcher, one handler, and middleware.
 |---|---|---|---|
 | `auth` | AuthConfigSchema \| null | `null` | Authentication configuration; `auth = false` disables it, including any inherited site default. |
 | `cache` | RouteCacheSchema \| null | `null` | Response caching: a store name (`cache = "main"`) or a table. |
-| `compress` | CompressConfigSchema \| null | `null` | Response compression: `true` for defaults, or a table. |
+| `compress` | CompressConfigSchema \| null | `null` | Response compression: `true` for defaults, an algorithm name or list (`compress = "br"`, `compress = ["br", "zstd"]`), or a table. |
 | `cors` | CorsConfigSchema \| null | `null` | CORS handling; `cors = false` disables it, including any inherited site default. |
 | `exact` | string \| null | `null` | Match this exact path only. |
 | `ip_allow` | [string] | `[]` | Client CIDRs allowed; others get 403. |
 | `ip_deny` | [string] | `[]` | Client CIDRs denied; they get 403 before allow rules. |
 | `limits` | LimitOverrides \| null | `null` | Per-route limit overrides. |
-| `match` | MatchConditions \| null | `null` | Additional match conditions: methods, headers, query parameters. |
+| `match` | MatchSchema \| null | `null` | Additional match conditions: methods, headers, query parameters. `match = "GET"` or `match = ["GET", "POST"]` is shorthand for `{ methods = […] }`. |
 | `prefix` | string \| null | `null` | Match paths starting with this prefix. Prefix matching is segment-aware: `/api` matches `/api` and `/api/…` but not `/apix`. |
 | `priority` | integer | `0` | Priority among routes that tie on specificity. Higher wins. |
 | `proxy` | ProxySchema \| null | `null` | Reverse proxy: an upstream reference (`"name"`/`"url"`/`[urls]`, like `site.proxy`) or a full table. |
@@ -320,8 +320,8 @@ Authentication configuration; exactly one method per route.
 | field | type | default | description |
 |---|---|---|---|
 | `api_key` | ApiKeyAuth \| null | `null` | API key in a header or query parameter. |
-| `basic` | BasicAuth \| null | `null` | HTTP Basic authentication. |
-| `bearer` | BearerAuth \| null | `null` | Bearer token authentication (`Authorization: Bearer <token>`). |
+| `basic` | BasicAuthSchema \| null | `null` | HTTP Basic authentication; `basic = "path.htpasswd"` is shorthand for `{ htpasswd = "…" }`. |
+| `bearer` | BearerAuthSchema \| null | `null` | Bearer token authentication (`Authorization: Bearer <token>`); `bearer = "tok"` or `bearer = ["t1", "t2"]` is shorthand for `{ tokens = […] }`. |
 | `enabled` | boolean | `true` | Set `false` to opt a route out of an inherited site `auth`. |
 
 ## `BasicAuth`
@@ -523,6 +523,16 @@ API key location.
 Schema shape for `auth` — `false` or a table.
 
 
+## `BasicAuthSchema`
+
+Schema shape for `auth.basic` — an htpasswd path or a table.
+
+
+## `BearerAuthSchema`
+
+Schema shape for `auth.bearer` — a token or a table.
+
+
 ## `ByteSize`
 
 A byte size parsed from `123`, `"123B"`, `"16KiB"`, `"10MB"`, `"4GiB"`.
@@ -549,7 +559,7 @@ Cloudflare credentials for `dns-01` (`[acme.dns.cloudflare]`).
 
 ## `CompressConfigSchema`
 
-Schema shape for `route.compress` (`true` or a table).
+Schema shape for `route.compress` (`true`, an algorithm, or a table).
 
 
 ## `CorsConfigSchema`
@@ -628,6 +638,11 @@ not affect path precedence.
 | `headers` | object | `{}` | Required request headers. Values match exactly, or as regex when prefixed with `re:`. A value of `""` requires only presence — same rule as `query` (match an empty value with `re:^$`). |
 | `methods` | [string] | `[]` | HTTP methods, e.g. `["GET", "HEAD"]`. |
 | `query` | object | `{}` | Required query parameters (`key` must equal or regex-match the value). A value of `""` requires only presence. |
+
+## `MatchSchema`
+
+Schema shape for `route.match` (a method or a table).
+
 
 ## `OnDemandAcme`
 

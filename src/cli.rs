@@ -1337,9 +1337,16 @@ root = "/tmp"
         assert_eq!(cmd_init(out, true), ExitCode::SUCCESS);
         // "-" prints to stdout
         assert_eq!(cmd_init(PathBuf::from("-"), false), ExitCode::SUCCESS);
-        // the template itself must validate
-        let parsed = crate::config::load(&dir.path().join("verd.toml")).unwrap();
+        // the template itself must validate — and through the same
+        // pipeline `verd validate` runs: load + semantic check +
+        // Runtime::check dry build
+        let out = dir.path().join("verd.toml");
+        let parsed = crate::config::load(&out).unwrap();
         assert!(parsed.is_valid(), "{:?}", parsed.diagnostics);
+        assert_eq!(
+            cmd_validate(Some(out), None, ValidateFormat::Text, false),
+            ExitCode::SUCCESS
+        );
     }
 
     #[test]
