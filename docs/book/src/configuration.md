@@ -237,13 +237,16 @@ validate` resolves them, so CI can catch missing secrets.
 
 | Section | Contents |
 | --- | --- |
-| `[server]` | listeners, limits, timeouts, connection caps, trusted proxies |
-| `[admin]` | admin listener (`admin = false` or `enabled = false` to disable), bearer token, optional TLS |
+| `include` | extra `*.toml` files/directories/globs merged into this file (paths relative to it) |
+| `[server]` | listeners, connection caps, trusted proxies, security-header baseline, graceful shutdown |
+| `[limits]` | global request limits (`header_bytes`, `body_bytes`) — sites/routes may override |
+| `[timeouts]` | global timeouts — sites/routes may override |
 | `[log]` | server log + access log (format/output/filter/sample) |
-| `[[site]]` | virtual hosts: hostnames, TLS mode, routes, trusted proxies |
+| `[admin]` | admin listener (`admin = false` or `enabled = false` to disable), bearer token, optional TLS |
+| `[acme]` | ACME account + certificate storage |
 | `[upstream.*]` | named upstream clusters for proxy routes — `upstream.name = "url"` or a URL list is the no-table shorthand |
 | `[cache.*]` | named cache stores (RAM/disk/hybrid) for routes |
-| `[acme]` | ACME account + certificate storage |
+| `[[site]]` | virtual hosts: hostnames, TLS mode, routes, trusted proxies |
 
 The full field-by-field listing is in the
 [configuration reference](./reference.md).

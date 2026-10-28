@@ -34,7 +34,7 @@ just carry a loopback `Host` (curl does this automatically):
 ```sh
 curl http://127.0.0.1:2019/health        # → ok
 curl http://127.0.0.1:2019/ready         # → ready (503 until fully up)
-curl http://127.0.0.1:2019/version       # → {"version":"0.2.2","commit":...}
+curl http://127.0.0.1:2019/version       # → {"version":"x.y.z","commit":...}
 curl http://127.0.0.1:2019/upstreams     # → {"clusters":[...]}
 curl http://127.0.0.1:2019/config        # live config, secrets shown as ***
 curl http://127.0.0.1:2019/metrics       # Prometheus exposition

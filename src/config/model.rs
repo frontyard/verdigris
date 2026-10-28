@@ -1464,9 +1464,11 @@ pub struct UpstreamServerEntry {
     /// Server URL: `http://`, `https://`, or `h2c://`.
     pub url: String,
     /// Relative selection weight (≥ 1). Default 1.
+    #[serde(default = "default_one")]
     pub weight: u32,
     /// `true` marks a standby used only when no primary is healthy.
     /// Default false.
+    #[serde(default)]
     pub backup: bool,
 }
 
@@ -2440,9 +2442,8 @@ pub struct RegexRewrite {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct RetryPolicy {
-    /// Total retry budget across all requests to the cluster (concurrent
-    /// retries are limited to this fraction of recent requests, and never
-    /// exceed `max` per request).
+    /// Maximum retries a single request may consume across the cluster;
+    /// concurrent retries cluster-wide are bounded by `budget_fraction`.
     pub max_per_request: u8,
     /// Maximum in-flight retries as a fraction (0–1) of total requests.
     pub budget_fraction: f64,
@@ -2631,8 +2632,8 @@ pub struct RateLimitConfig {
     /// Defaults to `ip`.
     #[serde(default = "default_key_ip")]
     pub key: String,
-    /// Sustained rate, e.g. `100/s`, `600/m`, `10000/h`. Required when
-    /// enabled.
+    /// Sustained rate, e.g. `100/s`, `600/m`, `10000/h`, `50000/day`, or
+    /// a custom window like `10/30s`. Required when enabled.
     #[serde(default)]
     #[schemars(with = "Option<String>")]
     pub rate: Option<RateSpec>,

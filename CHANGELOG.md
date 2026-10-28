@@ -180,6 +180,11 @@ workflow publishes the matching section as the GitHub release notes.
   and regex fallback, client-IP resolution, upstream pick, cache key +
   RAM lookup, forwarded-header rewrite, response decoration, config
   parse as control), posting regression reports on every PR.
+- **Doc drift guards** — `gen-llms-full.py` now fails when `llms.txt`'s
+  index skips a `SUMMARY.md` page and rewrites book-relative links to
+  repo paths; `release.sh` keeps the `installation.md` download URL in
+  lockstep with the version bump; and a `surface_audit` test asserts
+  the JSON schema never marks a defaulted field required.
 
 ### Changed
 
@@ -424,6 +429,23 @@ workflow publishes the matching section as the GitHub release notes.
 - **`respond = "404"` silently served 200** — the quoted form is a
   body, not a status; a three-digit body under the default status now
   warns that `respond = 404` (unquoted) sets the code.
+- **`verd schema` over-required upstream server entry fields** —
+  `{ url = "…" }` entries in `upstream.*.servers` parse with
+  `weight = 1`/`backup = false`, but the schema marked all three
+  fields required; it now requires only `url` and emits the real
+  defaults, so schema-driven editors no longer flag valid configs.
+- **Generated field reference dropped every enum/union's accepted
+  forms** — `lb`, `tls`, `challenge`, `policy`, `tier`, `format`,
+  api-key `location`, and the shorthand `*Schema` unions rendered as
+  bare headings; each now lists every accepted form with its
+  description.
+- **Book fixes surfaced by the `llms-full.txt` review** — middleware
+  claimed only `security` accepted the bare `x = false` spelling (all
+  middleware blocks do), the `[server]` layout row implied `limits`/
+  `timeouts` nest under it, the `llms.txt` index omitted six book
+  pages, the first recipe validated `tls = "auto"` by accident (now
+  `tls = "off"`), stale `0.2.2`/`v0.1.0` version strings, and
+  book-relative links in `llms-full.txt` that resolved nowhere.
 
 ## [0.4.1] - 2026-10-27
 

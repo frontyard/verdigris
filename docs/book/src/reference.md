@@ -156,11 +156,20 @@ A virtual site: a set of hosts with routes and optional TLS.
 
 TLS mode for a site.
 
+| form | description |
+|---|---|
+| `TlsMode` table | A mode keyword. |
+| `ManualTls` table | Explicit certificate files. |
 
 ## `TlsMode`
 
 TLS mode keyword.
 
+| form | description |
+|---|---|
+| `"auto"` | Obtain and renew certificates automatically via ACME. |
+| `"off"` | No TLS for this site. |
+| `"self_signed"` | Generate a self-signed certificate (local development). |
 
 
 
@@ -273,6 +282,10 @@ A named cluster of upstream servers.
 Upstream reference: a name, a single URL (`"http://app:9000"`), or an
 inline URL list.
 
+| form | description |
+|---|---|
+| `string` | Name of a top-level `[upstream.<name>]` cluster. |
+| `[…]` | Inline list of upstream URLs forming an anonymous cluster. |
 
 ## `HealthCheck`
 
@@ -310,7 +323,7 @@ Retry policy for idempotent requests.
 | field | type | default | description |
 |---|---|---|---|
 | `budget_fraction` | number | `0.2` | Maximum in-flight retries as a fraction (0–1) of total requests. |
-| `max_per_request` | integer | `2` | Total retry budget across all requests to the cluster (concurrent retries are limited to this fraction of recent requests, and never exceed `max` per request). |
+| `max_per_request` | integer | `2` | Maximum retries a single request may consume across the cluster; concurrent retries cluster-wide are bounded by `budget_fraction`. |
 
 
 ## `AuthConfig`
@@ -378,7 +391,7 @@ Rate limiting.
 | `enabled` | boolean | `true` | Set `false` to opt a route out of an inherited site `rate_limit`. |
 | `exempt` | [string] | `[]` | CIDRs exempt from limiting. |
 | `key` | string | `"ip"` | What the limit applies to: `ip`, `identity` (authenticated identity), `route`, or `header:<Name>` for an arbitrary header value. Defaults to `ip`. |
-| `rate` | string \| null | `null` | Sustained rate, e.g. `100/s`, `600/m`, `10000/h`. Required when enabled. |
+| `rate` | string \| null | `null` | Sustained rate, e.g. `100/s`, `600/m`, `10000/h`, `50000/day`, or a custom window like `10/30s`. Required when enabled. |
 
 ## `HeaderOps`
 
@@ -486,52 +499,95 @@ A named cache store.
 
 Schema shape for `log.access` (`false` or a table).
 
+| form | description |
+|---|---|
+| `boolean` | `access = false` — disable access logging; `true` enables it. |
+| `string` | `access = "/var/log/app.log"` — enable, writing to this output (`stdout`/`stderr` also work). |
+| `AccessLog` table | Full table form. |
 
 ## `AcmeChallenge`
 
 Which ACME challenge type to solve.
 
+| form | description |
+|---|---|
+| `"http-01"` | `http-01` — answer challenges over HTTP on port 80. |
+| `"tls-alpn-01"` | `tls-alpn-01` — answer challenges inside the TLS handshake. |
+| `"dns-01"` | `dns-01` — publish `_acme-challenge` TXT records via a DNS provider API (`acme.dns`). Required for wildcard certificates; works with no ACME-reachable ports at all. |
+| `"auto"` | `http-01` when a plaintext listener exists, else `tls-alpn-01`. |
 
 ## `AcmeDns`
 
 DNS provider used to publish `_acme-challenge` TXT records for the
 `dns-01` challenge (`[acme.dns]`).
 
+| form | description |
+|---|---|
+| `{ cloudflare }` | Cloudflare API v4: `[acme.dns.cloudflare]`. |
 
 ## `ActiveHealthSchema`
 
 Schema shape for `upstream.health.active` (a probe path or a table).
 
+| form | description |
+|---|---|
+| `string` | `"/healthz"` — probe path with default settings. |
+| `ActiveHealth` table | Full table form. |
 
 ## `AdminConfigSchema`
 
 Schema shape for `admin` — `false` or a table.
 
+| form | description |
+|---|---|
+| `boolean` | `admin = false` — no admin listener. |
+| `AdminConfig` table | Table form. |
 
 ## `AdminTlsSchema`
 
 Schema shape for `admin.tls` — `"self_signed"` or a table.
 
+| form | description |
+|---|---|
+| `string` | `"self_signed"` — generated localhost certificate. |
+| `ManualTls` table | PEM pair. |
 
 ## `ApiKeyLocation`
 
 API key location.
 
+| form | description |
+|---|---|
+| `"header"` | In a request header. |
+| `"query"` | In a query parameter. |
 
 ## `AuthConfigSchema`
 
 Schema shape for `auth` — `false` or a table.
 
+| form | description |
+|---|---|
+| `boolean` | `auth = false` — no authentication on this site/route. |
+| `AuthConfig` table | Table form. |
 
 ## `BasicAuthSchema`
 
 Schema shape for `auth.basic` — an htpasswd path or a table.
 
+| form | description |
+|---|---|
+| `string` | `"path.htpasswd"` — a bcrypt `$2y$` htpasswd file. |
+| `BasicAuth` table | Table form: `users`, `htpasswd`, `realm`. |
 
 ## `BearerAuthSchema`
 
 Schema shape for `auth.bearer` — a token or a table.
 
+| form | description |
+|---|---|
+| `string` | `"tok"` — one valid token. |
+| `[…]` | `["t1", "t2"]` — valid tokens. |
+| `BearerAuth` table | Table form. |
 
 ## `ByteSize`
 
@@ -544,6 +600,11 @@ decimal (×1000); `Ki`/`Mi`/`Gi` are binary (×1024).
 
 Cache storage tier.
 
+| form | description |
+|---|---|
+| `"ram"` | RAM only. |
+| `"disk"` | Disk only; persists across restarts. |
+| `"hybrid"` | RAM in front of disk, promoted on hit. |
 
 ## `CloudflareDns`
 
@@ -561,16 +622,31 @@ Cloudflare credentials for `dns-01` (`[acme.dns.cloudflare]`).
 
 Schema shape for `route.compress` (`true`, an algorithm, or a table).
 
+| form | description |
+|---|---|
+| `boolean` | `compress = true` — enable with default settings. |
+| `string` | `compress = "br"` — enable only this algorithm. |
+| `[…]` | `compress = ["br", "zstd"]` — enable these algorithms. |
+| `CompressConfig` table | Full table form. |
 
 ## `CorsConfigSchema`
 
 Schema shape for `cors` — `false` or a table.
 
+| form | description |
+|---|---|
+| `boolean` | `cors = false` — no CORS handling on this site/route. |
+| `CorsConfig` table | Table form. |
 
 ## `EvictionPolicy`
 
 Cache eviction policy.
 
+| form | description |
+|---|---|
+| `"lru"` | Least recently used. |
+| `"lfu"` | Least frequently used. |
+| `"fifo"` | First in, first out. |
 
 ## `ExternalAccountBinding`
 
@@ -585,16 +661,28 @@ External Account Binding credentials.
 
 Schema shape for `response_headers` — `false` or a table.
 
+| form | description |
+|---|---|
+| `boolean` | `response_headers = false` — no header manipulation on this site/route. |
+| `HeaderOps` table | Table form. |
 
 ## `HealthCheckSchema`
 
 Schema shape for `health` — a probe path or a table.
 
+| form | description |
+|---|---|
+| `string` | `health = "/healthz"` — active probes on this path, default settings. |
+| `HealthCheck` table | Full table form. |
 
 ## `HostHeaderSchema`
 
 Schema shape for `host_header` — a string or `{ value = "…" }`.
 
+| form | description |
+|---|---|
+| `string` | `"upstream"`, `"original"`, or a verbatim value. |
+| `HostHeaderValue` table | `{ value = "…" }` — always verbatim, never keyword-resolved. |
 
 ## `HostHeaderValue`
 
@@ -617,16 +705,29 @@ Per-route limit overrides.
 
 Schema shape for a `server.listen` entry (`"ip:port"` or `{addr, tls}`).
 
+| form | description |
+|---|---|
+| `string` | `"ip:port"` or `":port"` (all interfaces) — a plaintext listener. |
+| `{ addr, tls }` | `{ addr = "ip:port", tls = true }` — both optional. |
 
 ## `LoadBalancing`
 
 Load balancing algorithm.
 
+| form | description |
+|---|---|
+| `"round_robin"` | Rotate through healthy upstreams in order. |
+| `"least_conn"` | Send to the healthy upstream with fewest in-flight requests. |
+| `"ip_hash"` | Hash the client IP so it consistently reaches the same upstream. |
 
 ## `LogFormat`
 
 Log output format.
 
+| form | description |
+|---|---|
+| `"json"` | One JSON object per line — the default, friendly to log collectors. |
+| `"pretty"` | Human-readable single-line format. |
 
 ## `MatchConditions`
 
@@ -643,6 +744,11 @@ not affect path precedence.
 
 Schema shape for `route.match` (a method or a table).
 
+| form | description |
+|---|---|
+| `string` | `"GET"` — match this HTTP method. |
+| `[…]` | `["GET", "POST"]` — match any of these methods. |
+| `MatchConditions` table | Table form: `methods`, `headers`, `query`. |
 
 ## `OnDemandAcme`
 
@@ -658,6 +764,10 @@ On-demand certificate issuance.
 
 Schema shape for `upstream.*.health.passive` (a count or a table).
 
+| form | description |
+|---|---|
+| `integer` | `5` — mark unhealthy after this many consecutive failures. |
+| `PassiveHealth` table | Full table form. |
 
 ## `PrefixPair`
 
@@ -672,16 +782,29 @@ Prefix replacement: `{ from = "/api", to = "/v1" }`.
 
 Schema shape for `route.proxy` (upstream shorthand or a table).
 
+| form | description |
+|---|---|
+| `UpstreamRef` table | Cluster name, one URL, or a URL list — like `site.proxy`. |
+| `ProxyHandler` table | Full table form. |
 
 ## `RateLimitSchema`
 
 Schema shape for `route.rate_limit` (a rate or a table).
 
+| form | description |
+|---|---|
+| `boolean` | `rate_limit = false` — no rate limiting on this site/route. |
+| `string` | `"100/s"` — per-IP limit at this rate. |
+| `RateLimitConfig` table | Full table form. |
 
 ## `RedirectSchema`
 
 Schema shape for `route.redirect` (a target URL or a table).
 
+| form | description |
+|---|---|
+| `string` | `"https://…"` — redirect target template, status 308. |
+| `RedirectHandler` table | Full table form. |
 
 ## `RegexRewrite`
 
@@ -696,36 +819,66 @@ Regex path rewrite: `pattern` → `replace`.
 
 Schema shape for `route.respond` (a body string or a table).
 
+| form | description |
+|---|---|
+| `integer` | `respond = 404` — empty-body status response. |
+| `string` | `"text"` — a 200 response with this body. |
+| `RespondHandler` table | Full table form. |
 
 ## `RetryPolicySchema`
 
 Schema shape for `proxy.retries` (`false` or a table).
 
+| form | description |
+|---|---|
+| `boolean` | `retries = false` — disable; `true` enables defaults. |
+| `integer` | `retries = 3` — retry budget per request, rest defaults. |
+| `RetryPolicy` table | Full table form. |
 
 ## `RouteCacheSchema`
 
 Schema shape for `route.cache` (`"store-name"` or a table).
 
+| form | description |
+|---|---|
+| `string` | `"store-name"` — cache via `[cache.<name>]` with default settings. |
+| `RouteCache` table | Full table form. |
 
 ## `RouteSecuritySchema`
 
 Schema shape for `security` — `false` or a table.
 
+| form | description |
+|---|---|
+| `boolean` | `security = false` — suppress all security headers on this site/route, including inherited ones. |
+| `RouteSecurity` table | Table form: per-header overrides. |
 
 ## `SecurityConfigSchema`
 
 Schema shape for `server.security` — `false` or a table.
 
+| form | description |
+|---|---|
+| `boolean` | `security = false` — emit none of the baseline security headers. |
+| `SecurityConfig` table | Table form. |
 
 ## `ServerHeaderSchema`
 
 Schema shape for `server_header` — `false` or a string.
 
+| form | description |
+|---|---|
+| `boolean` | `server_header = false` — omit the `Server` response header. |
+| `string` | Header value (`""` also omits). |
 
 ## `StaticSchema`
 
 Schema shape for `route.static` (a root path or a table).
 
+| form | description |
+|---|---|
+| `string` | `"/srv/www"` — document root with default settings. |
+| `StaticHandler` table | Full table form. |
 
 ## `TimeoutOverrides`
 
@@ -752,6 +905,10 @@ Response served when every upstream in a cluster is unhealthy.
 
 Schema shape for `unavailable` — a status code or a table.
 
+| form | description |
+|---|---|
+| `integer` | `unavailable = 503` — this status with a default body. |
+| `UnavailableResponse` table | Full table form. |
 
 ## `UpstreamDns`
 
@@ -765,12 +922,22 @@ DNS re-resolution for hostname upstreams.
 
 Schema shape for `upstream.dns` (a grace duration or a table).
 
+| form | description |
+|---|---|
+| `string` | `"60s"` — keep last-known-good addresses this long. |
+| `UpstreamDns` table | Full table form. |
 
 ## `UpstreamEntrySchema`
 
 Schema shape for one `upstream.<name>` entry — a URL, a URL list, a
 single server entry, or a full table.
 
+| form | description |
+|---|---|
+| `string` | `"http://host:port"` — a one-server cluster. |
+| `[…]` | `["http://a", "http://b"]` — a cluster of bare URLs. |
+| `UpstreamServerEntry` table | `{ url, weight, backup }` — a one-server cluster, entry form. |
+| `UpstreamConfig` table | Full cluster table. |
 
 ## `UpstreamServerEntry`
 
@@ -778,14 +945,18 @@ single server entry, or a full table.
 
 | field | type | default | description |
 |---|---|---|---|
-| `backup` | boolean **required** |  | `true` marks a standby used only when no primary is healthy. Default false. |
+| `backup` | boolean | `false` | `true` marks a standby used only when no primary is healthy. Default false. |
 | `url` | string **required** |  | Server URL: `http://`, `https://`, or `h2c://`. |
-| `weight` | integer **required** |  | Relative selection weight (≥ 1). Default 1. |
+| `weight` | integer | `1` | Relative selection weight (≥ 1). Default 1. |
 
 ## `UpstreamServerSchema`
 
 Schema shape for one `upstream.*.servers` entry.
 
+| form | description |
+|---|---|
+| `string` | `"http://host:port"` — weight 1, primary. |
+| `UpstreamServerEntry` table | Full entry form. |
 
 ## `UpstreamTimeouts`
 

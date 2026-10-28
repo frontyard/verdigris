@@ -15,6 +15,15 @@ TLS and a readable TOML configuration.
   (br/zstd/gzip), and a full HTTP response cache (RAM/disk/hybrid)
 - Prometheus metrics, structured access logs, admin API, atomic reloads
 
+## Documentation
+
+See [REFERENCE.md](docs/book/src/reference.md) for the complete configuration schema
+and [QUICKSTART.md](docs/book/src/quickstart.md) for a hands-on tour.
+
+Full [documentation](https://www.frontyard.co/verdigris/) is
+automatically generated on every release. Point AI agents to [llms-full.txt](llms-full.txt)
+for comprehensive context when setting up or troubleshooting.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Security issues:

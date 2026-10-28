@@ -52,8 +52,9 @@ proxy = { upstream = "app", rewrite = { strip_prefix = "/api" } }
   all-members-down status — the table form's `body` substitutes the
   request placeholders (`{uri}`, `{host}`, `{request_id}`, …), and
   statuses that forbid a body (1xx/204/304) are served bodyless.
-- **Timeouts**: `connect`, `response_header`, plus the route's
-  `timeouts.request_deadline` and body read/write budgets.
+- **Timeouts**: `connect`, `idle` (pool keep-alive), `response_header`,
+  plus the route's `timeouts.request_deadline` and body read/write
+  budgets.
 - **DNS**: names resolve through the system resolver with TTL caching,
   failure grace, and re-resolution on connect errors.
 - **Upgrades**: `Connection`/`Upgrade` tokens (e.g. WebSocket) are

@@ -2341,6 +2341,7 @@ proxy = "app"
     /// ergonomics audit is the diff between the two.
     mod surface_audit {
         use super::*;
+        use std::collections::BTreeSet;
 
         fn load_str(body: &str) -> Result<Loaded, LoadError> {
             let dir = tempfile::tempdir().unwrap();
@@ -3431,6 +3432,53 @@ response_headers = { enabled = false }
                     Ok(_) => panic!("{body} should be a schema error"),
                 }
             }
+        }
+
+        /// `verd schema` must not require what the parser defaults — a
+        /// required field carrying a `default` contradicts itself, and
+        /// the pinned case is `UpstreamServerEntry`: `{ url = "…" }`
+        /// parses with weight 1 / backup false, so only `url` may be
+        /// required.
+        #[test]
+        fn schema_required_fields_have_no_defaults() {
+            let doc = fmt::json_schema();
+            let defs = doc
+                .get("$defs")
+                .or_else(|| doc.get("definitions"))
+                .cloned()
+                .unwrap_or_default();
+            let mut bad = Vec::new();
+            if let Some(map) = defs.as_object() {
+                for (name, def) in map {
+                    let required: BTreeSet<&str> = def
+                        .get("required")
+                        .and_then(|r| r.as_array())
+                        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+                        .unwrap_or_default();
+                    if let Some(props) = def.get("properties").and_then(|p| p.as_object()) {
+                        for (fname, prop) in props {
+                            if required.contains(fname.as_str()) && prop.get("default").is_some() {
+                                bad.push(format!("{name}.{fname}"));
+                            }
+                        }
+                    }
+                }
+            }
+            assert!(
+                bad.is_empty(),
+                "schema fields both required and defaulted:\n{}",
+                bad.join("\n")
+            );
+
+            let entry = &defs["UpstreamServerEntry"];
+            assert_eq!(
+                entry["required"],
+                serde_json::json!(["url"]),
+                "UpstreamServerEntry over-requires — the parser defaults \
+                 `weight` (1) and `backup` (false)"
+            );
+            load_str("[upstream.u]\nservers = [{ url = \"http://127.0.0.1:9\" }]")
+                .expect("url-only server entry should parse");
         }
     }
 

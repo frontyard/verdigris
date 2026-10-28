@@ -17,6 +17,9 @@
   stdout, `--force` to overwrite).
 - `verd fmt -c FILE` normalizes a config file's formatting (`--all`
   covers included files; `--check` only reports).
+- `verd config -c FILE` prints the merged, interpolated, effective
+  config with secrets redacted — check what shorthands, includes, and
+  `${VAR}`/`${file:}` expanded to.
 - `docs/book/src/reference.md` is a generated table of every field.
 - `llms-full.txt` (repo root) concatenates this file plus the full
   reference for one-shot ingestion.
@@ -26,7 +29,8 @@
 Top-level keys: `server`, `timeouts`, `limits`, `log`, `admin`, `acme`,
 `upstream`, `cache`, `include`, `site`.
 
-- `[server]` holds `listen` (array of `{ addr, tls }`), connection caps,
+- `[server]` holds `listen` (`"ip:port"` strings or `{ addr, tls }`
+  tables), connection caps,
   `security` headers, `graceful_timeout`. **`[limits]` and `[timeouts]`
   are top-level siblings of `[server]`, not children.**
 - `[[site]]` = a virtual host set: `hosts` (or `default = true`),
@@ -50,6 +54,7 @@ listen = [{ addr = "0.0.0.0:8080", tls = false }]
 
 [[site]]
 hosts = ["example.com"]
+tls = "off"                      # plaintext dev site (default is "auto" ACME)
 root = "/var/www/site"           # shorthand: catch-all static route
 ```
 
@@ -167,7 +172,8 @@ cache = { store = "main", ttl = "5m", stale_if_error = "5m" }
 - `site.proxy` is a catch-all site shorthand accepting a cluster name,
   one URL, or a URL list; per-route use `route.proxy = { upstream =
   "name" | "url" | [urls] }`.
-- `rate` specs: `100/s`, `600/m`, `10000/h`, `50000/day`.
+- `rate` specs: `100/s`, `600/m`, `10000/h`, `50000/day`, or a custom
+  window like `10/30s`.
   `key`: `ip` | `identity` | `route` | `header:<Name>`.
 - Durations: `500ms`, `10s`, `5m`, `1h`, `1d`. Sizes: `B`, `KiB`,
   `MiB`, `GiB`. Both are strings (`"10s"`, `"256MiB"`).
@@ -180,6 +186,8 @@ cache = { store = "main", ttl = "5m", stale_if_error = "5m" }
 
 ## Doc pages
 
+- [Introduction](docs/book/src/introduction.md)
+- [Installation](docs/book/src/installation.md)
 - [Quickstart](docs/book/src/quickstart.md)
 - [Examples](docs/book/src/examples.md)
 - [Configuration model](docs/book/src/configuration.md)
@@ -190,6 +198,10 @@ cache = { store = "main", ttl = "5m", stale_if_error = "5m" }
 - [Caching](docs/book/src/caching.md)
 - [Observability](docs/book/src/observability.md)
 - [Admin API & lifecycle](docs/book/src/admin.md)
+- [Docker & deployment](docs/book/src/docker.md)
 - [Tuning](docs/book/src/tuning.md)
 - [Migrating from nginx/Caddy](docs/book/src/migration.md)
+- [Upgrading](docs/book/src/upgrade.md)
+- [Operations](docs/book/src/operations.md)
+- [Command line](docs/book/src/cli.md)
 - [Full field reference (generated)](docs/book/src/reference.md)
