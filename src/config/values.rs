@@ -13,27 +13,81 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// `docs/config-grammar.md`; `include` deliberately stays strict).
 /// Serializes as the list form — canonical output is always an array.
 pub mod one_or_many {
+    use std::fmt;
+    use std::marker::PhantomData;
+
+    use serde::de::value::{MapAccessDeserializer, SeqAccessDeserializer};
+    use serde::de::{self, IntoDeserializer, Visitor};
     use serde::{Deserialize, Deserializer};
 
     /// Deserialize `v` or `[v, …]` into `Vec<T>`.
     ///
-    /// `Many` is tried first: an untagged `One(T)` where `T` is a
-    /// struct-with-defaults would positionally accept `[]` and produce
-    /// a bogus single element.
+    /// An array is always the list form: a `T` that is a
+    /// struct-with-defaults would otherwise positionally accept `[]` and
+    /// produce a bogus single element. Any other value is handed to `T`
+    /// directly — one pass, no `#[serde(untagged)]` buffering, and `T`'s
+    /// own error (with its path) reaches the user.
     pub fn deserialize<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
     where
         D: Deserializer<'de>,
         T: Deserialize<'de>,
     {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Repr<T> {
-            Many(Vec<T>),
-            One(T),
+        d.deserialize_any(OneOrMany(PhantomData))
+    }
+
+    struct OneOrMany<T>(PhantomData<T>);
+
+    impl<'de, T: Deserialize<'de>> OneOrMany<T> {
+        fn one<D: Deserializer<'de>>(d: D) -> Result<Vec<T>, D::Error> {
+            T::deserialize(d).map(|v| vec![v])
         }
-        match Repr::deserialize(d)? {
-            Repr::Many(v) => Ok(v),
-            Repr::One(v) => Ok(vec![v]),
+    }
+
+    impl<'de, T: Deserialize<'de>> Visitor<'de> for OneOrMany<T> {
+        type Value = Vec<T>;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a value or a list of values")
+        }
+
+        fn visit_seq<A: de::SeqAccess<'de>>(self, seq: A) -> Result<Vec<T>, A::Error> {
+            Vec::deserialize(SeqAccessDeserializer::new(seq))
+        }
+
+        fn visit_map<A: de::MapAccess<'de>>(self, map: A) -> Result<Vec<T>, A::Error> {
+            Self::one(MapAccessDeserializer::new(map))
+        }
+
+        fn visit_bool<E: de::Error>(self, v: bool) -> Result<Vec<T>, E> {
+            Self::one(v.into_deserializer())
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Vec<T>, E> {
+            Self::one(v.into_deserializer())
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Vec<T>, E> {
+            Self::one(v.into_deserializer())
+        }
+
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Vec<T>, E> {
+            Self::one(v.into_deserializer())
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Vec<T>, E> {
+            Self::one(v.into_deserializer())
+        }
+
+        fn visit_borrowed_str<E: de::Error>(self, v: &'de str) -> Result<Vec<T>, E> {
+            Self::one(de::value::BorrowedStrDeserializer::new(v))
+        }
+
+        fn visit_string<E: de::Error>(self, v: String) -> Result<Vec<T>, E> {
+            Self::one(v.into_deserializer())
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Vec<T>, E> {
+            Self::one(().into_deserializer())
         }
     }
 }

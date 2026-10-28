@@ -468,23 +468,28 @@ pub fn real_ip(peer: IpAddr, parts: &http::request::Parts, trusted: &[ipnet::IpN
     // line rather than rewriting in place leaves the client's line in
     // front; reading only the first line would let the client dictate
     // `client_ip` and defeat IP ACLs and per-IP rate limits.
-    let ips: Vec<IpAddr> = parts
+    //
+    // leftmost entry is the original client per convention; entries to the
+    // right of an untrusted one could be spoofed — take the first untrusted
+    // from the right, which is the last hop we cannot verify. Walked in
+    // place (last line first, each right to left) so the per-request path
+    // doesn't allocate; if every entry is trusted, the leftmost wins.
+    let mut leftmost = None;
+    for ip in parts
         .headers
         .get_all("x-forwarded-for")
         .iter()
+        .rev()
         .filter_map(|v| v.to_str().ok())
-        .flat_map(|v| v.split(','))
-        .filter_map(|s| s.trim().parse().ok())
-        .collect();
-    // leftmost entry is the original client per convention; entries to the
-    // right of an untrusted one could be spoofed — take the first untrusted
-    // from the right, which is the last hop we cannot verify.
-    for ip in ips.iter().rev() {
-        if !trusted.iter().any(|n| n.contains(ip)) {
-            return *ip;
+        .flat_map(|v| v.rsplit(','))
+        .filter_map(|s| s.trim().parse::<IpAddr>().ok())
+    {
+        if !trusted.iter().any(|n| n.contains(&ip)) {
+            return ip;
         }
+        leftmost = Some(ip);
     }
-    ips.first().copied().unwrap_or(peer)
+    leftmost.unwrap_or(peer)
 }
 
 /// A `Host`/`:authority` value must be a bare authority: DNS name, IPv4,

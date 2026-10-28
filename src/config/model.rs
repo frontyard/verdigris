@@ -16,30 +16,112 @@ fn default_true() -> bool {
     true
 }
 
+/// A table type that also accepts scalar/array shorthands. Deserialized
+/// in one pass by [`opt_shorthand`]: the input's own type picks the form,
+/// so — unlike `#[serde(untagged)]` — the value is never buffered into
+/// serde's `Content` and re-parsed per variant. Config parsing is on the
+/// startup/reload path; route-level fields hit this once per route.
+trait Shorthand<'de>: Deserialize<'de> {
+    /// Whole-field error message, used for every rejected form.
+    const EXPECTING: &'static str;
+    fn from_bool(_: bool) -> Option<Self> {
+        None
+    }
+    fn from_int(_: i64) -> Option<Self> {
+        None
+    }
+    fn from_str(_: &str) -> Option<Self> {
+        None
+    }
+    /// Arrays default to the struct's own sequence form, matching what
+    /// an untagged `Full(Self)` variant accepted.
+    fn from_seq<A: serde::de::SeqAccess<'de>>(seq: A) -> Result<Self, A::Error> {
+        Self::deserialize(serde::de::value::SeqAccessDeserializer::new(seq))
+    }
+}
+
+struct ShorthandVisitor<T>(std::marker::PhantomData<T>);
+
+impl<'de, T: Shorthand<'de>> serde::de::Visitor<'de> for ShorthandVisitor<T> {
+    type Value = T;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(T::EXPECTING)
+    }
+
+    fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<T, E> {
+        T::from_bool(v).ok_or_else(|| E::custom(T::EXPECTING))
+    }
+
+    fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<T, E> {
+        T::from_int(v).ok_or_else(|| E::custom(T::EXPECTING))
+    }
+
+    fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<T, E> {
+        i64::try_from(v)
+            .ok()
+            .and_then(T::from_int)
+            .ok_or_else(|| E::custom(T::EXPECTING))
+    }
+
+    fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<T, E> {
+        T::from_str(v).ok_or_else(|| E::custom(T::EXPECTING))
+    }
+
+    fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<T, E> {
+        Err(E::custom(T::EXPECTING))
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, seq: A) -> Result<T, A::Error> {
+        T::from_seq(seq)
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<T, A::Error> {
+        T::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+    }
+}
+
+struct ShorthandField<T>(T);
+
+impl<'de, T: Shorthand<'de>> Deserialize<'de> for ShorthandField<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_any(ShorthandVisitor(std::marker::PhantomData))
+            .map(ShorthandField)
+    }
+}
+
+/// `deserialize_with` target for an optional [`Shorthand`] field. A
+/// value of the wrong shape reports the field's `EXPECTING` message; an
+/// error inside the table (or array) form is passed through as-is, so
+/// `unknown field` / `did you mean` diagnostics name the offending key.
+fn opt_shorthand<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Shorthand<'de>,
+{
+    Option::<ShorthandField<T>>::deserialize(d).map(|o| o.map(|f| f.0))
+}
+
 /// `route.cache` accepts `false` (opt out of an inherited site cache),
 /// a store name (`cache = "main"`), or a table.
 fn opt_route_cache<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<RouteCache>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Flag(bool),
-        Name(String),
-        Full(RouteCache),
-    }
-    let r = Option::<Repr>::deserialize(d).map_err(|_| {
-        serde::de::Error::custom("cache must be a bool, a store name, or a { store, … } table")
-    })?;
-    Ok(r.map(|r| match r {
-        Repr::Flag(enabled) => RouteCache {
+    opt_shorthand(d)
+}
+
+impl<'de> Shorthand<'de> for RouteCache {
+    const EXPECTING: &'static str = "cache must be a bool, a store name, or a { store, … } table";
+    fn from_bool(enabled: bool) -> Option<Self> {
+        Some(RouteCache {
             enabled,
             ..Default::default()
-        },
-        Repr::Name(store) => RouteCache {
-            store,
+        })
+    }
+    fn from_str(store: &str) -> Option<Self> {
+        Some(RouteCache {
+            store: store.to_owned(),
             ..Default::default()
-        },
-        Repr::Full(c) => c,
-    }))
+        })
+    }
 }
 
 /// `route.compress` accepts `true` (enable with defaults), an algorithm
@@ -235,27 +317,23 @@ fn opt_redirect<'de, D: serde::Deserializer<'de>>(
 
 /// `route.respond` accepts a body string (`respond = "text"`) or a table.
 fn opt_respond<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<RespondHandler>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Code(u16),
-        Body(String),
-        Full(RespondHandler),
+    opt_shorthand(d)
+}
+
+impl<'de> Shorthand<'de> for RespondHandler {
+    const EXPECTING: &'static str = "respond must be a status code, a body string, or a table";
+    fn from_int(code: i64) -> Option<Self> {
+        Some(RespondHandler {
+            status: u16::try_from(code).ok()?,
+            ..Default::default()
+        })
     }
-    let r = Option::<Repr>::deserialize(d).map_err(|_| {
-        serde::de::Error::custom("respond must be a status code, a body string, or a table")
-    })?;
-    Ok(r.map(|r| match r {
-        Repr::Code(status) => RespondHandler {
-            status,
+    fn from_str(body: &str) -> Option<Self> {
+        Some(RespondHandler {
+            body: body.to_owned(),
             ..Default::default()
-        },
-        Repr::Body(body) => RespondHandler {
-            body,
-            ..Default::default()
-        },
-        Repr::Full(r) => r,
-    }))
+        })
+    }
 }
 
 /// `route.rate_limit` accepts a rate (`rate_limit = "100/s"`, per-IP
@@ -479,53 +557,54 @@ pub enum HeaderOpsSchema {
 /// `route.match` accepts a method (`match = "GET"`), a method list
 /// (`match = ["GET", "POST"]`), or a table — `methods` dominates.
 fn opt_match<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<MatchConditions>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Method(String),
-        Methods(Vec<String>),
-        Full(MatchConditions),
+    opt_shorthand(d)
+}
+
+impl<'de> Shorthand<'de> for MatchConditions {
+    const EXPECTING: &'static str = "match must be a method, a method list, or a table";
+    fn from_str(method: &str) -> Option<Self> {
+        Some(MatchConditions {
+            methods: vec![method.to_owned()],
+            ..Default::default()
+        })
     }
-    let r = Option::<Repr>::deserialize(d).map_err(|_| {
-        serde::de::Error::custom("match must be a method, a method list, or a table")
-    })?;
-    Ok(r.map(|r| match r {
-        Repr::Method(m) => MatchConditions {
-            methods: vec![m],
+    fn from_seq<A: serde::de::SeqAccess<'de>>(seq: A) -> Result<Self, A::Error> {
+        Ok(MatchConditions {
+            methods: Vec::deserialize(serde::de::value::SeqAccessDeserializer::new(seq))?,
             ..Default::default()
-        },
-        Repr::Methods(methods) => MatchConditions {
-            methods,
-            ..Default::default()
-        },
-        Repr::Full(m) => m,
-    }))
+        })
+    }
 }
 
 /// `route.proxy` accepts an upstream reference — cluster name, URL, or
 /// list of URLs, same as `site.proxy` — or a full table.
 fn opt_proxy<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<ProxyHandler>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Ref(UpstreamRef),
-        Full(Box<ProxyHandler>),
-    }
-    let r = Option::<Repr>::deserialize(d).map_err(|_| {
-        serde::de::Error::custom(
-            "proxy must be an upstream name, URL, URL list, or an { upstream, … } table",
-        )
-    })?;
-    Ok(r.map(|r| match r {
-        Repr::Ref(upstream) => ProxyHandler {
+    opt_shorthand(d)
+}
+
+impl ProxyHandler {
+    fn from_ref(upstream: UpstreamRef) -> Self {
+        ProxyHandler {
             upstream,
             rewrite: None,
             request_headers: None,
             retries: RetryPolicy::default(),
             host_header: HostHeader::default(),
-        },
-        Repr::Full(p) => *p,
-    }))
+        }
+    }
+}
+
+impl<'de> Shorthand<'de> for ProxyHandler {
+    const EXPECTING: &'static str =
+        "proxy must be an upstream name, URL, URL list, or an { upstream, … } table";
+    fn from_str(s: &str) -> Option<Self> {
+        Some(Self::from_ref(UpstreamRef::from_name(s.to_owned())))
+    }
+    fn from_seq<A: serde::de::SeqAccess<'de>>(seq: A) -> Result<Self, A::Error> {
+        Ok(Self::from_ref(UpstreamRef::Urls(Vec::deserialize(
+            serde::de::value::SeqAccessDeserializer::new(seq),
+        )?)))
+    }
 }
 
 /// `server.security` accepts `false` (no baseline security headers) or a
@@ -599,48 +678,117 @@ pub enum AdminConfigSchema {
 fn upstream_map<'de, D: serde::Deserializer<'de>>(
     d: D,
 ) -> Result<BTreeMap<String, UpstreamConfig>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        One(UpstreamServer),
-        Many(Vec<UpstreamServer>),
+    use serde::de::value::{MapAccessDeserializer, SeqAccessDeserializer};
+    use serde::de::{DeserializeSeed, IntoDeserializer, MapAccess};
+
+    const EXPECTING: &str =
+        "upstream entries must be a URL, URL list, { url, weight, backup } entry, or a table";
+
+    fn one(servers: Vec<UpstreamServer>) -> UpstreamConfig {
+        UpstreamConfig {
+            servers,
+            ..Default::default()
+        }
     }
-    let raw = BTreeMap::<String, toml::Value>::deserialize(d)?;
-    raw.into_iter()
-        .map(|(name, v)| {
-            let cfg = match v {
-                // `{ url = "…" }` is a one-server entry — `url` is not an
-                // UpstreamConfig field, so its presence disambiguates.
-                toml::Value::Table(ref t) if t.contains_key("url") => {
-                    UpstreamServer::deserialize(v).map(|s| UpstreamConfig {
-                        servers: vec![s],
-                        ..Default::default()
-                    })
-                }
-                // the full table — deserialized directly so its own
-                // errors (unknown fields, `did you mean`) reach the user
-                toml::Value::Table(_) => UpstreamConfig::deserialize(v),
-                _ => Repr::deserialize(v)
-                    .map(|r| match r {
-                        Repr::One(s) => UpstreamConfig {
-                            servers: vec![s],
-                            ..Default::default()
-                        },
-                        Repr::Many(servers) => UpstreamConfig {
-                            servers,
-                            ..Default::default()
-                        },
-                    })
-                    .map_err(|_| {
-                        <toml::de::Error as serde::de::Error>::custom(
-                            "upstream entries must be a URL, URL list, { url, weight, backup } entry, or a table",
-                        )
-                    }),
+
+    /// Replays an already-read first key ahead of the rest of the map,
+    /// so the table can be dispatched on that key and still be
+    /// deserialized in one pass, without buffering it.
+    struct Prepend<A> {
+        first: Option<String>,
+        rest: A,
+    }
+
+    impl<'de, A: MapAccess<'de>> MapAccess<'de> for Prepend<A> {
+        type Error = A::Error;
+        fn next_key_seed<K: DeserializeSeed<'de>>(
+            &mut self,
+            seed: K,
+        ) -> Result<Option<K::Value>, A::Error> {
+            match self.first.take() {
+                Some(k) => seed.deserialize(k.into_deserializer()).map(Some),
+                None => self.rest.next_key_seed(seed),
             }
-            .map_err(serde::de::Error::custom)?;
-            Ok((name, cfg))
-        })
-        .collect()
+        }
+        fn next_value_seed<V: DeserializeSeed<'de>>(
+            &mut self,
+            seed: V,
+        ) -> Result<V::Value, A::Error> {
+            self.rest.next_value_seed(seed)
+        }
+        fn size_hint(&self) -> Option<usize> {
+            self.rest
+                .size_hint()
+                .map(|n| n + usize::from(self.first.is_some()))
+        }
+    }
+
+    struct Entry(UpstreamConfig);
+
+    impl<'de> Deserialize<'de> for Entry {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            d.deserialize_any(EntryVisitor).map(Entry)
+        }
+    }
+
+    struct EntryVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for EntryVisitor {
+        type Value = UpstreamConfig;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str(EXPECTING)
+        }
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<UpstreamConfig, E> {
+            Ok(one(vec![UpstreamServer::new(v.to_owned())]))
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, s: A) -> Result<UpstreamConfig, A::Error> {
+            Vec::deserialize(SeqAccessDeserializer::new(s)).map(one)
+        }
+        fn visit_map<A: MapAccess<'de>>(self, mut m: A) -> Result<UpstreamConfig, A::Error> {
+            // `{ url = "…" }` is a one-server entry — `url`, `weight` and
+            // `backup` are not UpstreamConfig fields, so the first key
+            // disambiguates. The full table is deserialized directly so
+            // its own errors (unknown fields, `did you mean`) reach the user.
+            let first = m.next_key::<String>()?;
+            let server = matches!(first.as_deref(), Some("url" | "weight" | "backup"));
+            let map = MapAccessDeserializer::new(Prepend { first, rest: m });
+            if server {
+                UpstreamServer::deserialize(map).map(|s| one(vec![s]))
+            } else {
+                UpstreamConfig::deserialize(map)
+            }
+        }
+        fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<UpstreamConfig, E> {
+            Err(E::custom(EXPECTING))
+        }
+        fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<UpstreamConfig, E> {
+            Err(E::custom(EXPECTING))
+        }
+        fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<UpstreamConfig, E> {
+            Err(E::custom(EXPECTING))
+        }
+        fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<UpstreamConfig, E> {
+            Err(E::custom(EXPECTING))
+        }
+    }
+
+    struct MapVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for MapVisitor {
+        type Value = BTreeMap<String, UpstreamConfig>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a table of upstream clusters")
+        }
+        fn visit_map<A: MapAccess<'de>>(self, mut m: A) -> Result<Self::Value, A::Error> {
+            let mut out = BTreeMap::new();
+            while let Some((name, Entry(cfg))) = m.next_entry::<String, Entry>()? {
+                out.insert(name, cfg);
+            }
+            Ok(out)
+        }
+    }
+
+    d.deserialize_map(MapVisitor)
 }
 
 /// Schema shape for one `upstream.<name>` entry — a URL, a URL list, a
@@ -1410,20 +1558,43 @@ impl<'de> Deserialize<'de> for UpstreamServer {
             #[serde(default)]
             backup: bool,
         }
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Repr {
-            Url(String),
-            Full(Full),
+        impl From<Full> for UpstreamServer {
+            fn from(f: Full) -> Self {
+                Self {
+                    url: f.url,
+                    weight: f.weight,
+                    backup: f.backup,
+                }
+            }
         }
-        match Repr::deserialize(d)? {
-            Repr::Url(url) => Ok(Self::new(url)),
-            Repr::Full(f) => Ok(Self {
-                url: f.url,
-                weight: f.weight,
-                backup: f.backup,
-            }),
+        // a bare URL or the entry table, picked by the value's own type
+        // in one pass (no `#[serde(untagged)]` buffering)
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = UpstreamServer;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a server URL or a { url, weight, backup } table")
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                Ok(UpstreamServer::new(v.to_owned()))
+            }
+            fn visit_string<E: serde::de::Error>(self, v: String) -> Result<Self::Value, E> {
+                Ok(UpstreamServer::new(v))
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                m: A,
+            ) -> Result<Self::Value, A::Error> {
+                Full::deserialize(serde::de::value::MapAccessDeserializer::new(m)).map(Into::into)
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                s: A,
+            ) -> Result<Self::Value, A::Error> {
+                Full::deserialize(serde::de::value::SeqAccessDeserializer::new(s)).map(Into::into)
+            }
         }
+        d.deserialize_any(V)
     }
 }
 
@@ -2363,20 +2534,59 @@ pub enum UpstreamRef {
 
 impl<'de> Deserialize<'de> for UpstreamRef {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Repr {
-            Name(String),
-            Urls(Vec<String>),
+        // one pass on the value's own type — no `#[serde(untagged)]`
+        // buffering; a bad list element reports its own error and path
+        const EXPECTING: &str = "upstream must be a cluster name, URL, or list of URLs";
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = UpstreamRef;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str(EXPECTING)
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                Ok(UpstreamRef::from_name(v.to_owned()))
+            }
+            fn visit_string<E: serde::de::Error>(self, v: String) -> Result<Self::Value, E> {
+                Ok(UpstreamRef::from_name(v))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                s: A,
+            ) -> Result<Self::Value, A::Error> {
+                Vec::deserialize(serde::de::value::SeqAccessDeserializer::new(s))
+                    .map(UpstreamRef::Urls)
+            }
+            fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
+                Err(E::custom(EXPECTING))
+            }
+            fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
+                Err(E::custom(EXPECTING))
+            }
+            fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
+                Err(E::custom(EXPECTING))
+            }
+            fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
+                Err(E::custom(EXPECTING))
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                _: A,
+            ) -> Result<Self::Value, A::Error> {
+                Err(serde::de::Error::custom(EXPECTING))
+            }
         }
-        match Repr::deserialize(d).map_err(|_| {
-            serde::de::Error::custom("upstream must be a cluster name, URL, or list of URLs")
-        })? {
-            // `"http://…"`/`"h2c://…"` reads as a one-element URL list;
-            // a bare word is a cluster name.
-            Repr::Name(s) if s.contains("://") => Ok(Self::Urls(vec![s])),
-            Repr::Name(s) => Ok(Self::Name(s)),
-            Repr::Urls(u) => Ok(Self::Urls(u)),
+        d.deserialize_any(V)
+    }
+}
+
+impl UpstreamRef {
+    /// `"http://…"`/`"h2c://…"` reads as a one-element URL list; a bare
+    /// word is a cluster name.
+    fn from_name(s: String) -> Self {
+        if s.contains("://") {
+            Self::Urls(vec![s])
+        } else {
+            Self::Name(s)
         }
     }
 }
