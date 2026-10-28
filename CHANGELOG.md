@@ -13,6 +13,12 @@ workflow publishes the matching section as the GitHub release notes.
 
 ### Added
 
+- **Admin trust model documented** — `docs/book/src/admin.md` now
+  spells out what a tokenless loopback admin listener does and does
+  not protect against (any local uid can manage it; the browser
+  checks only stop browsers), and `docs/ROADMAP.md` records the
+  planned unix-domain socket design that closes the gap.
+
 - **`dns-01` ACME challenge via Cloudflare** — `acme.challenge =
   "dns-01"` with `[acme.dns.cloudflare]` (`api_token`, optional
   `zone_id`, `resolver`, `propagation_timeout`) publishes

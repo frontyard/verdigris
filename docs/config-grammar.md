@@ -330,7 +330,8 @@ Recorded with one-line rationale so they aren't re-litigated.
 - `error_pages` ranges (`"500-599"`) — the `"4xx"`/`"5xx"` class keys
   cover the common case with less syntax.
 - Unix-domain listeners, `health.active.expect` multi-status — real
-  features, not grammar; tracked separately.
+  features, not grammar; the admin-socket design is tracked in
+  `docs/ROADMAP.md` (open risks).
 
 Rejected *diagnostics* (audit checks considered and declined):
 
