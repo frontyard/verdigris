@@ -320,6 +320,13 @@ fn cmd_run(config: Option<PathBuf>, watch: bool, log_level: Option<&str>) -> Exi
     if !loaded.is_valid() {
         return ExitCode::FAILURE;
     }
+    if watch && path.as_os_str() == "-" {
+        // a reload re-reads the config path — stdin can't be re-read,
+        // and the watch set has no root file to observe anyway
+        eprintln!(
+            "warning: --watch has no effect — the config came from stdin and can't be re-read"
+        );
+    }
     let watch_plan = loaded.watch_plan();
     // tracing is configured only now: [log] lives in the config file, so
     // level/format/output can't apply until it has been loaded
@@ -746,11 +753,36 @@ fn cmd_fmt(config: Option<PathBuf>, check: bool, diff: bool, all: bool) -> ExitC
         Ok(path) => path,
         Err(tried) => return missing_config_error(&tried),
     };
+    let mut stdin_text: Option<String> = None;
     let files = if all {
-        // `--all` formats the whole include tree — the loader reports
-        // the exact file set, deduplicated
-        match load_root(&path) {
-            Ok(loaded) => loaded.sources,
+        // `--all` formats the whole include tree — a syntax-only source
+        // walk finds the file set even when the config can't deserialize
+        // or interpolate every field: a broken schema never blocks
+        // formatting.
+        let sources = if path.as_os_str() == "-" {
+            let mut text = String::new();
+            if let Err(e) = std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut text) {
+                eprintln!("error: <stdin>: {e}");
+                return ExitCode::FAILURE;
+            }
+            stdin_text = Some(text);
+            crate::config::load_sources_stdin(stdin_text.as_deref().unwrap())
+        } else {
+            crate::config::load_sources(&path)
+        };
+        match sources {
+            Ok(files) => {
+                // the source walk only needs syntax — surface (without
+                // failing) a config that wouldn't fully load
+                let full = match &stdin_text {
+                    Some(text) => crate::config::load_stdin(text).map(|_| ()),
+                    None => crate::config::load(&path).map(|_| ()),
+                };
+                if let Err(e) = full {
+                    eprintln!("warning: {e} — formatting sources anyway");
+                }
+                files
+            }
             Err(e) => {
                 eprintln!("error: {e}");
                 return ExitCode::FAILURE;
@@ -761,7 +793,13 @@ fn cmd_fmt(config: Option<PathBuf>, check: bool, diff: bool, all: bool) -> ExitC
     };
     let mut ok = true;
     for file in &files {
-        ok &= fmt_one(file, check, diff);
+        // the source walk reports stdin as `<stdin>`; `fmt_one` keys
+        // stdin off `-` and needs the already-read text
+        if let (Some(text), true) = (&stdin_text, file.as_os_str() == "<stdin>") {
+            ok &= fmt_stdin_text(text, check, diff);
+        } else {
+            ok &= fmt_one(file, check, diff);
+        }
     }
     if ok {
         ExitCode::SUCCESS
@@ -823,13 +861,20 @@ fn fmt_one(path: &std::path::Path, check: bool, diff: bool) -> bool {
 /// `verd fmt -` — read stdin, print the formatted document to stdout.
 /// `--check`/`--diff` compare instead of printing.
 fn fmt_stdin(check: bool, diff: bool) -> bool {
-    let stdin_path = std::path::Path::new("<stdin>");
     let mut original = String::new();
     if let Err(e) = std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut original) {
         eprintln!("error: <stdin>: {e}");
         return false;
     }
-    let formatted = match crate::config::fmt::format_str(&original) {
+    fmt_stdin_text(&original, check, diff)
+}
+
+/// Format stdin's text (or compare it under `--check`/`--diff`). Split
+/// from `fmt_stdin` so `fmt --all -c -` can reuse the document the
+/// source walk already read — stdin can't be read twice.
+fn fmt_stdin_text(original: &str, check: bool, diff: bool) -> bool {
+    let stdin_path = std::path::Path::new("<stdin>");
+    let formatted = match crate::config::fmt::format_str(original) {
         Ok(f) => f,
         Err(e) => {
             eprintln!("error: <stdin>: {e}");
@@ -841,7 +886,7 @@ fn fmt_stdin(check: bool, diff: bool) -> bool {
             return true;
         }
         if diff {
-            print_diff(stdin_path, &original, &formatted);
+            print_diff(stdin_path, original, &formatted);
         } else {
             eprintln!("<stdin>: not formatted");
         }
@@ -1187,6 +1232,43 @@ root = "/tmp"
                 .contains("hosts = [\"x\"]")
         );
         assert_eq!(cmd_fmt(Some(cfg), true, false, true), ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn cmd_fmt_all_tolerates_schema_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let frag_dir = dir.path().join("conf.d");
+        std::fs::create_dir(&frag_dir).unwrap();
+        let frag = frag_dir.join("site.toml");
+        std::fs::write(&frag, "[[site]]\nhosts=[\"x\"]\nroot=\"/tmp\"\n").unwrap();
+        // syntactically valid TOML, but `bogus` fails deserialization —
+        // --all must still find the include and format both files
+        let cfg = write_cfg(
+            &dir,
+            "include=[\"conf.d\"]\nbogus=1\n[log]\nlevel=\"info\"\n",
+        );
+        assert_eq!(
+            cmd_fmt(Some(cfg.clone()), false, false, true),
+            ExitCode::SUCCESS
+        );
+        assert!(
+            std::fs::read_to_string(&cfg).unwrap().contains("bogus = 1"),
+            "root formatted"
+        );
+        assert!(
+            std::fs::read_to_string(&frag)
+                .unwrap()
+                .contains("hosts = [\"x\"]"),
+            "include formatted"
+        );
+        assert_eq!(cmd_fmt(Some(cfg), true, false, true), ExitCode::SUCCESS);
+
+        // malformed TOML and missing include targets still fail —
+        // only schema-level invalidity is tolerated
+        let bad = write_cfg(&dir, "[[[\n");
+        assert_eq!(cmd_fmt(Some(bad), false, false, true), ExitCode::FAILURE);
+        let gone = write_cfg(&dir, "include = [\"no-such-frag.toml\"]\n");
+        assert_eq!(cmd_fmt(Some(gone), false, false, true), ExitCode::FAILURE);
     }
 
     #[test]

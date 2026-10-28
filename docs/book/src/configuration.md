@@ -229,10 +229,10 @@ validate` resolves them, so CI can catch missing secrets.
 | Section | Contents |
 | --- | --- |
 | `[server]` | listeners, limits, timeouts, connection caps, trusted proxies |
-| `[admin]` | admin listener (`enabled` to disable), bearer token, optional TLS |
+| `[admin]` | admin listener (`admin = false` or `enabled = false` to disable), bearer token, optional TLS |
 | `[log]` | server log + access log (format/output/filter/sample) |
 | `[[site]]` | virtual hosts: hostnames, TLS mode, routes, trusted proxies |
-| `[upstream.*]` | named upstream clusters for proxy routes |
+| `[upstream.*]` | named upstream clusters for proxy routes — `upstream.name = "url"` or a URL list is the no-table shorthand |
 | `[cache.*]` | named cache stores (RAM/disk/hybrid) for routes |
 | `[acme]` | ACME account + certificate storage |
 

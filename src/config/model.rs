@@ -425,6 +425,136 @@ fn opt_proxy<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<ProxyHandl
     }))
 }
 
+/// `server.security` accepts `false` (no baseline security headers) or a
+/// table — the same off-switch spelling the site/route `security` blocks
+/// use for the headers it seeds.
+fn security_or_off<'de, D: serde::Deserializer<'de>>(d: D) -> Result<SecurityConfig, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Off(bool),
+        Full(SecurityConfig),
+    }
+    Ok(
+        match Repr::deserialize(d)
+            .map_err(|_| serde::de::Error::custom("security must be a bool or a table"))?
+        {
+            Repr::Off(enabled) => SecurityConfig {
+                enabled,
+                ..Default::default()
+            },
+            Repr::Full(s) => s,
+        },
+    )
+}
+
+/// Schema shape for `server.security` — `false` or a table.
+#[derive(JsonSchema)]
+#[schemars(untagged)]
+pub enum SecurityConfigSchema {
+    /// `security = false` — emit none of the baseline security headers.
+    Off(bool),
+    /// Table form.
+    Full(Box<SecurityConfig>),
+}
+
+/// `admin` accepts `false` (no admin API) or a table.
+fn admin_or_off<'de, D: serde::Deserializer<'de>>(d: D) -> Result<AdminConfig, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Off(bool),
+        Full(AdminConfig),
+    }
+    Ok(
+        match Repr::deserialize(d)
+            .map_err(|_| serde::de::Error::custom("admin must be a bool or a table"))?
+        {
+            Repr::Off(enabled) => AdminConfig {
+                enabled,
+                ..Default::default()
+            },
+            Repr::Full(a) => a,
+        },
+    )
+}
+
+/// Schema shape for `admin` — `false` or a table.
+#[derive(JsonSchema)]
+#[schemars(untagged)]
+pub enum AdminConfigSchema {
+    /// `admin = false` — no admin listener.
+    Off(bool),
+    /// Table form.
+    Full(Box<AdminConfig>),
+}
+
+/// `upstream.<name>` accepts the common case without a table: a server
+/// URL (`upstream.app = "http://a"`), a URL list, or one
+/// `{ url, weight, backup }` entry — all shorthand for `servers` under
+/// the cluster defaults. A full `[upstream.<name>]` table still works.
+fn upstream_map<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<BTreeMap<String, UpstreamConfig>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        One(UpstreamServer),
+        Many(Vec<UpstreamServer>),
+    }
+    let raw = BTreeMap::<String, toml::Value>::deserialize(d)?;
+    raw.into_iter()
+        .map(|(name, v)| {
+            let cfg = match v {
+                // `{ url = "…" }` is a one-server entry — `url` is not an
+                // UpstreamConfig field, so its presence disambiguates.
+                toml::Value::Table(ref t) if t.contains_key("url") => {
+                    UpstreamServer::deserialize(v).map(|s| UpstreamConfig {
+                        servers: vec![s],
+                        ..Default::default()
+                    })
+                }
+                // the full table — deserialized directly so its own
+                // errors (unknown fields, `did you mean`) reach the user
+                toml::Value::Table(_) => UpstreamConfig::deserialize(v),
+                _ => Repr::deserialize(v)
+                    .map(|r| match r {
+                        Repr::One(s) => UpstreamConfig {
+                            servers: vec![s],
+                            ..Default::default()
+                        },
+                        Repr::Many(servers) => UpstreamConfig {
+                            servers,
+                            ..Default::default()
+                        },
+                    })
+                    .map_err(|_| {
+                        <toml::de::Error as serde::de::Error>::custom(
+                            "upstream entries must be a URL, URL list, { url, weight, backup } entry, or a table",
+                        )
+                    }),
+            }
+            .map_err(serde::de::Error::custom)?;
+            Ok((name, cfg))
+        })
+        .collect()
+}
+
+/// Schema shape for one `upstream.<name>` entry — a URL, a URL list, a
+/// single server entry, or a full table.
+#[derive(JsonSchema)]
+#[schemars(untagged)]
+pub enum UpstreamEntrySchema {
+    /// `"http://host:port"` — a one-server cluster.
+    Url(String),
+    /// `["http://a", "http://b"]` — a cluster of bare URLs.
+    Urls(Vec<UpstreamServerSchema>),
+    /// `{ url, weight, backup }` — a one-server cluster, entry form.
+    Entry(UpstreamServerEntry),
+    /// Full cluster table.
+    Full(Box<UpstreamConfig>),
+}
+
 /// Root configuration for a verdigris instance.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
@@ -444,11 +574,19 @@ pub struct Config {
     pub limits: Limits,
     /// Server and access logging.
     pub log: LogConfig,
-    /// Admin API listener (metrics, health, reload, purge, inspection).
+    /// Admin API listener (metrics, health, reload, purge, inspection);
+    /// `admin = false` disables it entirely.
+    #[serde(deserialize_with = "admin_or_off")]
+    #[schemars(with = "AdminConfigSchema")]
     pub admin: AdminConfig,
     /// ACME account settings used by sites with `tls = "auto"`.
     pub acme: AcmeConfig,
-    /// Named upstream clusters for reverse proxy routes.
+    /// Named upstream clusters for reverse proxy routes. Each entry is a
+    /// `[upstream.<name>]` table or, for the common case, just a server
+    /// URL (`upstream.app = "http://a"`), a URL list, or a
+    /// `{ url, weight, backup }` entry — shorthand for `servers`.
+    #[serde(deserialize_with = "upstream_map")]
+    #[schemars(with = "BTreeMap<String, UpstreamEntrySchema>")]
     pub upstream: BTreeMap<String, UpstreamConfig>,
     /// Named cache stores for routes with `cache` enabled.
     pub cache: BTreeMap<String, CacheStore>,
@@ -486,7 +624,10 @@ pub struct ServerConfig {
     pub max_connections: usize,
     /// Maximum concurrent connections per client IP address.
     pub max_connections_per_ip: usize,
-    /// Baseline security response headers applied to every route.
+    /// Baseline security response headers applied to every route;
+    /// `security = false` emits none of them.
+    #[serde(deserialize_with = "security_or_off")]
+    #[schemars(with = "SecurityConfigSchema")]
     pub security: SecurityConfig,
 }
 
@@ -1111,6 +1252,7 @@ pub struct OnDemandAcme {
     #[serde(deserialize_with = "one_or_many::deserialize")]
     pub allowed_hosts: Vec<String>,
     /// Maximum issuance rate, e.g. `5/hour`.
+    #[schemars(with = "Option<String>")]
     pub rate: Option<RateSpec>,
 }
 
@@ -2378,6 +2520,7 @@ pub struct RateLimitConfig {
     /// Sustained rate, e.g. `100/s`, `600/m`, `10000/h`. Required when
     /// enabled.
     #[serde(default)]
+    #[schemars(with = "Option<String>")]
     pub rate: Option<RateSpec>,
     /// Burst size; defaults to the per-second equivalent of `rate`.
     #[serde(default)]

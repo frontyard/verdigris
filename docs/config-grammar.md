@@ -33,9 +33,11 @@ where one field dominates the table — they are a closed set:
 | Field | Accepted forms | Expands to |
 | --- | --- | --- |
 | `server.listen` | `"ip:port"`/`":port"` \| `{ addr, tls }` | `ListenAddr` |
+| `server.server_header` | `false` \| `"value"` | `String` (`""` = omit; `"off"` deprecated) |
+| `server.security` | `false` \| table | `SecurityConfig{enabled,…}` |
+| `admin` | `false` \| table | `AdminConfig{enabled,…}` |
 | `admin.listen` | `"ip:port"`/`":port"` \| `["addr",…]` | `Vec<SocketAddr>` |
 | `admin.tls` | `"self_signed"` \| `{cert,key}` | `AdminTls` |
-| `server.server_header` | `false` \| `"value"` | `String` (`""` = omit; `"off"` deprecated) |
 | `site.proxy` | `upstream` shapes \| table | `ProxyHandler{upstream,…}` |
 | `site.respond` | `"text"` \| `404` \| table | `RespondHandler` |
 | `site.redirect` | `"url"` \| table | `RedirectHandler{to,…}` |
@@ -48,12 +50,13 @@ where one field dominates the table — they are a closed set:
 | `site.cors`/`route.cors` | `false` \| table | `CorsConfig{enabled,…}` |
 | `site.response_headers`/`route.response_headers` | `false` \| table | `HeaderOps{enabled,…}` |
 | `site.rate_limit`/`route.rate_limit` | `false` \| `"100/s"` \| table | `RateLimitConfig{key:"ip",…}` |
-| `route.cache` | `false` \| `"store"` \| table | `RouteCache{store,…}` |
-| `route.compress` | `true`/`false` \| table | `CompressConfig` |
+| `site.cache`/`route.cache` | `false` \| `"store"` \| table | `RouteCache{store,…}` |
+| `site.compress`/`route.compress` | `true`/`false` \| table | `CompressConfig` |
 | `site.security`/`route.security` | `false` \| table | `RouteSecurity{enabled,…}` |
 | `proxy.retries` | `false`/`true` \| `3` \| table | `RetryPolicy` |
 | `proxy.host_header` | `"kw"`/verbatim \| `{ value }` | `HostHeader` |
 | `proxy.request_headers` | `false` \| table | `HeaderOps{enabled,…}` |
+| `upstream.<name>` | `server-entry` \| `[entries]` \| table | `UpstreamConfig{servers,…}` |
 | `upstream.unavailable` | `503` \| table | `UnavailableResponse{status}` |
 | `upstream.health` | `"/path"` \| table | `HealthCheck{active:{path}}` |
 | `upstream.dns` | `"60s"` \| table | `UpstreamDns{grace}` |
@@ -76,7 +79,10 @@ a fourth spelling.
 `server.listen`'s/`admin.listen`'s `":port"` spelling is an
 address-level nicety inside the string form, not a third form;
 `acme.directory` aliases resolve to their URL at load (one canonical
-value, no second shape).
+value, no second shape). `upstream.<name>`'s `server-entry` is the same
+`"url" | { url, weight, backup }` pair documented for `servers`
+entries, and its `[entries]` list is the scalar-or-list sugar below —
+one shorthand form beside the table, not three.
 
 `upstream.health` is the one *parent*-field shorthand — `"/path"`
 targets `health.active`. No other grouping field gets one: `active`
@@ -105,7 +111,9 @@ Simple string/scalar lists accept a single value as `["v"]` via the
 `cache.bypass` lists (`methods`, `cookies`, `headers`, `paths`),
 `static.index`, `static.try_files`, `*.remove` header lists
 (`response_headers.remove`, `proxy.request_headers.remove`),
-`trusted_proxies`, `vary_headers`.
+`trusted_proxies` (`server.` and `site.`), `rate_limit.exempt`,
+`cors.origins`/`methods`/`headers`/`expose`,
+`compress.algorithms`/`types`, `vary_headers`.
 
 Network fields additionally accept **bare IPs** — `"10.0.0.1"` parses
 as the host route `10.0.0.1/32` (`::1` as `/128`). This covers
@@ -132,7 +140,9 @@ no body — a configured `body` there warns and is dropped at serve.
 
 Every optional subsystem exposes `enabled = false` or is documented
 here why not: `log.access` (`false` or `{ enabled = false }`),
-`acme.on_demand.enabled`, `admin.enabled`, `proxy.retries`
+`acme.on_demand.enabled`, `admin` (`false` or `{ enabled = false }`),
+`server.security` (`false` or `{ enabled = false }` — the baseline the
+site/route `security` blocks refine), `proxy.retries`
 (`false` ⇒ `max_per_request = 0`), `route.compress`/`route.cache`
 (`false` ⇒ disabled table).
 
@@ -172,6 +182,9 @@ catch-alls. Resolution:
 - ACLs tighten only: `ip_deny` unions site+route; both non-empty
   `ip_allow` lists must admit the client. A route can never widen a
   site ACL.
+- `timeouts.tls_handshake` has no site/route override — the handshake
+  deadline bounds the connection before routing decides which site or
+  route serves it, so `TimeoutOverrides` omits it deliberately.
 
 ## Path anchoring
 
@@ -295,3 +308,31 @@ approved list accepts a scalar, `include` rejects one, `enabled`
 fields disable their subsystem. When this doc gains an invariant, the
 test gains a row; the audit is the diff between the doc's table and
 the test's.
+
+A second test, `field_census`, guards coverage rather than shape: it
+walks the generated JSON schema to enumerate every leaf field path
+(`server.security.hsts`, `site[*].route[*].match.methods`,
+`upstream.*.dns.grace`, …) and asserts kitchen-sink fixture bodies
+exercise each one. A new model field fails the test until a fixture
+sets it — the census is the "every config item is tested" invariant.
+
+## Consumer map
+
+Where each field group lands after `load` — the checklist for tracing
+whether a field actually does something:
+
+| Field group | Consumer |
+| --- | --- |
+| `include` | `config::load` merge machinery only |
+| `server.listen`, `graceful_timeout`, `max_connections*` | `server/` listeners, `server/service.rs` connection caps |
+| `server.trusted_proxies`, `server_header`, `server.security` | `middleware/mod.rs` client-IP trust, `Server` header, baseline security headers |
+| `timeouts`, `limits` (global) | `Timeouts::apply_overrides`/`Limits::apply_overrides`, layered global → site → route in `router/` |
+| `log.*` | `cli::init_tracing`, `observe/accesslog.rs` |
+| `admin.*` | `admin/` listener fan-out, `cli.rs` admin task spawn |
+| `acme.*` | `acme/` (`mod.rs` issuance + renewal, `dns.rs` provider client, `storage.rs` persistence) |
+| `upstream.<name>.*` | `proxy/cluster.rs` (servers, `lb`, `dns`, `health`, `max_connections`), `proxy/` (`tls`, `timeouts`, `unavailable`) |
+| `cache.<name>.*` | `cache/` stores; route-side `bypass`/`vary_headers`/`x_cache` in `middleware/` |
+| `site.*` matchers/handlers | `router/` (`hosts`, `default`, routes, `match`, `priority`), `handler/` (static/proxy/respond/redirect) |
+| `site.*`/`route.*` middleware | `middleware/` (auth, cors, rate_limit, ACL, headers, security, compress, cache) |
+| `site.tls`, `redirect_https` | `tls/` cert loading + HTTP→HTTPS redirects, `acme/` for `"auto"` |
+| `route.*` | same consumers as `site.*`, narrowed to the route |

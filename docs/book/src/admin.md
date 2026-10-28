@@ -13,6 +13,10 @@ tls = { cert = "admin.pem", key = "admin.key" }   # optional
 # tls = "self_signed"        # or a generated localhost cert for dev
 ```
 
+`admin = false` disables the listener entirely (the table's
+`enabled = false` says the same thing); leftover `[admin]` fields are
+reported as dead config.
+
 | Endpoint | Description |
 | --- | --- |
 | `GET /health` | liveness |

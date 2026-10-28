@@ -14,7 +14,7 @@ Root configuration for a verdigris instance.
 | field | type | default | description |
 |---|---|---|---|
 | `acme` | AcmeConfig | `{"ca_roots": null, "challenge": "auto", "directory": "https://acme-v02.api.letsencrypt.org/directory", "dns": null, "eab": null, "email": null, "on_demand": {"allowed_hosts": [], "enabled": false, "rate": null}, "renew_before": "30d", "storage": "./verd-state/acme"}` | ACME account settings used by sites with `tls = "auto"`. |
-| `admin` | AdminConfig | `{"enabled": true, "listen": ["127.0.0.1:2019"], "tls": null, "token": null}` | Admin API listener (metrics, health, reload, purge, inspection). |
+| `admin` | AdminConfigSchema | `{"enabled": true, "listen": ["127.0.0.1:2019"], "tls": null, "token": null}` | Admin API listener (metrics, health, reload, purge, inspection); `admin = false` disables it entirely. |
 | `cache` | object | `{}` | Named cache stores for routes with `cache` enabled. |
 | `include` | [string] |  | Additional files or directories of `*.toml` fragments merged into this configuration, relative to the directory containing this file. Fragment files are loaded in sorted order; scalar conflicts between fragments and the main file are errors. A glob pattern matching no files is a no-op; a missing file or directory is an error. |
 | `limits` | Limits | `{"body_bytes": "10MiB", "header_bytes": "16KiB"}` | Default request limits; individual routes may override. |
@@ -22,7 +22,7 @@ Root configuration for a verdigris instance.
 | `server` | ServerConfig | `{"graceful_timeout": "30s", "listen": [{"addr": "0.0.0.0:80", "tls": false}], "max_connections": 65536, "max_connections_per_ip": 256, "security": {"content_type_options": true, "cross_domain_policy": "", "csp": null, "enabled": true, "frame_options": "DENY", "hsts": true, "hsts_max_age": "180d", "hsts_subdomains": false, "referrer_policy": "strict-origin-when-cross-origin"}, "server_header": "verd", "trusted_proxies": []}` | Server-wide settings: listeners, connection limits, shutdown. |
 | `site` | [SiteConfig] | `[]` | Virtual sites. Requests are routed by the Host header. |
 | `timeouts` | Timeouts | `{"body_read": "1m", "header_read": "20s", "idle": "75s", "request_deadline": "5m", "send": "1m", "tls_handshake": "10s"}` | Default timeouts; individual routes may override. |
-| `upstream` | object | `{}` | Named upstream clusters for reverse proxy routes. |
+| `upstream` | object | `{}` | Named upstream clusters for reverse proxy routes. Each entry is a `[upstream.<name>]` table or, for the common case, just a server URL (`upstream.app = "http://a"`), a URL list, or a `{ url, weight, backup }` entry — shorthand for `servers`. |
 
 ## `ServerConfig`
 
@@ -34,7 +34,7 @@ Server-wide settings.
 | `listen` | [ListenAddrSchema] | `[{"addr": "0.0.0.0:80", "tls": false}]` | Addresses to listen on. Defaults to a single plaintext listener on port 80. Entries are either `"ip:port"` strings or `{ addr = "ip:port", tls = true }` tables to terminate TLS. |
 | `max_connections` | integer | `65536` | Maximum concurrent connections across all listeners. |
 | `max_connections_per_ip` | integer | `256` | Maximum concurrent connections per client IP address. |
-| `security` | SecurityConfig | `{"content_type_options": true, "cross_domain_policy": "", "csp": null, "enabled": true, "frame_options": "DENY", "hsts": true, "hsts_max_age": "180d", "hsts_subdomains": false, "referrer_policy": "strict-origin-when-cross-origin"}` | Baseline security response headers applied to every route. |
+| `security` | SecurityConfigSchema | `{"content_type_options": true, "cross_domain_policy": "", "csp": null, "enabled": true, "frame_options": "DENY", "hsts": true, "hsts_max_age": "180d", "hsts_subdomains": false, "referrer_policy": "strict-origin-when-cross-origin"}` | Baseline security response headers applied to every route; `security = false` emits none of them. |
 | `server_header` | ServerHeaderSchema | `"verd"` | Value of the `Server` response header. `false` or `""` omits it (the empty-disables convention). `"off"` also omits but is deprecated — prefer `false`. |
 | `trusted_proxies` | [string] | `[]` | CIDRs whose `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`, `X-Real-IP` and `Forwarded` headers are trusted. Empty: trust none. |
 
@@ -378,7 +378,7 @@ Rate limiting.
 | `enabled` | boolean | `true` | Set `false` to opt a route out of an inherited site `rate_limit`. |
 | `exempt` | [string] | `[]` | CIDRs exempt from limiting. |
 | `key` | string | `"ip"` | What the limit applies to: `ip`, `identity` (authenticated identity), `route`, or `header:<Name>` for an arbitrary header value. Defaults to `ip`. |
-| `rate` | RateSpec \| null | `null` | Sustained rate, e.g. `100/s`, `600/m`, `10000/h`. Required when enabled. |
+| `rate` | string \| null | `null` | Sustained rate, e.g. `100/s`, `600/m`, `10000/h`. Required when enabled. |
 
 ## `HeaderOps`
 
@@ -503,6 +503,11 @@ DNS provider used to publish `_acme-challenge` TXT records for the
 Schema shape for `upstream.health.active` (a probe path or a table).
 
 
+## `AdminConfigSchema`
+
+Schema shape for `admin` — `false` or a table.
+
+
 ## `AdminTlsSchema`
 
 Schema shape for `admin.tls` — `"self_signed"` or a table.
@@ -551,13 +556,6 @@ Schema shape for `route.compress` (`true` or a table).
 
 Schema shape for `cors` — `false` or a table.
 
-
-## `Duration`
-
-| field | type | default | description |
-|---|---|---|---|
-| `nanos` | integer **required** |  |  |
-| `secs` | integer **required** |  |  |
 
 ## `EvictionPolicy`
 
@@ -639,7 +637,7 @@ On-demand certificate issuance.
 |---|---|---|---|
 | `allowed_hosts` | [string] | `[]` | Hostnames or `*.suffix` patterns allowed to trigger issuance. Empty list means on-demand never issues — an explicit allowlist is required. |
 | `enabled` | boolean | `false` | Enable issuance for hostnames not present in any site's `hosts` list. |
-| `rate` | RateSpec \| null | `null` | Maximum issuance rate, e.g. `5/hour`. |
+| `rate` | string \| null | `null` | Maximum issuance rate, e.g. `5/hour`. |
 
 ## `PassiveHealthSchema`
 
@@ -664,18 +662,6 @@ Schema shape for `route.proxy` (upstream shorthand or a table).
 
 Schema shape for `route.rate_limit` (a rate or a table).
 
-
-## `RateSpec`
-
-A rate like `100/s`, `600/m`, `10000/h`, `50000/day`, or `10/30s`
-for arbitrary periods. Units: `s`, `m`, `h`, `d` or the words
-`second`, `minute`, `hour`, `day` (also plural), or a humantime
-duration.
-
-| field | type | default | description |
-|---|---|---|---|
-| `period` | Duration **required** |  | Length of one period. |
-| `permits` | integer **required** |  | Number of permits granted per `period`. |
 
 ## `RedirectSchema`
 
@@ -709,6 +695,11 @@ Schema shape for `route.cache` (`"store-name"` or a table).
 ## `RouteSecuritySchema`
 
 Schema shape for `security` — `false` or a table.
+
+
+## `SecurityConfigSchema`
+
+Schema shape for `server.security` — `false` or a table.
 
 
 ## `ServerHeaderSchema`
@@ -758,6 +749,12 @@ DNS re-resolution for hostname upstreams.
 ## `UpstreamDnsSchema`
 
 Schema shape for `upstream.dns` (a grace duration or a table).
+
+
+## `UpstreamEntrySchema`
+
+Schema shape for one `upstream.<name>` entry — a URL, a URL list, a
+single server entry, or a full table.
 
 
 ## `UpstreamServerEntry`

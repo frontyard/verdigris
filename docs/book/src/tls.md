@@ -76,5 +76,6 @@ prefer it over a literal so the config file stays non-sensitive.
 permanent redirect once a certificate exists for the host;
 `site.redirect_host` overrides the target host. Security headers
 (HSTS, CSP, X-Frame-Options, …) are set globally under
-`[server.security]` and refined per route under
+`[server.security]` — `security = false` inside `[server]` turns the
+baseline off — and refined per route under
 `route.security` — HSTS is only emitted over TLS.

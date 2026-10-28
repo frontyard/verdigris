@@ -38,6 +38,11 @@ proxy = { upstream = "app", rewrite = { strip_prefix = "/api" } }
   ```
 
   `backup` members serve only while no primary is healthy.
+
+  When only `servers` matters, the table itself is optional:
+  `upstream.app = "http://app1:9000"` is a one-member cluster, and a URL
+  list or `{ url, weight, backup }` entry works the same —
+  `upstream.app = ["http://a:9000", "http://b:9000"]`.
 - **Health**: passive (kick members out after N consecutive failures for
   a cooldown) and/or active (periodic HTTP probes on `path`, honours h1/h2).
 - **Retries**: `retries.max_per_request` replays idempotent requests on

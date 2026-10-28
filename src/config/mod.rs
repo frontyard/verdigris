@@ -760,6 +760,140 @@ struct LoadReport {
     stack: Vec<PathBuf>,
 }
 
+/// The `include` entries of a parsed document — a string list, or an
+/// `IncludeType` error. Shared by the full loader (after whole-document
+/// interpolation) and the `fmt --all` source walk (entries are
+/// interpolated separately there).
+fn doc_includes(path: &Path, value: &toml::Value) -> Result<Vec<String>, LoadError> {
+    match value.get("include") {
+        None => Ok(Vec::new()),
+        Some(toml::Value::Array(arr)) => arr
+            .iter()
+            .map(|v| {
+                v.as_str()
+                    .map(String::from)
+                    .ok_or_else(|| LoadError::IncludeType(path.to_path_buf()))
+            })
+            .collect(),
+        Some(_) => Err(LoadError::IncludeType(path.to_path_buf())),
+    }
+}
+
+/// The files a config tree reads — the root plus every `include`
+/// target — without schema-checking, merging, or validating.
+/// `verd fmt --all` needs the file set even when the config would not
+/// deserialize. `include` entries still get `${VAR}`/`${file:}`
+/// interpolation (resolved exactly like the full loader); every other
+/// field is left alone, so a missing env var or unreadable secret file
+/// never blocks formatting.
+pub fn load_sources(path: &Path) -> Result<Vec<PathBuf>, LoadError> {
+    if path.is_dir() {
+        return Err(LoadError::IsDirectory(path.to_path_buf()));
+    }
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut report = LoadReport::default();
+    walk_sources(&path, 0, &mut report, None)?;
+    Ok(report.sources)
+}
+
+/// Stdin variant (`verd fmt --all -c -`); `include` resolves against the
+/// current directory like `load_stdin`.
+pub fn load_sources_stdin(text: &str) -> Result<Vec<PathBuf>, LoadError> {
+    let mut report = LoadReport::default();
+    walk_sources(Path::new("<stdin>"), 0, &mut report, Some(text))?;
+    Ok(report.sources)
+}
+
+/// `load_document`'s traversal skeleton: canonicalize for cycle/dedupe
+/// bookkeeping, then walk includes depth-first.
+fn walk_sources(
+    path: &Path,
+    depth: usize,
+    report: &mut LoadReport,
+    root_text: Option<&str>,
+) -> Result<(), LoadError> {
+    let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    report.stack.push(canon.clone());
+    let out = walk_sources_impl(&canon, depth, report, root_text);
+    report.stack.pop();
+    if out.is_ok() {
+        report.done.insert(canon);
+    }
+    out
+}
+
+fn walk_sources_impl(
+    path: &Path,
+    depth: usize,
+    report: &mut LoadReport,
+    root_text: Option<&str>,
+) -> Result<(), LoadError> {
+    if depth > MAX_INCLUDE_DEPTH {
+        return Err(LoadError::IncludeDepth(
+            path.to_path_buf(),
+            MAX_INCLUDE_DEPTH,
+        ));
+    }
+    let owned;
+    let text: &str = match root_text {
+        Some(t) => t,
+        None => {
+            owned = std::fs::read_to_string(path)
+                .map_err(|e| LoadError::Io(path.to_path_buf(), e.to_string()))?;
+            &owned
+        }
+    };
+    report.sources.push(path.to_path_buf());
+    let value: toml::Value =
+        toml::from_str(text).map_err(|e| LoadError::Syntax(path.to_path_buf(), e.to_string()))?;
+    let base_dir = path.parent().unwrap_or(Path::new("."));
+    // `include` entries interpolate exactly like the full loader —
+    // `${VAR}` in a fragment path resolves — but nothing else in the
+    // document does: a missing env var or unreadable `${file:}` target
+    // elsewhere must not block the source walk.
+    let mut inc_doc = toml::Table::new();
+    inc_doc.insert(
+        "include".to_string(),
+        toml::Value::Array(
+            doc_includes(path, &value)?
+                .into_iter()
+                .map(toml::Value::String)
+                .collect(),
+        ),
+    );
+    let mut inc_value = toml::Value::Table(inc_doc);
+    let interp = interpolate::interpolate(&mut inc_value, base_dir)
+        .map_err(|e| LoadError::Interpolate(path.to_path_buf(), e))?;
+    // `${file:}` inside `include` inlines contents as a bogus path —
+    // the same teaching error the full loader raises.
+    if let Some((at, target)) = interp.file_refs.into_iter().next() {
+        return Err(LoadError::InterpolatedPathField(
+            path.to_path_buf(),
+            at,
+            target.display().to_string(),
+        ));
+    }
+    let includes = doc_includes(path, &inc_value)?;
+    for include in includes {
+        let expansion = expand_include(base_dir, &include).map_err(|e| match e {
+            LoadError::IncludeMissing(_, p) => LoadError::IncludeMissing(path.to_path_buf(), p),
+            e => e,
+        })?;
+        report.watch_dirs.extend(expansion.dirs);
+        for fragment in expansion.files {
+            let fcanon = fragment.canonicalize().unwrap_or_else(|_| fragment.clone());
+            if report.stack.contains(&fcanon) {
+                return Err(LoadError::IncludeCycle(path.to_path_buf(), fragment));
+            }
+            if report.done.contains(&fcanon) {
+                continue;
+            }
+            walk_sources(&fcanon, depth + 1, report, None)?;
+        }
+    }
+    Ok(())
+}
+
 /// Parse one TOML document, interpolate secrets, and recursively merge its
 /// `include` targets (which are resolved relative to the document's dir).
 ///
@@ -817,18 +951,7 @@ fn load_document_impl(
     report.file_refs.extend(interp.file_refs);
     rebase_paths(&mut value, base_dir, &mut Vec::new());
 
-    let includes: Vec<String> = match value.get("include") {
-        None => Vec::new(),
-        Some(toml::Value::Array(arr)) => arr
-            .iter()
-            .map(|v| {
-                v.as_str()
-                    .map(String::from)
-                    .ok_or_else(|| LoadError::IncludeType(path.to_path_buf()))
-            })
-            .collect::<Result<_, _>>()?,
-        Some(_) => return Err(LoadError::IncludeType(path.to_path_buf())),
-    };
+    let includes = doc_includes(path, &value)?;
     if let Some(table) = value.as_table_mut() {
         table.remove("include");
     }
@@ -2383,6 +2506,45 @@ proxy = "app"
         }
 
         #[test]
+        fn top_level_off_switches_and_upstream_shorthand() {
+            // server.security = false — the baseline the route blocks refine
+            let l = load_str("[server]\nsecurity = false").unwrap();
+            assert!(!l.config.server.security.enabled);
+            let l = load_str("[server]\nsecurity = true").unwrap();
+            assert!(l.config.server.security.enabled && l.config.server.security.hsts);
+
+            // admin = false — the whole admin subsystem
+            let l = load_str("admin = false").unwrap();
+            assert!(!l.config.admin.enabled);
+            let l = load_str("admin = true").unwrap();
+            assert!(l.config.admin.enabled);
+
+            // upstream.<name> = url | [urls] | { url, weight, backup }
+            let l = load_str(r#"upstream.app = "http://a:9000""#).unwrap();
+            let srv = &l.config.upstream["app"].servers;
+            assert_eq!((srv.len(), srv[0].url.as_str()), (1, "http://a:9000"));
+
+            let l = load_str(r#"upstream.app = ["http://a:1", "http://b:2"]"#).unwrap();
+            assert_eq!(l.config.upstream["app"].servers.len(), 2);
+
+            let l = load_str(r#"upstream.app = { url = "http://a:1", weight = 3, backup = true }"#)
+                .unwrap();
+            let srv = &l.config.upstream["app"].servers;
+            assert_eq!((srv.len(), srv[0].weight, srv[0].backup), (1, 3, true));
+
+            // the full table form still wins
+            let l = load_str("[upstream.app]\nservers = \"http://a:1\"").unwrap();
+            assert_eq!(l.config.upstream["app"].servers.len(), 1);
+
+            // a non-server value is a schema error, not a silent drop
+            match load_str("upstream.app = 5") {
+                Err(LoadError::Schema(_, _)) => {}
+                Err(e) => panic!("expected Schema, got {e}"),
+                Ok(_) => panic!("upstream.app = 5 should fail"),
+            }
+        }
+
+        #[test]
         fn handler_scalar_shorthands() {
             // each handler's dominant field has a scalar form; the full
             // table form still parses
@@ -2930,6 +3092,83 @@ response_headers = { enabled = false }
         }
 
         #[test]
+        fn load_sources_walks_includes_without_schema() {
+            // `verd fmt --all`'s file-set walk: the whole point is that
+            // a schema-invalid config still yields its source list
+            let dir = tempfile::tempdir().unwrap();
+            let frag_dir = dir.path().join("inc.d");
+            std::fs::create_dir(&frag_dir).unwrap();
+            let frag = write(&frag_dir, "a.toml", "badfield = 1\n");
+            let root = write(
+                dir.path(),
+                "verd.toml",
+                "include = [\"inc.d\"]\nbadfield = 1\n",
+            );
+            let sources = load_sources(&root).unwrap();
+            assert_eq!(
+                sources,
+                vec![root.canonicalize().unwrap(), frag.canonicalize().unwrap()]
+            );
+            // … while the full loader rejects the same file
+            assert!(load(&root).is_err());
+
+            // malformed TOML, a missing target, and a cycle still fail
+            let bad = write(dir.path(), "bad.toml", "[[[\n");
+            assert!(matches!(load_sources(&bad), Err(LoadError::Syntax(..))));
+            let miss = write(dir.path(), "miss.toml", "include = [\"nope.toml\"]\n");
+            assert!(matches!(
+                load_sources(&miss),
+                Err(LoadError::IncludeMissing(..))
+            ));
+            let cyc = write(dir.path(), "a.toml", "include = [\"b.toml\"]\n");
+            write(dir.path(), "b.toml", "include = [\"a.toml\"]\n");
+            assert!(matches!(
+                load_sources(&cyc),
+                Err(LoadError::IncludeCycle(..))
+            ));
+
+            // `include` entries interpolate like the full loader —
+            // `${VAR:-fallback}` resolves —
+            let env = write(
+                dir.path(),
+                "env.toml",
+                "include = [\"${VERD_DEFINITELY_UNSET:-inc.d}\"]\n",
+            );
+            assert_eq!(load_sources(&env).unwrap().len(), 2);
+
+            // … while interpolation failures in *other* fields are not
+            // the walk's business — the real loader errors on them
+            let nointerp = write(
+                dir.path(),
+                "nointerp.toml",
+                "include = [\"inc.d\"]\nbadfield = \"${file:no-such-secret}\"\n",
+            );
+            assert_eq!(load_sources(&nointerp).unwrap().len(), 2);
+            assert!(matches!(load(&nointerp), Err(LoadError::Interpolate(..))));
+        }
+
+        #[test]
+        fn load_sources_stdin_and_empty_watch() {
+            let dir = tempfile::tempdir().unwrap();
+            let secret = write(dir.path(), "s.txt", "frag.toml\n");
+            let sources = load_sources_stdin("badfield = 1\n").unwrap();
+            assert_eq!(sources, vec![PathBuf::from("<stdin>")]);
+
+            // `${file:}` inside `include` — the same teaching error the
+            // full loader raises
+            assert!(matches!(
+                load_sources_stdin(&format!("include = [\"${{file:{}}}\"]", secret.display())),
+                Err(LoadError::InterpolatedPathField(..))
+            ));
+
+            // a stdin config has no watchable source — the
+            // `verd run -c - --watch` warning keys off this emptiness
+            let l = load_stdin("[[site]]\nhosts = [\"x\"]\nroot = \"/tmp\"\n").unwrap();
+            let plan = l.watch_plan();
+            assert!(plan.dirs.is_empty() && plan.include_dirs.is_empty());
+        }
+
+        #[test]
         fn unknown_enum_variants_suggest_close_spellings() {
             for (body, want) in [
                 // `dns_01` parses — it is an accepted alias now
@@ -2951,6 +3190,382 @@ response_headers = { enabled = false }
                     Ok(_) => panic!("{body} should be a schema error"),
                 }
             }
+        }
+    }
+
+    /// "Every config item is tested", mechanically: the generated JSON
+    /// schema enumerates every accepted field path, and the kitchen-sink
+    /// config below must set each one so the canonical `dump_json` shows
+    /// it. A new model field lands in the schema automatically and fails
+    /// here until a fixture exercises it — or a deliberate EXCLUDED entry
+    /// explains where it is covered instead.
+    mod field_census {
+        use super::*;
+        use std::collections::BTreeSet;
+
+        /// Schema paths a `dump_json` walk can never produce:
+        /// * `include` is `skip_serializing` — exercised by `include_*`.
+        /// * `upstream.<name>` sugar (`"url"`, `["url"]`, `{ url, … }`)
+        ///   normalizes into `servers` at parse — asserted in
+        ///   `surface_audit::top_level_off_switches_and_upstream_shorthand`.
+        /// * `proxy = ["url", …]` normalizes into `proxy.upstream` at
+        ///   parse — asserted in
+        ///   `surface_audit::route_proxy_accepts_site_proxy_shapes`.
+        /// * `host_header = { value = "…" }` serializes back to a string —
+        ///   asserted in
+        ///   `surface_audit::off_switches_and_scalar_table_shorthands`.
+        const EXCLUDED: &[&str] = &[
+            "include",
+            "include[*]",
+            "upstream.*.backup",
+            "upstream.*.url",
+            "upstream.*.weight",
+            "upstream.*[*]",
+            "upstream.*[*].backup",
+            "upstream.*[*].url",
+            "upstream.*[*].weight",
+            "site[*].proxy[*]",
+            "site[*].proxy.host_header.value",
+            "site[*].route[*].proxy[*]",
+            "site[*].route[*].proxy.host_header.value",
+        ];
+
+        /// Collect every field path the schema accepts. Object keys walk
+        /// to `path.key`, map values to `path.*`, array items to
+        /// `path[*]`; `anyOf`/`oneOf` branches contribute at the same
+        /// path (a shorthand leaf and its table form share the key).
+        fn schema_paths() -> BTreeSet<String> {
+            let doc = fmt::json_schema();
+            let defs = doc
+                .get("$defs")
+                .or_else(|| doc.get("definitions"))
+                .cloned()
+                .unwrap_or_default();
+            let mut out = BTreeSet::new();
+            walk_schema(&doc, &defs, "", &mut out);
+            out
+        }
+
+        fn walk_schema(
+            node: &serde_json::Value,
+            defs: &serde_json::Value,
+            path: &str,
+            out: &mut BTreeSet<String>,
+        ) {
+            if !path.is_empty() {
+                out.insert(path.to_string());
+            }
+            if let Some(r) = node.get("$ref").and_then(|v| v.as_str()) {
+                let name = r.rsplit('/').next().unwrap_or(r);
+                if let Some(d) = defs.get(name) {
+                    walk_schema(d, defs, path, out);
+                }
+                return;
+            }
+            for key in ["anyOf", "oneOf", "allOf"] {
+                if let Some(list) = node.get(key).and_then(|v| v.as_array()) {
+                    for alt in list {
+                        walk_schema(alt, defs, path, out);
+                    }
+                }
+            }
+            if let Some(props) = node.get("properties").and_then(|v| v.as_object()) {
+                for (k, v) in props {
+                    walk_schema(v, defs, &at(path, k), out);
+                }
+            }
+            if let Some(ap) = node.get("additionalProperties")
+                && ap.is_object()
+            {
+                walk_schema(ap, defs, &format!("{path}.*"), out);
+            }
+            match node.get("items") {
+                Some(serde_json::Value::Object(_)) => {
+                    walk_schema(&node["items"], defs, &format!("{path}[*]"), out);
+                }
+                Some(serde_json::Value::Array(list)) => {
+                    for item in list {
+                        walk_schema(item, defs, &format!("{path}[*]"), out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        /// Collect every path a dump actually contains. Array indices
+        /// normalize to `[*]`; every object key *also* contributes `.*`
+        /// so map fields (`upstream.<name>`, `set.<header>`) match their
+        /// schema wildcard — struct objects gain harmless extras the
+        /// schema never asks for.
+        fn dump_paths(v: &serde_json::Value, path: &str, out: &mut BTreeSet<String>) {
+            if !path.is_empty() {
+                out.insert(path.to_string());
+            }
+            match v {
+                serde_json::Value::Object(m) => {
+                    for (k, v) in m {
+                        dump_paths(v, &at(path, k), out);
+                        dump_paths(v, &format!("{path}.*"), out);
+                    }
+                }
+                serde_json::Value::Array(a) => {
+                    for v in a {
+                        dump_paths(v, &format!("{path}[*]"), out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        fn at(path: &str, key: &str) -> String {
+            if path.is_empty() {
+                key.to_string()
+            } else {
+                format!("{path}.{key}")
+            }
+        }
+
+        #[test]
+        fn every_schema_field_is_exercised() {
+            let dir = tempfile::tempdir().unwrap();
+            let (cert, key) = crate::tls::selfsigned::generate_pems(&["a.example".into()]);
+            write(dir.path(), "cert.pem", &cert);
+            write(dir.path(), "key.pem", &key);
+            write(dir.path(), "users.htpasswd", "u:$argon2id$x\n");
+            let www = dir.path().join("www");
+            std::fs::create_dir(&www).unwrap();
+            for page in ["i.html", "f.html", "404.html", "5xx.html"] {
+                write(&www, page, "<h1>x</h1>");
+            }
+            std::fs::create_dir(dir.path().join("acme-state")).unwrap();
+            std::fs::create_dir(dir.path().join("cache")).unwrap();
+
+            // One config that sets every field the schema offers — every
+            // table, every list entry, every map key. Root-level scalars
+            // and dotted keys come before any [table] so TOML attaches
+            // them to the root.
+            let body = format!(
+                r#"
+upstream.url_one = "http://a1:9000"
+upstream.list = ["http://a2:9000", {{ url = "http://b2:9000", weight = 2, backup = true }}]
+upstream.entry = {{ url = "http://c3:9000", weight = 4 }}
+
+[server]
+listen = [{{ addr = "127.0.0.1:18080", tls = true }}]
+graceful_timeout = "25s"
+trusted_proxies = "10.0.0.0/8"
+server_header = "edge"
+max_connections = 4096
+max_connections_per_ip = 64
+security = {{ enabled = true, hsts = true, hsts_max_age = "90d", hsts_subdomains = true, content_type_options = true, frame_options = "SAMEORIGIN", referrer_policy = "no-referrer", csp = "default-src 'self'", cross_domain_policy = "none" }}
+
+[timeouts]
+tls_handshake = "8s"
+header_read = "15s"
+body_read = "45s"
+idle = "60s"
+send = "45s"
+request_deadline = "120s"
+
+[limits]
+header_bytes = "32KiB"
+body_bytes = "20MiB"
+
+[log]
+level = "debug"
+format = "pretty"
+output = "{dir}/server.log"
+access = {{ enabled = true, format = "pretty", output = "{dir}/access.log", filter = "path != \"/healthz\"", sample = 0.5 }}
+
+[admin]
+enabled = true
+listen = "127.0.0.1:19090"
+token = "admintok"
+tls = {{ cert = "{dir}/cert.pem", key = "{dir}/key.pem" }}
+
+[acme]
+email = "ops@example.com"
+directory = "letsencrypt-staging"
+storage = "{dir}/acme-state"
+renew_before = "20d"
+challenge = "dns-01"
+ca_roots = "{dir}/cert.pem"
+eab = {{ key_id = "kid", key = "aGVsbG8gd29ybGQ=" }}
+on_demand = {{ enabled = true, allowed_hosts = ["*.od.example", "x.od.example"], rate = "10/hour" }}
+dns = {{ cloudflare = {{ api_token = "cftok", zone_id = "z123", api_base = "https://cf.example/v4", resolver = "1.1.1.1", propagation_timeout = "90s" }} }}
+
+[upstream.plain]
+servers = ["http://s1:9000", {{ url = "http://s2:9000", weight = 3 }}, {{ url = "http://s3:9000", backup = true }}]
+lb = "least_conn"
+max_connections = 512
+health = {{ active = {{ path = "/up", interval = "5s", timeout = "2s", expect = 204 }}, passive = {{ failures = 4, cooldown = "20s" }} }}
+timeouts = {{ connect = "3s", response_header = "20s", idle = "60s" }}
+dns = {{ grace = "120s" }}
+tls = {{ verify = true, ca = "{dir}/cert.pem", sni = "up.example" }}
+unavailable = {{ status = 503, body = "down {{path}}" }}
+
+[cache.main]
+tier = "hybrid"
+policy = "lfu"
+ram_bytes = "128MiB"
+disk_bytes = "1GiB"
+disk_path = "{dir}/cache"
+max_items = 5000
+max_object_bytes = "8MiB"
+
+[[site]]
+name = "kitchen"
+hosts = ["a.example", "*.wild.example"]
+tls = {{ cert = "{dir}/cert.pem", key = "{dir}/key.pem" }}
+redirect_https = false
+redirect_host = "apex.example"
+root = "{dir}/www"
+trusted_proxies = "192.168.0.0/16"
+auth = {{ basic = {{ users = {{ u = "$argon2id$x" }}, realm = "realm" }} }}
+cors = {{ origins = ["https://a.example", "https://b.example"], methods = "GET", headers = "X-Req", expose = "X-Out", credentials = true, max_age = "300s" }}
+rate_limit = {{ rate = "100/s", key = "header:X-Team", burst = 10, exempt = "10.1.0.0/16", dry_run = true }}
+cache = {{ store = "main", ttl = "60s", stale_while_revalidate = "30s", stale_if_error = "120s", negative_ttl = "5s", vary_headers = "X-Grp", x_cache = false, bypass = {{ authenticated = false, methods = "POST", cookies = "sess", headers = "X-No", paths = "/p/*" }} }}
+compress = {{ enabled = true, algorithms = "gzip", min_bytes = "2KiB", types = "text/plain", level = 9 }}
+response_headers = {{ set = {{ x-a = "1" }}, add = {{ x-b = "2" }}, remove = "x-c" }}
+security = {{ enabled = false, hsts = true, hsts_max_age = "10d", hsts_subdomains = true, content_type_options = true, frame_options = "DENY", referrer_policy = "origin", csp = "default-src 'none'", cross_domain_policy = "master-only" }}
+ip_allow = ["10.0.0.0/8", "10.1.0.0/16"]
+ip_deny = "10.0.0.9"
+timeouts = {{ header_read = "10s", body_read = "30s", idle = "40s", send = "30s", request_deadline = "90s" }}
+limits = {{ header_bytes = "8KiB", body_bytes = "4MiB" }}
+
+[[site.route]]
+prefix = "/files"
+static = {{ root = "{dir}/www", index = ["i.html", "i.htm"], listing = true, spa = true, try_files = "f.html", precompressed = false, cache_control = {{ "*.css" = "max-age=60" }}, error_pages = {{ "404" = "/404.html", "5xx" = "/5xx.html" }}, mime_types = {{ data = "text/plain" }} }}
+
+[[site.route]]
+exact = "/exact"
+respond = {{ status = 201, body = "hi", headers = {{ x-e = "1" }} }}
+auth = {{ bearer = {{ tokens = ["t1", "t2"] }} }}
+rate_limit = {{ rate = "50/m", key = "route", burst = 5, exempt = ["10.0.0.1"], dry_run = false }}
+cors = {{ origins = ["https://c.example"], methods = ["GET", "POST"], headers = ["x"], expose = ["y"], credentials = false, max_age = "60s" }}
+cache = {{ store = "main", ttl = "10s", stale_while_revalidate = "5s", stale_if_error = "30s", negative_ttl = "3s", vary_headers = ["X-A"], x_cache = true, bypass = {{ authenticated = true, methods = ["PUT"], cookies = ["c"], headers = ["h"], paths = ["/x/*"] }} }}
+compress = {{ algorithms = ["br"], min_bytes = "4KiB", types = ["text/*"], level = 5 }}
+response_headers = {{ set = {{ x = "1" }}, add = {{ y = "2" }}, remove = ["z"] }}
+security = {{ enabled = false, hsts = true, hsts_max_age = "10d", hsts_subdomains = true, content_type_options = true, frame_options = "DENY", referrer_policy = "origin", csp = "default-src 'self'", cross_domain_policy = "all" }}
+ip_allow = "127.0.0.1"
+ip_deny = ["10.9.9.9"]
+timeouts = {{ header_read = "5s", body_read = "10s", idle = "20s", send = "10s", request_deadline = "60s" }}
+limits = {{ header_bytes = "4KiB", body_bytes = "1MiB" }}
+
+[[site.route]]
+regex = "^/rx/[0-9]+$"
+proxy = {{ upstream = ["http://u1:9000", "http://u2:9000"], rewrite = {{ strip_prefix = "/rx" }}, request_headers = {{ set = {{ x-f = "1" }}, add = {{ x-g = "2" }}, remove = ["x-h"] }}, retries = {{ max_per_request = 3, budget_fraction = 0.4 }}, host_header = {{ value = "vhost" }} }}
+auth = {{ api_key = {{ location = "header", name = "X-Api-Key", keys = "k1" }} }}
+
+[[site.route]]
+prefix = "/redir"
+redirect = {{ to = "https://n.example{{path}}", status = 302 }}
+auth = {{ basic = {{ htpasswd = "{dir}/users.htpasswd" }} }}
+
+[[site.route]]
+prefix = "/rh"
+redirect = {{ host = "n2.example" }}
+
+[[site.route]]
+prefix = "/match"
+match = {{ methods = ["POST", "PUT"], headers = {{ X-T = "re:^v", X-E = "" }}, query = {{ q = "1" }} }}
+priority = 5
+respond = "ok"
+auth = {{ basic = {{ users = {{ v = "$argon2id$x" }}, realm = "r" }} }}
+
+[[site.route]]
+prefix = "/named"
+proxy = "plain"
+
+[[site.route]]
+prefix = "/replace"
+proxy = {{ upstream = "entry", rewrite = {{ replace_prefix = {{ from = "/old", to = "/new" }} }} }}
+
+[[site.route]]
+prefix = "/rwrx"
+proxy = {{ upstream = "url_one", rewrite = {{ regex = {{ pattern = "x", replace = "y" }} }} }}
+
+[[site.route]]
+prefix = "/list"
+proxy = "list"
+
+[[site]]
+hosts = ["p1.example"]
+tls = "self_signed"
+auth = {{ bearer = {{ tokens = ["bt"] }} }}
+proxy = {{ upstream = ["http://p1:9000", "http://p2:9000"], rewrite = {{ strip_prefix = "/s" }}, request_headers = {{ set = {{ s = "1" }}, add = {{ t = "2" }}, remove = ["u"] }}, retries = {{ max_per_request = 1, budget_fraction = 0.1 }}, host_header = "original" }}
+
+[[site]]
+hosts = ["p2.example"]
+tls = "off"
+auth = {{ api_key = {{ location = "query", name = "key", keys = ["k"] }} }}
+proxy = {{ upstream = "plain", rewrite = {{ replace_prefix = {{ from = "/a", to = "/b" }} }} }}
+
+[[site]]
+hosts = ["p3.example"]
+tls = "off"
+auth = {{ basic = {{ htpasswd = "{dir}/users.htpasswd" }} }}
+proxy = {{ upstream = "entry", rewrite = {{ regex = {{ pattern = "x", replace = "y" }} }} }}
+
+[[site]]
+hosts = ["resp.example"]
+tls = "off"
+respond = {{ status = 202, body = "accepted", headers = {{ x-r = "1" }} }}
+
+[[site]]
+hosts = ["r1.example"]
+tls = "off"
+redirect = {{ to = "https://n.example{{path}}", status = 301 }}
+
+[[site]]
+hosts = ["r2.example"]
+tls = "off"
+redirect = {{ host = "m.example" }}
+
+[[site]]
+hosts = ["r3.example"]
+tls = "self_signed"
+redirect = {{ scheme = "https" }}
+
+[[site]]
+default = true
+hosts = []
+tls = "off"
+respond = "fallback"
+"#,
+                dir = dir.path().display()
+            );
+            let path = write(dir.path(), "verd.toml", &body);
+            let loaded = load(&path).unwrap_or_else(|e| panic!("kitchen sink must load: {e}"));
+            assert!(
+                loaded.is_valid(),
+                "kitchen sink produced errors:\n{}",
+                loaded
+                    .errors()
+                    .map(|d| format!("{d:?}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+
+            let dumped: serde_json::Value =
+                serde_json::from_str(&dump_json(&loaded.config).unwrap()).unwrap();
+            let mut have = BTreeSet::new();
+            dump_paths(&dumped, "", &mut have);
+
+            let missing: Vec<String> = schema_paths()
+                .into_iter()
+                .filter(|p| !have.contains(p) && !EXCLUDED.contains(&p.as_str()))
+                .collect();
+            assert!(
+                missing.is_empty(),
+                "schema fields never exercised — set them in the kitchen \
+                 sink or justify an EXCLUDED entry:\n{}",
+                missing
+                    .iter()
+                    .map(|p| format!("  {p}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
         }
     }
 }

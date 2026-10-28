@@ -150,6 +150,13 @@ workflow publishes the matching section as the GitHub release notes.
   (query without `?`), `{remote_ip}` (client IP under the route's
   trust model), and `{request_id}` substitute in `respond.body`,
   `redirect.to`, and — new this release — `upstream.*.unavailable.body`.
+- **Top-level off-switches and upstream shorthand** —
+  `server.security = false` and `admin = false` are the one-word forms
+  of `[server.security] enabled = false` / `[admin] enabled = false`,
+  matching the site/route middleware spellings; and
+  `upstream.<name> = "http://a:9000"` (or a URL list / `{ url, weight,
+  backup }` entry) names a cluster without a table — shorthand for
+  `servers` under cluster defaults.
 
 ### Build & CI
 
@@ -374,6 +381,16 @@ workflow publishes the matching section as the GitHub release notes.
 - **`cache.bypass.cookies`/`paths` scalar parity** — both accept a
   single string as a one-element list, matching the other bypass
   lists and the grammar doc.
+- **`verd fmt --all` no longer blocked by schema errors** — `include`
+  sources are enumerated with a syntax-only walk, so a config that
+  fails model validation still formats (with a warning that validation
+  was skipped); malformed TOML and missing `include` targets still
+  fail.
+- **`verd run -c - --watch` warns it cannot watch stdin** — the config
+  has no file-backed source, so the flag was previously a silent no-op.
+- **`rate` fields claimed a struct shape in the JSON schema** —
+  `rate_limit.rate` and `acme.on_demand.rate` only accept strings like
+  `"100/s"`; the generated schema now says so.
 
 ## [0.4.1] - 2026-10-27
 

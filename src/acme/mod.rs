@@ -669,4 +669,98 @@ mod tests {
         let (cert, key) = crate::tls::selfsigned::generate_pems(&["k.example".into()]);
         key_from_pems(&cert, &key).unwrap();
     }
+
+    fn mgr(root: &std::path::Path, renew_before: Duration) -> AcmeManager {
+        AcmeManager {
+            cfg: cfg::AcmeConfig {
+                renew_before,
+                ..Default::default()
+            },
+            resolver: Arc::new(CertResolver::default()),
+            storage: Storage::new(root.to_path_buf()),
+            http01: Arc::new(Http01Store::default()),
+            challenge: ChallengeType::Http01,
+            dns: None,
+            site_hosts: vec![],
+            account: tokio::sync::OnceCell::new(),
+            managed: Arc::new(dashmap::DashMap::new()),
+        }
+    }
+
+    /// Persist a cert with the given validity window — `renew_due`
+    /// reads `not_before`/`not_after` out of the stored PEM, so the
+    /// fixture needs real dates, not just a file.
+    fn store_cert(
+        storage: &Storage,
+        host: &str,
+        not_before: time::OffsetDateTime,
+        not_after: time::OffsetDateTime,
+    ) {
+        let mut params = rcgen::CertificateParams::new(vec![host.to_string()]).unwrap();
+        params.not_before = not_before;
+        params.not_after = not_after;
+        let key = rcgen::KeyPair::generate().unwrap();
+        let cert = params.self_signed(&key).unwrap();
+        storage
+            .save_cert(host, &cert.pem(), &key.serialize_pem())
+            .unwrap();
+    }
+
+    #[test]
+    fn renew_due_follows_renew_before_and_lifetime_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = time::OffsetDateTime::now_utc();
+        // hostname length feeds the jitter — keep it short so the
+        // assertions have seconds-level slack
+        let hosts = vec!["h.e".to_string()];
+
+        // nothing stored → issue (due)
+        let m = mgr(dir.path(), Duration::from_secs(30 * 24 * 3600));
+        assert!(m.renew_due(&hosts));
+
+        // fresh long-lived cert → not due (renew_before = 30d)
+        store_cert(
+            &m.storage,
+            &hosts[0],
+            now - time::Duration::days(1),
+            now + time::Duration::days(89),
+        );
+        assert!(!m.renew_due(&hosts));
+
+        // expiry inside renew_before → due
+        store_cert(
+            &m.storage,
+            &hosts[0],
+            now - time::Duration::days(80),
+            now + time::Duration::days(10),
+        );
+        assert!(m.renew_due(&hosts));
+
+        // short-lived cert: the lead caps at lifetime/3 — a 6-day cert
+        // gets ~2 days of lead, not the configured 30
+        store_cert(
+            &m.storage,
+            &hosts[0],
+            now - time::Duration::seconds(60),
+            now + time::Duration::days(6),
+        );
+        assert!(!m.renew_due(&hosts));
+        store_cert(
+            &m.storage,
+            &hosts[0],
+            now - time::Duration::days(5),
+            now + time::Duration::days(1),
+        );
+        assert!(m.renew_due(&hosts));
+
+        // a smaller renew_before tightens the same cert
+        let m = mgr(dir.path(), Duration::from_secs(12 * 3600));
+        store_cert(
+            &m.storage,
+            &hosts[0],
+            now - time::Duration::days(80),
+            now + time::Duration::days(10),
+        );
+        assert!(!m.renew_due(&hosts));
+    }
 }
