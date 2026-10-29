@@ -155,3 +155,35 @@ strip = "symbols"
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+
+# .deb package built by `cargo deb --no-build --target <triple>` in the
+# release workflow — it wraps the already-built musl binary, so
+# `target/release/verd` below is cargo-deb's placeholder rewritten to
+# `target/<triple>/release/verd`. systemd-units requires
+# maintainer-scripts to be set; scripts there must keep the #DEBHELPER#
+# token where generated systemd fragments are inserted.
+[package.metadata.deb]
+maintainer = "Nedim <intestellafella@gmail.com>"
+copyright = "2026, Verdigris contributors"
+license-file = ["LICENSE", "0"]
+extended-description = """\
+Verdigris (verd) is a single-binary web server and reverse proxy: \
+static files, TLS with automatic ACME certificates, response caching, \
+and upstream load balancing.
+
+The package installs a hardened systemd unit that runs as the `verd` \
+system user. The default /etc/verd/verd.toml binds port 80 and answers \
+404/421 until sites are configured; state lives in /var/lib/verd and \
+logs in /var/log/verd."""
+depends = "$auto, adduser, init-system-helpers (>= 1.51)"
+section = "httpd"
+priority = "optional"
+assets = [
+    ["target/release/verd", "usr/bin/", "755"],
+    ["packaging/verd.toml", "etc/verd/verd.toml", "644"],
+    ["README.md", "usr/share/doc/verd/README.md", "644"],
+    ["LICENSE-APACHE", "usr/share/doc/verd/LICENSE-APACHE", "644"],
+    ["LICENSE-MIT", "usr/share/doc/verd/LICENSE-MIT", "644"],
+]
+maintainer-scripts = "packaging/debian/"
+systemd-units = { unit-scripts = "packaging/" }

@@ -68,7 +68,8 @@ if [ "$cur" != "$new" ]; then
         docs/book/src/introduction.md
     grep -q "Documentation for verd $new" docs/book/src/introduction.md \
         || { echo "failed to update docs/book/src/introduction.md" >&2; exit 1; }
-    sed -i "s|releases/download/v[0-9.]*|releases/download/v$new|" \
+    sed -i -e "s|releases/download/v[0-9.]*|releases/download/v$new|" \
+        -e "s|verd_[0-9.]*-1_\(amd64\|arm64\)\.deb|verd_$new-1_\1.deb|" \
         docs/book/src/installation.md
     grep -q "releases/download/v$new" docs/book/src/installation.md \
         || { echo "failed to update docs/book/src/installation.md" >&2; exit 1; }

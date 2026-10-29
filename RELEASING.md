@@ -47,7 +47,21 @@ tags are created by `tag.yml` on `main`, never on `dev`.
 
 - `verd-x86_64-unknown-linux-musl.tar.gz`
 - `verd-aarch64-unknown-linux-musl.tar.gz`
-- `checksums.txt` — one sha256 line per tarball
+- `checksums.txt` — one sha256 line per tarball and per `.deb`
+
+**Debian packages** (`cargo deb --no-build --target <triple>` in the
+same build legs, so the `.deb` wraps the exact musl binary that ships
+in the tarball):
+
+- `verd_<version>-1_amd64.deb` / `verd_<version>-1_arm64.deb` —
+  installs `/usr/bin/verd`, the `packaging/verd.service` unit, and a
+  commented default `/etc/verd/verd.toml` (a conffile); `postinst`
+  creates the `verd` system user plus `/var/lib/verd` and
+  `/var/log/verd`, and the unit is enabled + started. Metadata lives
+  in `[package.metadata.deb]` in `Cargo.toml`, maintainer scripts in
+  `packaging/debian/`. To build one locally:
+  `cargo deb` (or `cargo deb --no-build --target <triple>` to wrap an
+  existing `target/<triple>/release/verd`).
 
 **Supply chain:**
 

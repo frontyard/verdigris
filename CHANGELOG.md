@@ -11,6 +11,15 @@ workflow publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
+### Added
+
+- **`.deb` packages** — every release now also publishes
+  `verd_<ver>-1_{amd64,arm64}.deb` assets (built with `cargo-deb` from
+  the same musl binaries as the tarballs). Installing one creates the
+  `verd` system user, `/var/lib/verd` + `/var/log/verd`, a conffile at
+  `/etc/verd/verd.toml`, and enables the `verd.service` systemd unit.
+  Signed and attested like the other artifacts.
+
 ## [1.0.0] - 2026-10-29
 
 ### Added

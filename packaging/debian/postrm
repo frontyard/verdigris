@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+#DEBHELPER#
+
+case "$1" in
+    purge)
+        # purge drops state and logs too; the verd user is left in
+        # place (cheap, and may own stray files)
+        rm -rf /var/lib/verd /var/log/verd
+        ;;
+esac
+
+exit 0

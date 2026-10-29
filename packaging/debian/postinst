@@ -1,0 +1,23 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # the unit runs as verd:verd — a locked system account whose
+        # home is the state dir
+        if ! getent group verd >/dev/null; then
+            addgroup --system --quiet verd
+        fi
+        if ! getent passwd verd >/dev/null; then
+            adduser --system --quiet --ingroup verd \
+                --home /var/lib/verd --no-create-home \
+                --disabled-password --shell /usr/sbin/nologin \
+                verd
+        fi
+        install -d -o verd -g verd -m 0750 /var/lib/verd /var/log/verd
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

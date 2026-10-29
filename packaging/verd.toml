@@ -1,0 +1,39 @@
+# /etc/verd/verd.toml — Verdigris configuration.
+#
+# Check edits with `verd validate`, then apply them with
+# `systemctl reload verd`. The full reference is generated into the
+# docs book and ships in the repository under
+# docs/book/src/reference.md.
+
+# Admin API is off by default — it has no auth on loopback, so any
+# local process could manage the server. To enable it, set
+# `[admin] listen = "127.0.0.1:2019"` and a `token` (or ${ENV}).
+admin = false
+
+[server]
+listen = ["0.0.0.0:80"]
+
+# ACME account + certificate state. Keep it under /var/lib/verd — the
+# bundled systemd unit only grants write access to /var/lib/verd and
+# /var/log/verd.
+[acme]
+storage = "/var/lib/verd/acme"
+# email = "you@example.com"   # required before any site can use tls = "auto"
+
+# No sites are configured yet: the server answers 404/421 on every
+# request until you add one. A minimal static site looks like:
+#
+# [[site]]
+# hosts = ["example.com", "www.example.com"]
+# default = true
+# tls = "auto"
+#
+# [[site.route]]
+# prefix = "/"
+# static = { root = "/var/www/site" }
+#
+# And a reverse-proxy route:
+#
+# [[site.route]]
+# prefix = "/api"
+# proxy = { upstream = ["http://127.0.0.1:9000"] }
