@@ -518,6 +518,10 @@ workflow publishes the matching section as the GitHub release notes.
   instead of buffering into serde's `Content` and retrying variants,
   and the X-Forwarded-For trust walk no longer allocates a list per
   request.
+- **Oversized byte counts parse again** — `ByteSize` fields accept the
+  full `u64` range from unsigned-capable formats; the new shorthand
+  visitor narrowed integers to `i64` first. TOML integers are signed
+  and unaffected.
 
 ## [0.4.1] - 2026-10-27
 

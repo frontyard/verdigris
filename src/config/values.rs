@@ -461,6 +461,20 @@ mod tests {
     }
 
     #[test]
+    fn byte_size_full_u64_range() {
+        // TOML integers are i64; unsigned-capable formats drive
+        // `visit_u64`, which used to narrow through i64 and reject
+        // everything past `i64::MAX` — the full range must parse.
+        for n in [u64::MAX, i64::MAX as u64 + 1] {
+            let b = ByteSize::deserialize(serde::de::value::U64Deserializer::<
+                serde::de::value::Error,
+            >::new(n))
+            .unwrap();
+            assert_eq!(b.0, n);
+        }
+    }
+
+    #[test]
     fn byte_size_display_all_brackets() {
         assert_eq!(ByteSize::gib(4).to_string(), "4GiB");
         assert_eq!(ByteSize::mib(10).to_string(), "10MiB");
