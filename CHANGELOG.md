@@ -11,6 +11,8 @@ workflow publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-29
+
 ### Added
 
 - **Admin trust model documented** — `docs/book/src/admin.md` now
@@ -934,7 +936,8 @@ reverse proxy with load balancing and retries, response caching
 (RAM/disk/hybrid), compression, rate limiting, CORS, security headers,
 admin API with atomic reloads, Prometheus metrics.
 
-[Unreleased]: https://github.com/frontyard/verdigris/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/frontyard/verdigris/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/frontyard/verdigris/compare/v0.4.1...v1.0.0
 [0.4.1]: https://github.com/frontyard/verdigris/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/frontyard/verdigris/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/frontyard/verdigris/compare/v0.2.7...v0.3.1
