@@ -13,11 +13,13 @@ workflow publishes the matching section as the GitHub release notes.
 
 ### Added
 
-- **`.deb` packages** — every release now also publishes
-  `verd_<ver>-1_{amd64,arm64}.deb` assets (built with `cargo-deb` from
-  the same musl binaries as the tarballs). Installing one creates the
-  `verd` system user, `/var/lib/verd` + `/var/log/verd`, a conffile at
-  `/etc/verd/verd.toml`, and enables the `verd.service` systemd unit.
+- **`.deb` and `.rpm` packages** — every release now also publishes
+  `verd_<ver>-1_{amd64,arm64}.deb` and `verd-<ver>-1.{x86_64,aarch64}.rpm`
+  assets (built with `cargo-deb`/`cargo-generate-rpm` from the same
+  musl binaries as the tarballs). Installing one creates the `verd`
+  system user, `/var/lib/verd` + `/var/log/verd`, a config-preserved
+  `/etc/verd/verd.toml`, and installs the `verd.service` systemd unit
+  (enabled on Debian; subject to preset policy on RPM distros).
   Signed and attested like the other artifacts.
 
 ## [1.0.0] - 2026-10-29

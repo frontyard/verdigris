@@ -35,6 +35,22 @@ cache) and logs in `/var/log/verd`. `apt remove verd` keeps them and
 your config; `apt purge verd` removes everything except the `verd`
 user.
 
+## RPM package
+
+The same layout is published as `.rpm` (`x86_64`/`aarch64`) for
+Fedora, RHEL, openSUSE, and friends:
+
+```sh
+curl -LO https://github.com/frontyard/verdigris/releases/download/v1.0.0/verd-1.0.0-1.x86_64.rpm
+sudo dnf install ./verd-1.0.0-1.x86_64.rpm
+sudoedit /etc/verd/verd.toml && sudo systemctl enable --now verd
+```
+
+Unlike the `.deb`, the unit follows the distro's preset policy — on
+most RPM systems it stays disabled until you `systemctl enable --now`.
+`rpm -e verd` removes the package but keeps state and your edited
+config (saved as `.rpmsave`).
+
 ## Docker
 
 ```sh

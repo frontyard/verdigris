@@ -187,3 +187,32 @@ assets = [
 ]
 maintainer-scripts = "packaging/debian/"
 systemd-units = { unit-scripts = "packaging/" }
+
+# .rpm package built by `cargo generate-rpm --target <triple>
+# --arch <rpm-arch>` in the release workflow. Same asset-path
+# convention as cargo-deb: target/release/verd is rewritten to
+# target/<triple>/release/verd. The tool never builds — it only
+# assembles, so the .rpm wraps the same CI musl binary.
+# Scriptlets live in packaging/rpm/ (file paths, not inline scripts);
+# they mirror the debian/ scripts but follow rpm scriptlet semantics
+# ($1 = package count) and systemd preset policy instead of d-s-h.
+[package.metadata.generate-rpm]
+release = "1"
+vendor = "Verdigris contributors"
+requires = { systemd = "*", "/usr/sbin/groupadd" = "*", "/usr/sbin/useradd" = "*" }
+assets = [
+    { source = "target/release/verd", dest = "/usr/bin/verd", mode = "755" },
+    { source = "packaging/verd.toml", dest = "/etc/verd/verd.toml", mode = "644", config = "noreplace" },
+    { source = "packaging/verd.service", dest = "/usr/lib/systemd/system/verd.service", mode = "644" },
+    # NOTE: { dir = true } assets are broken in cargo-generate-rpm
+    # 0.21.x (empty source → ENOENT). /var/lib/verd + /var/log/verd are
+    # created by %post instead, like the deb postinst.
+    { source = "README.md", dest = "/usr/share/doc/verd/README.md", mode = "644", doc = true },
+    { source = "LICENSE", dest = "/usr/share/licenses/verd/LICENSE", mode = "644" },
+    { source = "LICENSE-APACHE", dest = "/usr/share/licenses/verd/LICENSE-APACHE", mode = "644" },
+    { source = "LICENSE-MIT", dest = "/usr/share/licenses/verd/LICENSE-MIT", mode = "644" },
+]
+pre_install_script = "packaging/rpm/preinstall.sh"
+post_install_script = "packaging/rpm/postinstall.sh"
+pre_uninstall_script = "packaging/rpm/preuninstall.sh"
+post_uninstall_script = "packaging/rpm/postuninstall.sh"

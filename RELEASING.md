@@ -49,19 +49,28 @@ tags are created by `tag.yml` on `main`, never on `dev`.
 - `verd-aarch64-unknown-linux-musl.tar.gz`
 - `checksums.txt` — one sha256 line per tarball and per `.deb`
 
-**Debian packages** (`cargo deb --no-build --target <triple>` in the
-same build legs, so the `.deb` wraps the exact musl binary that ships
-in the tarball):
+**Distro packages** — each build leg wraps the exact musl binary that
+ships in the tarball:
 
-- `verd_<version>-1_amd64.deb` / `verd_<version>-1_arm64.deb` —
-  installs `/usr/bin/verd`, the `packaging/verd.service` unit, and a
-  commented default `/etc/verd/verd.toml` (a conffile); `postinst`
-  creates the `verd` system user plus `/var/lib/verd` and
-  `/var/log/verd`, and the unit is enabled + started. Metadata lives
-  in `[package.metadata.deb]` in `Cargo.toml`, maintainer scripts in
-  `packaging/debian/`. To build one locally:
-  `cargo deb` (or `cargo deb --no-build --target <triple>` to wrap an
-  existing `target/<triple>/release/verd`).
+- `verd_<version>-1_amd64.deb` / `verd_<version>-1_arm64.deb` via
+  `cargo deb --no-build --target <triple>` — installs `/usr/bin/verd`,
+  the `packaging/verd.service` unit, and a commented default
+  `/etc/verd/verd.toml` (a conffile); `postinst` creates the `verd`
+  system user plus `/var/lib/verd` and `/var/log/verd`, and the unit
+  is enabled + started.
+- `verd-<version>-1.x86_64.rpm` / `verd-<version>-1.aarch64.rpm` via
+  `cargo generate-rpm --target <triple> --arch <rpm-arch>` — same
+  contents; `%config(noreplace)` protects `/etc/verd/verd.toml`,
+  scriptlets create the user/dirs and run `systemctl preset`
+  (Fedora/RHEL presets leave the unit disabled — enable it manually).
+  Erasing keeps state (rpm has no purge); `dpkg --purge` on Debian
+  removes it.
+
+Metadata lives in `[package.metadata.deb]` /
+`[package.metadata.generate-rpm]` in `Cargo.toml`; maintainer scripts
+in `packaging/debian/` and scriptlets in `packaging/rpm/`. Locally:
+`cargo deb --no-build` and `cargo generate-rpm` against an existing
+`target/<triple>/release/verd`.
 
 **Supply chain:**
 
