@@ -634,4 +634,65 @@ mod tests {
         assert_eq!(r.status(), 502);
         assert_eq!(r.headers()["content-type"], "text/plain; charset=utf-8");
     }
+
+    #[tokio::test]
+    async fn pipeline_rejects_over_limit_content_length() {
+        let cfg = crate::config::validate::parse_test_config(
+            r#"
+[limits]
+body_bytes = "1k"
+[[site]]
+hosts = ["x"]
+tls = "off"
+[[site.route]]
+prefix = "/"
+respond = { status = 200, body = "hi" }
+"#,
+        );
+        let rt = crate::server::Runtime::build(std::sync::Arc::new(cfg)).unwrap();
+        // hyper's `Incoming` has no public constructor — plumb a real
+        // h1 request through a duplex connection into `handle`
+        let (mut client, server_io) = tokio::io::duplex(8192);
+        let conn_rt = rt.clone();
+        tokio::spawn(async move {
+            let svc = hyper::service::service_fn(move |req| {
+                let rt = conn_rt.clone();
+                async move {
+                    let ctx = ConnCtx {
+                        remote: "127.0.0.1:1".parse().unwrap(),
+                        tls: false,
+                        tls_version: None,
+                        request_counter: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(
+                            0,
+                        )),
+                        first_request_done: std::sync::Arc::new(
+                            std::sync::atomic::AtomicBool::new(false),
+                        ),
+                        read_gate: crate::server::timeout::DeadlineGate::default(),
+                        conn_guard: crate::server::ConnGuard::for_test(
+                            "127.0.0.1".parse().unwrap(),
+                        ),
+                    };
+                    handle(req, ctx, rt).await
+                }
+            });
+            let _ = hyper::server::conn::http1::Builder::new()
+                .serve_connection(hyper_util::rt::TokioIo::new(server_io), svc)
+                .await;
+        });
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        // 2 KiB declared against a 1 KiB limit → 413. `>`→`==` would let
+        // every non-exact size through to the handler
+        client
+            .write_all(b"POST /big HTTP/1.1\r\nhost: x\r\ncontent-length: 2048\r\n\r\n")
+            .await
+            .unwrap();
+        let mut buf = vec![0u8; 4096];
+        let n = tokio::time::timeout(std::time::Duration::from_secs(5), client.read(&mut buf))
+            .await
+            .unwrap()
+            .unwrap();
+        let text = String::from_utf8_lossy(&buf[..n]);
+        assert!(text.starts_with("HTTP/1.1 413"), "{text}");
+    }
 }

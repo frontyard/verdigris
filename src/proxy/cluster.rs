@@ -43,7 +43,8 @@ pub struct UpstreamUrl {
     pub want: WantProto,
     /// Whether the connection uses TLS.
     pub tls: bool,
-    /// Hostname or IP literal.
+    /// Hostname or IP literal — IPv6 stored without the RFC 3986
+    /// brackets so it parses as `IpAddr`; `authority()` restores them.
     pub host: String,
     /// Port (scheme default applied when omitted).
     pub port: u16,
@@ -80,26 +81,38 @@ impl UpstreamUrl {
         if authority.as_str().contains('@') {
             return Err(format!("upstream URL {raw:?} must not contain userinfo"));
         }
+        // `Authority::host()` keeps the RFC 3986 brackets on IPv6
+        // literals; store the bare address so `host` parses as `IpAddr`
+        // for literal dialing and SNI.
+        let host = authority.host();
+        let host = host
+            .strip_prefix('[')
+            .and_then(|h| h.strip_suffix(']'))
+            .unwrap_or(host);
         Ok(Self {
             want,
             tls,
-            host: authority.host().to_string(),
+            host: host.to_string(),
             port: authority.port_u16().unwrap_or(default_port),
         })
     }
 
-    /// `host:port` for the `Host` header / authority, omitting the default port.
+    /// `host:port` for the `Host` header / authority, omitting the default
+    /// port and restoring IPv6 brackets.
     pub fn authority(&self) -> String {
         let default = match self.want {
             WantProto::Alpn => 443,
             _ => 80,
         };
-        if self.port == default {
-            self.host.clone()
-        } else if self.host.parse::<IpAddr>().is_ok_and(|ip| ip.is_ipv6()) {
-            format!("[{}]:{}", self.host, self.port)
+        let host = if self.host.parse::<IpAddr>().is_ok_and(|ip| ip.is_ipv6()) {
+            format!("[{}]", self.host)
         } else {
-            format!("{}:{}", self.host, self.port)
+            self.host.clone()
+        };
+        if self.port == default {
+            host
+        } else {
+            format!("{host}:{}", self.port)
         }
     }
 }
@@ -326,7 +339,7 @@ impl Member {
                     .map(|ip| SocketAddr::new(ip, self.url.port))
                     .collect();
                 if addrs.is_empty() {
-                    self.dns_failed(&mut st, cluster);
+                    self.dns_failed(&mut st, cluster, Instant::now());
                     return self.last_known_good(&st, cluster);
                 }
                 st.addrs = addrs.clone();
@@ -336,14 +349,14 @@ impl Member {
             }
             Err(e) => {
                 tracing::debug!(host = %self.url.host, error = %e, "upstream DNS lookup failed");
-                self.dns_failed(&mut st, cluster);
+                self.dns_failed(&mut st, cluster, Instant::now());
                 self.last_known_good(&st, cluster)
             }
         }
     }
 
-    fn dns_failed(&self, st: &mut DnsState, cluster: &Cluster) {
-        let now = Instant::now();
+    /// `now` is a parameter so tests can pin the grace boundary exactly.
+    fn dns_failed(&self, st: &mut DnsState, cluster: &Cluster, now: Instant) {
         let since = st.failing_since.get_or_insert(now);
         if now.duration_since(*since) > cluster.dns.grace {
             st.addrs.clear();
@@ -621,9 +634,17 @@ impl Member {
         tokio::spawn(async move {
             let _ = conn.await;
         });
+        // absolute-form: h2 requires `:scheme` + `:authority` — a
+        // path-only URI is rejected by the codec before it ever ships
+        let uri = format!(
+            "{}://{}{}",
+            if self.url.tls { "https" } else { "http" },
+            self.url.authority(),
+            active.path,
+        );
         let req = http::Request::builder()
             .method(http::Method::GET)
-            .uri(&active.path)
+            .uri(&uri)
             .header(http::header::HOST, self.url.authority())
             .version(http::Version::HTTP_2)
             .body(crate::body::empty())
@@ -846,7 +867,7 @@ fn build_tls_client(tls: &cfg::UpstreamTls) -> Result<Arc<ClientConfig>, String>
                 .collect::<Result<Vec<CertificateDer>, _>>()
                 .map_err(|e| format!("cannot parse upstream CA {}: {e}", ca.display()))?;
             let (_, ignored) = roots.add_parsable_certificates(certs);
-            if ignored > 0 {
+            if let 1.. = ignored {
                 tracing::warn!(ca = %ca.display(), ignored, "unparsable CA certificates ignored");
             }
         }
@@ -985,6 +1006,16 @@ mod tests {
         assert_eq!(
             UpstreamUrl::parse("http://[::1]:8080").unwrap().authority(),
             "[::1]:8080"
+        );
+        // brackets come off at parse so `host` is a usable IpAddr, and
+        // authority() puts them back — including at the default port,
+        // where a bare `::1` is not a valid authority.
+        let v6 = UpstreamUrl::parse("h2c://[::1]").unwrap();
+        assert_eq!(v6.host, "::1");
+        assert_eq!(v6.authority(), "[::1]");
+        assert_eq!(
+            UpstreamUrl::parse("https://[::1]").unwrap().authority(),
+            "[::1]"
         );
     }
 
@@ -1179,11 +1210,17 @@ mod tests {
         let mut st = member.dns.lock().await;
         st.addrs = vec!["10.1.2.3:80".parse().unwrap()];
         // first failure inside the grace window: addrs survive
-        member.dns_failed(&mut st, &cluster);
+        member.dns_failed(&mut st, &cluster, Instant::now());
+        assert!(!st.addrs.is_empty());
+        // still failing at exactly the grace boundary: still kept —
+        // the drop needs strictly more
+        let now = Instant::now();
+        st.failing_since = Some(now - cluster.dns.grace);
+        member.dns_failed(&mut st, &cluster, now);
         assert!(!st.addrs.is_empty());
         // still failing past the grace window: addrs are dropped
         st.failing_since = Some(Instant::now() - cluster.dns.grace - Duration::from_secs(1));
-        member.dns_failed(&mut st, &cluster);
+        member.dns_failed(&mut st, &cluster, Instant::now());
         assert!(st.addrs.is_empty());
         assert!(matches!(
             member.last_known_good(&st, &cluster),
@@ -1376,17 +1413,59 @@ mod tests {
         assert!(hm.last_known_good(&st, &host_cluster).is_err());
         st.addrs = vec!["10.1.2.3:9".parse().unwrap()];
         assert_eq!(hm.last_known_good(&st, &host_cluster).unwrap().len(), 1);
-        hm.dns_failed(&mut st, &host_cluster);
+        hm.dns_failed(&mut st, &host_cluster, Instant::now());
         assert!(!st.addrs.is_empty());
         let mut st2 = DnsState {
             addrs: vec!["10.1.2.3:9".parse().unwrap()],
             expires_at: None,
             failing_since: Some(Instant::now() - Duration::from_secs(3600)),
         };
-        hm.dns_failed(&mut st2, &host_cluster);
+        hm.dns_failed(&mut st2, &host_cluster, Instant::now());
         assert!(st2.addrs.is_empty());
         hm.invalidate_dns(&mut st2);
         assert!(st2.expires_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn probe_h2_reports_status_match() {
+        // in-memory h2 peer: handshake + GET exercise the probe for
+        // real without TLS or a socket
+        let h2_peer = |status: u16| {
+            let (client_io, server_io) = tokio::io::duplex(8192);
+            tokio::spawn(async move {
+                let _ = hyper_util::server::conn::auto::Builder::new(
+                    hyper_util::rt::TokioExecutor::new(),
+                )
+                .serve_connection(
+                    hyper_util::rt::TokioIo::new(server_io),
+                    hyper::service::service_fn(move |_req| async move {
+                        Ok::<_, std::convert::Infallible>(
+                            http::Response::builder()
+                                .status(status)
+                                .body(crate::body::full("ok"))
+                                .unwrap(),
+                        )
+                    }),
+                )
+                .await;
+            });
+            client_io
+        };
+        let active = cfg::ActiveHealth {
+            path: "/healthz".into(),
+            expect: 200,
+            ..Default::default()
+        };
+        let cluster = test_cluster(
+            vec!["http://127.0.0.1:1".into()],
+            4,
+            Duration::from_secs(60),
+        );
+        let m = &cluster.members[0];
+        // status match → Some(true); mismatch → Some(false); a `-> None`
+        // stub answers neither
+        assert_eq!(m.probe_h2(h2_peer(200), &active).await, Some(true));
+        assert_eq!(m.probe_h2(h2_peer(500), &active).await, Some(false));
     }
 
     #[tokio::test]

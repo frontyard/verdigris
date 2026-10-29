@@ -413,7 +413,15 @@ async fn start_upstream() -> Up {
 
 /// Spawn an h2c (cleartext HTTP/2 prior-knowledge) echo upstream.
 async fn start_upstream_h2() -> Up {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    start_upstream_h2_at("127.0.0.1").await
+}
+
+/// `bind` is the bare host the listener takes port `0` on — `"[::1]"`
+/// for the IPv6 upstream test.
+async fn start_upstream_h2_at(bind: &str) -> Up {
+    let listener = tokio::net::TcpListener::bind(format!("{bind}:0"))
+        .await
+        .unwrap();
     let port = listener.local_addr().unwrap().port();
     let hits = Arc::new(AtomicUsize::new(0));
     let (tx, mut rx) = tokio::sync::oneshot::channel::<()>();
@@ -683,6 +691,36 @@ proxy = ["h2c://127.0.0.1:{p}"]
     let body = resp.text().await.unwrap();
     // h2 upstreams receive absolute-form URIs (:authority + :scheme + :path)
     assert!(body.starts_with("GET http://"), "{body}");
+    assert!(body.contains("/grpc-ish"), "{body}");
+    sd.send(true).unwrap();
+}
+
+// regression: the upstream host used to keep the RFC 3986 brackets, so
+// `::1` never parsed as IpAddr — the member fell into the DNS path and
+// IPv6 upstreams were undialable
+#[tokio::test]
+async fn proxy_ipv6_h2c_upstream() {
+    let up = start_upstream_h2_at("[::1]").await;
+    let config = format!(
+        r#"
+[[site]]
+default = true
+tls = "off"
+proxy = ["h2c://[::1]:{p}"]
+"#,
+        p = up.port
+    );
+    let (base, _admin, _rt, sd) = start(&config).await;
+    let resp = reqwest::Client::new()
+        .get(format!("{base}/grpc-ish"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    // :authority must carry the bracketed literal — a bare "::1" is not
+    // a valid authority and the h2 codec would reject the request
+    assert!(body.starts_with("GET http://[::1]:"), "{body}");
     assert!(body.contains("/grpc-ish"), "{body}");
     sd.send(true).unwrap();
 }

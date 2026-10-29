@@ -4458,4 +4458,122 @@ sample = 1.5
         let cfg = parse_test_config("[acme]\nca_roots = \"/nonexistent/ca.pem\"");
         assert!(has_warn(&cfg, "acme.ca_roots", "does not exist"));
     }
+
+    #[test]
+    fn compress_known_algorithms_accepted() {
+        // every supported name must pass quietly — a `!` dropped from
+        // the contains check would flag known names as unknown
+        for algs in ["br", "zstd", "gzip"] {
+            let cfg = parse_test_config(&format!(
+                r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+prefix = "/a"
+respond = {{ status = 200 }}
+compress = {{ algorithms = ["{algs}"] }}
+"#,
+            ));
+            assert!(
+                errors(&cfg).iter().all(|d| !d.path.contains("compress")),
+                "{algs}: {:?}",
+                errors(&cfg)
+            );
+        }
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+prefix = "/a"
+respond = { status = 200 }
+compress = { algorithms = ["deflate"] }
+"#,
+        );
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].route[0].compress.algorithms",
+            "unknown algorithm"
+        ));
+    }
+
+    #[test]
+    fn http01_needs_a_plaintext_listener_and_an_auto_site() {
+        // auto-TLS site + http-01 + only TLS listeners: the CA cannot
+        // reach the challenge listener
+        let cfg = parse_test_config(
+            r#"
+[server]
+listen = [{ addr = "127.0.0.1:8443", tls = true }]
+[acme]
+email = "a@b.c"
+challenge = "http-01"
+[[site]]
+hosts = ["app.example.com"]
+tls = "auto"
+root = "/tmp"
+"#,
+        );
+        assert!(
+            has_warn(&cfg, "acme.challenge", "cannot reach port 80"),
+            "{:?}",
+            validate(&cfg)
+        );
+
+        // a plaintext listener makes http-01 reachable → quiet
+        let cfg = parse_test_config(
+            r#"
+[server]
+listen = ["127.0.0.1:8080", { addr = "127.0.0.1:8443", tls = true }]
+[acme]
+email = "a@b.c"
+challenge = "http-01"
+[[site]]
+hosts = ["app.example.com"]
+tls = "auto"
+root = "/tmp"
+"#,
+        );
+        assert!(
+            !has_warn(&cfg, "acme.challenge", "cannot reach port 80"),
+            "{:?}",
+            validate(&cfg)
+        );
+
+        // no auto-TLS site → nothing needs ACME; the warning must not
+        // fire just because http-01 is configured with TLS listeners
+        let cfg = parse_test_config(
+            r#"
+[server]
+listen = [{ addr = "127.0.0.1:8443", tls = true }]
+[acme]
+email = "a@b.c"
+challenge = "http-01"
+[[site]]
+hosts = ["app.example.com"]
+tls = "off"
+root = "/tmp"
+"#,
+        );
+        assert!(
+            !has_warn(&cfg, "acme.challenge", "cannot reach port 80"),
+            "{:?}",
+            validate(&cfg)
+        );
+    }
+
+    #[test]
+    fn header_bytes_warn_threshold() {
+        // the per-connection buffer warn starts strictly above 1 MiB —
+        // an `*` → `+` slip would trip it at 2 KiB instead
+        for (value, warned) in [("512k", false), ("1024k", false), ("1536k", true)] {
+            let cfg = parse_test_config(&format!("[limits]\nheader_bytes = \"{value}\""));
+            assert_eq!(
+                has_warn(&cfg, "limits.header_bytes", "above 1 MiB"),
+                warned,
+                "{value}: {:?}",
+                validate(&cfg)
+            );
+        }
+    }
 }

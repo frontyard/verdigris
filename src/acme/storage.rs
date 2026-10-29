@@ -172,4 +172,42 @@ mod tests {
             assert_eq!(mode & 0o777, 0o600);
         }
     }
+
+    #[test]
+    fn account_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Storage::new(dir.path().to_path_buf());
+        // nothing persisted → None, never a fabricated credential
+        assert!(s.load_account().is_none());
+        s.save_account(b"{\"k\":\"v\"}").unwrap();
+        assert_eq!(
+            s.load_account().as_deref(),
+            Some(b"{\"k\":\"v\"}".as_slice())
+        );
+    }
+
+    #[test]
+    fn leaf_validity_epoch_boundary() {
+        let key = rcgen::KeyPair::generate().unwrap();
+        // not_before at exactly the epoch is a real timestamp — only
+        // *negative* timestamps are pre-1970 and rejected
+        let mut params = rcgen::CertificateParams::new(vec!["h.test".to_string()]).unwrap();
+        params.not_before = time::OffsetDateTime::UNIX_EPOCH;
+        params.not_after = time::OffsetDateTime::UNIX_EPOCH + time::Duration::days(1);
+        let pem = params.self_signed(&key).unwrap().pem();
+        let (nb, na) = leaf_validity(&pem).expect("epoch cert must parse");
+        assert_eq!(nb, SystemTime::UNIX_EPOCH);
+        assert_eq!(
+            na,
+            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(86400)
+        );
+
+        // a pre-1970 notBefore must be rejected, not wrapped into a
+        // nonsense SystemTime
+        let mut params = rcgen::CertificateParams::new(vec!["h.test".to_string()]).unwrap();
+        params.not_before = time::OffsetDateTime::from_unix_timestamp(-100).unwrap();
+        params.not_after = time::OffsetDateTime::from_unix_timestamp(100).unwrap();
+        let pem = params.self_signed(&key).unwrap().pem();
+        assert!(leaf_validity(&pem).is_none());
+    }
 }

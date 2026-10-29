@@ -15,8 +15,13 @@ jobs:
   mutants:
     name: cargo-mutants sweep
     runs-on: ubuntu-latest
-    timeout-minutes: 100 # partial sweep — results are per-mutant
-    permissions: {contents: read} # checkout
+    # Backstop only — the sweep step timeboxes itself below so the
+    # report and artifact steps always run and the run ends normally
+    # instead of "canceled" at the cap.
+    timeout-minutes: 100
+    permissions:
+      contents: read # checkout
+      actions: read # download earlier sweeps' mutants-out artifacts
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -26,10 +31,140 @@ jobs:
       - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: cargo-mutants, cargo-nextest
-      # shuffled so each week's time-capped run covers a different slice;
-      # mutants.out appends per-mutant verdicts as it goes
-      - run: cargo mutants --test-tool=nextest --jobs 2 --shuffle
-        continue-on-error: true # a surviving mutant is signal, not a gate
+      # shuffled so each week's slice differs; mutants.out records each
+      # verdict as it lands, so TERM at 90m keeps completed results.
+      # The exit code is captured for the report, not gated on — a
+      # surviving mutant is signal, and a red X trains people to skip
+      # the sweep.
+      - name: sweep (90m cap)
+        run: |
+          code=0
+          timeout -s TERM -k 60s 90m cargo mutants --test-tool=nextest --jobs 2 --shuffle || code=$?
+          echo "code=$code" > mutants.exit
+      - name: report
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          count() { { [ -f "$1" ] && wc -l < "$1"; } || echo 0; }
+          xcode() { cut -d= -f2 mutants.exit 2>/dev/null || echo '?'; }
+
+          # `sha<TAB>file:line: desc` rows → linked markdown bullets, capped
+          # at 150. Links use the row's own commit — line numbers drift
+          # between sweeps, so a historical entry must link at the run
+          # that recorded it, not HEAD. Rows past the cap get an explicit
+          # omitted count instead of silently disappearing.
+          bullets() {
+            total=$(wc -l < "$1")
+            n=0
+            while IFS=$'\t' read -r sha l && [ "$n" -lt 150 ]; do
+              f=${l%%:*}; r=${l#*:}; ln=${r%%:*}
+              printf -- "- [\`%s:%s\`](https://github.com/%s/blob/%s/%s#L%s) — \`%s\`\n" \
+                "$f" "$ln" "$REPO" "${sha:-$SHA}" "$f" "$ln" "${r#*:*: }"
+              n=$((n + 1))
+            done < "$1"
+            left=$((total - n))
+            # if/fi, not && — a false test as the function's last command
+            # would exit 1 and abort the report under bash -e
+            if [ "$left" -gt 0 ]; then
+              echo "_…and $left more — full list in the \`mutants-out\` artifact._"
+            fi
+          }
+
+          {
+            echo "## cargo-mutants sweep"
+            if [ ! -d mutants.out ]; then
+              echo
+              echo "no \`mutants.out/\` produced — the sweep never reached mutating (install or baseline build/test failed; see earlier steps, exit $(xcode))."
+            else
+              c=$(count mutants.out/caught.txt)
+              m=$(count mutants.out/missed.txt)
+              u=$(count mutants.out/unviable.txt)
+              t=$(count mutants.out/timeout.txt)
+              g=0
+              [ -f mutants.out/mutants.json ] &&
+                g=$(python3 -c 'import json; print(len(json.load(open("mutants.out/mutants.json"))))' 2>/dev/null || echo 0)
+              v=$((c + m)); rate=n/a
+              [ "$v" -gt 0 ] && rate="$((c * 100 / v))%"
+              echo
+              echo "| verdict | mutants |"
+              echo "|---|---:|"
+              [ "$g" -gt 0 ] && echo "| generated (whole codebase) | $g |"
+              echo "| caught — the suite killed the mutant | $c |"
+              echo "| **missed — survived the suite** | **$m** |"
+              echo "| unviable — the mutant doesn't compile | $u |"
+              echo "| suite timed out under the mutant | $t |"
+              echo "| kill rate over viable mutants | $rate |"
+              echo "| sweep exit code (124 = time cap) | $(xcode) |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ -d mutants.out ] || exit 0
+
+          # Union this slice's survivors with earlier sweeps' (artifact
+          # retention ~90d ≈ one full shuffled cycle), so the all-time
+          # list below is a running TODO, not just this week's slice.
+          # Rows carry the recording run's headSha for the link; gh's
+          # list is newest-first, so dedupe keeps the newest sha an
+          # entry was seen at.
+          mkdir -p /tmp/mutants-hist
+          : > /tmp/missed-all.tsv
+          [ -s mutants.out/missed.txt ] &&
+            awk -v s="$SHA" '{print s "\t" $0}' mutants.out/missed.txt \
+              >> /tmp/missed-all.tsv
+          # every line ends in a success-path command: under bash -e +
+          # pipefail, an artifact with no survivors (or a gh outage) must
+          # not abort the report before the union section writes
+          { gh run list --workflow mutants.yml --repo "$REPO" --limit 20 \
+              --json databaseId,headSha \
+              --jq '.[] | "\(.databaseId)\t\(.headSha)"' 2>/dev/null || true; } |
+            while IFS=$'\t' read -r id hsha; do
+              [ "$id" = "$RUN_ID" ] && continue
+              gh run download "$id" --repo "$REPO" --name mutants-out \
+                --dir "/tmp/mutants-hist/$id" < /dev/null 2>/dev/null || continue
+              printf '%s\n' "$hsha" > "/tmp/mutants-hist/$id/sha"
+              { [ -s "/tmp/mutants-hist/$id/missed.txt" ] &&
+                awk -v s="$hsha" '{print s "\t" $0}' \
+                  "/tmp/mutants-hist/$id/missed.txt" >> /tmp/missed-all.tsv; } || true
+            done
+          {
+            if [ -s mutants.out/missed.txt ]; then
+              awk -v s="$SHA" '{print s "\t" $0}' mutants.out/missed.txt \
+                > /tmp/missed-run.tsv
+              echo
+              echo "### missed this run"
+              echo
+              echo "<details><summary>every survivor — click through to the mutated line</summary>"
+              echo
+              bullets /tmp/missed-run.tsv
+              echo
+              echo "</details>"
+            fi
+            if [ -s mutants.out/timeout.txt ]; then
+              awk -v s="$SHA" '{print s "\t" $0}' mutants.out/timeout.txt \
+                > /tmp/timeout-run.tsv
+              echo
+              echo "### timed out — the suite hung under the mutant"
+              echo
+              bullets /tmp/timeout-run.tsv
+            fi
+            if compgen -G '/tmp/mutants-hist/*/missed.txt' > /dev/null; then
+              awk -F'\t' '!seen[$2]++' /tmp/missed-all.tsv \
+                > /tmp/missed-union.tsv
+              echo
+              echo "### survivor union across recent sweeps ($(wc -l < /tmp/missed-union.tsv) unique)"
+              echo
+              echo "<details><summary>running TODO — kill each with a test or bless it with \`#[mutants::skip]\`</summary>"
+              echo
+              bullets /tmp/missed-union.tsv
+              echo
+              echo "</details>"
+            fi
+            echo
+            echo "_Per-mutant logs and diffs are in the \`mutants-out\` artifact. Triage a survivor by writing a test that kills it or marking the function \`#[mutants::skip]\` with a reason._"
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

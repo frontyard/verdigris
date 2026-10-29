@@ -2,3 +2,7 @@
 # --all-targets` enumerates them and divan rejects the --list flags.
 [profile.default]
 default-filter = 'not binary_id(verd::bench/hot_paths)'
+# Two slow reports then terminate: ~130s is far past any legit test's
+# runtime, and a hard kill turns a hang-inducing mutation into a caught
+# failure instead of a suite-wide "timeout" verdict.
+slow-timeout = { period = "60s", terminate-after = 2, grace-period = "10s" }

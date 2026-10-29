@@ -58,3 +58,34 @@ impl AlpnStore {
         self.certs.remove(host);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn http01_token_lifecycle() {
+        let s = Http01Store::default();
+        assert!(s.lookup("tok").is_none());
+        s.insert("tok", "tok.thumbprint".into());
+        assert_eq!(s.lookup("tok").as_deref(), Some("tok.thumbprint"));
+        s.remove("tok");
+        assert!(s.lookup("tok").is_none());
+        // independent tokens
+        s.insert("a", "ka".into());
+        s.insert("b", "kb".into());
+        s.remove("a");
+        assert!(s.lookup("a").is_none() && s.lookup("b").is_some());
+    }
+
+    #[test]
+    fn alpn_cert_lifecycle() {
+        let s = AlpnStore::default();
+        let ck = crate::tls::selfsigned::generate(&["h.test".into()]).unwrap();
+        assert!(s.lookup("h.test").is_none());
+        s.insert("h.test", ck.clone());
+        assert!(Arc::ptr_eq(&s.lookup("h.test").unwrap(), &ck));
+        s.remove("h.test");
+        assert!(s.lookup("h.test").is_none());
+    }
+}

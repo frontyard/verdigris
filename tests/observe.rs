@@ -312,28 +312,31 @@ proxy = {{ upstream = ["http://127.0.0.1:{up_port}"] }}
         .text()
         .await
         .unwrap();
+    // escaped: the scrape body is multi-line — echoing it raw in an
+    // assert message forges log lines (and trips log-injection scans)
+    let dump = text.escape_debug();
     // request counter with bounded route label + status
     assert!(
         text.contains("verd_requests_total{") && text.contains("status=\"200\""),
-        "missing requests_total: {text}"
+        "missing requests_total: {dump}"
     );
-    assert!(text.contains("route="), "missing route label: {text}");
+    assert!(text.contains("route="), "missing route label: {dump}");
     assert!(
         text.contains("method=\"GET\""),
-        "missing method label: {text}"
+        "missing method label: {dump}"
     );
     assert!(
         text.contains("verd_request_duration_seconds_bucket{route=") && text.contains("le="),
-        "missing bucketed duration histogram: {text}"
+        "missing bucketed duration histogram: {dump}"
     );
     assert!(text.contains("verd_response_bytes_total{route="));
     assert!(
         text.contains("verd_request_bytes_total{route="),
-        "missing request_bytes_total: {text}"
+        "missing request_bytes_total: {dump}"
     );
     assert!(
         text.contains("verd_upstream_requests_total{cluster=") && text.contains("result=\"ok\""),
-        "missing upstream_requests_total: {text}"
+        "missing upstream_requests_total: {dump}"
     );
     assert!(text.contains("verd_upstream_healthy{cluster="));
     assert!(text.contains("verd_upstream_inflight{cluster="));
@@ -346,7 +349,62 @@ proxy = {{ upstream = ["http://127.0.0.1:{up_port}"] }}
     assert!(text.contains("verd_uptime_seconds"));
     assert!(
         text.contains("verd_build_info{version="),
-        "missing build_info: {text}"
+        "missing build_info: {dump}"
     );
+    let _ = sd.send(true);
+}
+
+#[tokio::test]
+async fn metrics_put_label_inflight_and_duration_values() {
+    let cfg = r#"
+[[site]]
+default = true
+tls = "off"
+
+[[site.route]]
+prefix = "/"
+respond = { status = 200, body = "ok" }
+"#;
+    let (base, admin, _rt, sd) = start(cfg).await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .put(format!("{base}/"))
+        .body("x")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    drop(resp);
+
+    let text = reqwest::get(format!("{admin}/metrics"))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    // the request is complete — the inflight gauge must be back at 0.
+    // `requests_inflight(1.0)` twice instead of +1/-1 would leak it
+    let inflight = text
+        .lines()
+        .find(|l| l.starts_with("verd_active_requests"))
+        .and_then(|l| l.rsplit_once(' ')?.1.parse::<f64>().ok())
+        .expect("inflight gauge emitted");
+    assert_eq!(
+        inflight, 0.0,
+        "completed request left inflight at {inflight}"
+    );
+    // PUT buckets to its own method label, not "other"
+    assert!(
+        text.contains("method=\"PUT\""),
+        "missing PUT label: {}",
+        text.escape_debug()
+    );
+    // the duration histogram records seconds, not milliseconds
+    let sum = text
+        .lines()
+        .find(|l| l.starts_with("verd_request_duration_seconds_sum"))
+        .and_then(|l| l.rsplit_once(' ')?.1.parse::<f64>().ok())
+        .expect("duration sum emitted");
+    assert!(sum < 1.0, "a real request takes <1s, got {sum}");
     let _ = sd.send(true);
 }

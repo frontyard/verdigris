@@ -236,4 +236,26 @@ mod tests {
         };
         assert!(load_pair(&m).is_err());
     }
+
+    #[test]
+    fn same_file_across_spellings() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.pem");
+        let b = dir.path().join("b.pem");
+        std::fs::write(&a, "x").unwrap();
+        std::fs::write(&b, "y").unwrap();
+        assert!(same_file(&a, &a));
+        // distinct files are not the same file — `==`→`!=` would claim
+        // they are
+        assert!(!same_file(&a, &b));
+        // a symlink spelling resolves to the same file
+        let link = dir.path().join("link.pem");
+        std::os::unix::fs::symlink(&a, &link).unwrap();
+        assert!(same_file(&a, &link));
+        // a `..` spelling too — every path component must exist for
+        // canonicalization
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        let weird = dir.path().join("sub/../a.pem");
+        assert!(same_file(&a, &weird));
+    }
 }

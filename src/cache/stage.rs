@@ -1342,4 +1342,63 @@ cache = { store = "c", vary_headers = ["x-tenant"] }
         let r = rig.call(req_for("/p", &[]), (0, 0), false).await;
         assert_eq!(x_cache(&r), "MISS");
     }
+
+    #[test]
+    fn usable_respects_every_directive() {
+        let m = |age: u64, fresh_for: u64| Meta {
+            key: "k".into(),
+            path: "/p".into(),
+            status: 200,
+            headers: vec![],
+            stored_at: now_secs().saturating_sub(age),
+            fresh_for,
+            swr_for: 0,
+            sie_for: 0,
+            etag: None,
+            last_modified: None,
+            vary: vec![],
+            negative: false,
+            body_len: 1,
+        };
+        let none = ReqDirectives::default();
+        // fresh entry, no directives → usable
+        assert!(usable(&m(0, 60), &none));
+        // every single blocking directive independently disqualifies —
+        // an &&→|| flip would let another clause rescue the veto
+        for dir in [
+            ReqDirectives {
+                no_cache: true,
+                ..none.clone()
+            },
+            // age 5 exceeds max-age=1
+            ReqDirectives {
+                max_age: Some(1),
+                ..none.clone()
+            },
+            // 55s of freshness left, but min-fresh wants 120
+            ReqDirectives {
+                min_fresh: Some(120),
+                ..none.clone()
+            },
+        ] {
+            assert!(!usable(&m(5, 60), &dir), "{dir:?}");
+        }
+        // stale: usable only inside a max-stale allowance
+        let stale = m(90, 60); // 30s past fresh
+        assert!(usable(
+            &stale,
+            &ReqDirectives {
+                max_stale: Some(Some(60)),
+                ..none.clone()
+            }
+        ));
+        assert!(!usable(
+            &stale,
+            &ReqDirectives {
+                max_stale: Some(Some(10)),
+                ..none.clone()
+            }
+        ));
+        assert!(!usable(&stale, &none));
+    }
 }

@@ -167,11 +167,12 @@ jobs:
         with:
           name: lcov
           path: lcov.info
-      # advisory — a codecov outage must never gate a PR; public-repo
-      # uploads are tokenless (add CODECOV_TOKEN if they flake)
+      # advisory — a codecov outage must never gate a PR; upload is
+      # authenticated via the CODECOV_TOKEN repo secret
       - uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
         with:
           files: lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
   machete:

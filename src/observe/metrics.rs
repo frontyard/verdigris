@@ -619,3 +619,104 @@ pub async fn sweep(rt: Arc<crate::server::Runtime>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn method_idx_covers_every_label() {
+        for (m, want) in [
+            ("GET", 0),
+            ("POST", 1),
+            ("PUT", 2),
+            ("DELETE", 3),
+            ("HEAD", 4),
+            ("PATCH", 5),
+            ("OPTIONS", 6),
+            ("CONNECT", 7),
+            ("TRACE", 8),
+            ("custom-verb", 9),
+            ("", 9),
+        ] {
+            assert_eq!(method_idx(m), want, "{m}");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cpu_threads_reads_self_stat() {
+        // stubs like `Some((1.0, 0))` / `Some((-1.0, 1))` must not pass:
+        // a live process always has ≥1 thread and ≥0 cpu seconds
+        let (cpu, threads) = cpu_threads().expect("/proc/self/stat parses");
+        assert!(cpu >= 0.0, "cpu seconds can't be negative: {cpu}");
+        assert!(threads >= 1, "a running process has a thread: {threads}");
+    }
+
+    #[test]
+    fn resolve_does_not_poison_slots_before_install() {
+        static SLOT: OnceLock<metrics::Counter> = OnceLock::new();
+        // emitting before install() resolves an ephemeral handle — the
+        // slot must stay empty or the first emission would permanently
+        // bind a no-op counter (the `installed() -> true` hazard)
+        resolve(&SLOT, || metrics::counter!("verd_test_self_heal")).increment(1);
+        assert!(SLOT.get().is_none() || installed());
+        let handle = install();
+        resolve(&SLOT, || metrics::counter!("verd_test_self_heal")).increment(1);
+        assert!(
+            handle.render().contains("verd_test_self_heal"),
+            "post-install emission must reach the recorder"
+        );
+    }
+
+    #[test]
+    fn request_done_records_duration_in_seconds() {
+        // a route-scoped recorder: `meters` set on the record routes the
+        // emission through THIS test's registry, not a shared static
+        let recorder = builder().build_recorder();
+        metrics::with_local_recorder(&recorder, || {
+            let meters = RouteMeters::new("t");
+            let ctx = crate::server::service::ConnCtx {
+                remote: "127.0.0.1:1".parse().unwrap(),
+                tls: false,
+                tls_version: None,
+                request_counter: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                first_request_done: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                read_gate: crate::server::timeout::DeadlineGate::default(),
+                conn_guard: crate::server::ConnGuard::for_test("127.0.0.1".parse().unwrap()),
+            };
+            let parts = http::Request::builder()
+                .method("PUT")
+                .uri("http://x/upload")
+                .body(())
+                .unwrap()
+                .into_parts()
+                .0;
+            let req_id = crate::observe::RequestId::extract(&parts.headers);
+            let mut rec = crate::observe::LogRecord::new(&ctx, &parts, &req_id);
+            rec.set_route("t", std::sync::Arc::new(meters));
+            rec.finalize(
+                std::time::Instant::now() - std::time::Duration::from_millis(50),
+                200,
+                10,
+            );
+            request_done(&rec);
+        });
+        let text = recorder.handle().render();
+        // 50ms must land as ~0.05s — `ms / 1000`, not `ms * 1000`
+        let sum = text
+            .lines()
+            .find(|l| l.starts_with("verd_request_duration_seconds_sum"))
+            .and_then(|l| l.rsplit_once(' ')?.1.parse::<f64>().ok())
+            .expect("duration histogram emitted");
+        assert!(
+            sum > 0.0 && sum < 1.0,
+            "duration must be seconds, not ms×1000: {sum}"
+        );
+        // method label went through method_idx: PUT → "PUT", not "other"
+        assert!(
+            text.contains("method=\"PUT\""),
+            "PUT must bucket to its own label: {text}"
+        );
+    }
+}

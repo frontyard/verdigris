@@ -408,4 +408,50 @@ mod tests {
         rl.sweep(Duration::ZERO);
         assert_eq!(rl.bucket_count(), 0);
     }
+
+    #[test]
+    fn zero_rate_rejected() {
+        let mut c = cfg_key("ip", "1/s");
+        c.rate = Some(crate::config::RateSpec {
+            permits: 0,
+            period: Duration::from_secs(1),
+        });
+        assert!(RateLimiter::build(&c).is_err(), "0 permits/s must fail");
+    }
+
+    #[test]
+    fn identity_keyed_only_for_identity() {
+        let yes = RateLimiter::build(&cfg_key("identity", "1/s")).unwrap();
+        assert!(yes.identity_keyed());
+        for key in ["ip", "route", "header:X-Tenant"] {
+            let rl = RateLimiter::build(&cfg_key(key, "1/s")).unwrap();
+            assert!(!rl.identity_keyed(), "{key} must not be identity-keyed");
+        }
+    }
+
+    #[test]
+    fn full_table_evicts_only_for_new_keys() {
+        // An `&& → ||` flip in the overflow guard must not evict a stale
+        // bucket when the request's key already owns a slot.
+        let rl = RateLimiter::build(&cfg_key("ip", "1000/s")).unwrap();
+        let ip = IpAddr::from_str("10.0.0.1").unwrap();
+        rl.check(ip, None, &parts(), "r1"); // seed the real key
+        for i in 0..(MAX_BUCKETS - 1) {
+            rl.buckets.insert(
+                format!("ip:172.{}.{}.{}", i / 65536, (i / 256) % 256, i % 256),
+                Bucket {
+                    tokens: 0.0,
+                    last: Instant::now(),
+                },
+            );
+        }
+        assert_eq!(rl.buckets.len(), MAX_BUCKETS);
+        // existing key at cap: no eviction
+        rl.check(ip, None, &parts(), "r1");
+        assert_eq!(rl.buckets.len(), MAX_BUCKETS);
+        // new key at cap: oldest entry is evicted to admit it
+        rl.check(IpAddr::from_str("192.0.2.9").unwrap(), None, &parts(), "r1");
+        assert_eq!(rl.buckets.len(), MAX_BUCKETS);
+        assert!(rl.buckets.contains_key("ip:192.0.2.9"));
+    }
 }
