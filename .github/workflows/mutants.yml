@@ -67,8 +67,11 @@ jobs:
               n=$((n + 1))
             done < "$1"
             left=$((total - n))
-            [ "$left" -gt 0 ] &&
+            # if/fi, not && — a false test as the function's last command
+            # would exit 1 and abort the report under bash -e
+            if [ "$left" -gt 0 ]; then
               echo "_…and $left more — full list in the \`mutants-out\` artifact._"
+            fi
           }
 
           {
@@ -111,18 +114,20 @@ jobs:
           [ -s mutants.out/missed.txt ] &&
             awk -v s="$SHA" '{print s "\t" $0}' mutants.out/missed.txt \
               >> /tmp/missed-all.tsv
-          gh run list --workflow mutants.yml --repo "$REPO" --limit 20 \
-            --json databaseId,headSha \
-            --jq '.[] | "\(.databaseId)\t\(.headSha)"' 2>/dev/null |
+          # every line ends in a success-path command: under bash -e +
+          # pipefail, an artifact with no survivors (or a gh outage) must
+          # not abort the report before the union section writes
+          { gh run list --workflow mutants.yml --repo "$REPO" --limit 20 \
+              --json databaseId,headSha \
+              --jq '.[] | "\(.databaseId)\t\(.headSha)"' 2>/dev/null || true; } |
             while IFS=$'\t' read -r id hsha; do
               [ "$id" = "$RUN_ID" ] && continue
-              if gh run download "$id" --repo "$REPO" --name mutants-out \
-                --dir "/tmp/mutants-hist/$id" < /dev/null 2>/dev/null; then
-                printf '%s\n' "$hsha" > "/tmp/mutants-hist/$id/sha"
-                [ -s "/tmp/mutants-hist/$id/missed.txt" ] &&
-                  awk -v s="$hsha" '{print s "\t" $0}' \
-                    "/tmp/mutants-hist/$id/missed.txt" >> /tmp/missed-all.tsv
-              fi
+              gh run download "$id" --repo "$REPO" --name mutants-out \
+                --dir "/tmp/mutants-hist/$id" < /dev/null 2>/dev/null || continue
+              printf '%s\n' "$hsha" > "/tmp/mutants-hist/$id/sha"
+              { [ -s "/tmp/mutants-hist/$id/missed.txt" ] &&
+                awk -v s="$hsha" '{print s "\t" $0}' \
+                  "/tmp/mutants-hist/$id/missed.txt" >> /tmp/missed-all.tsv; } || true
             done
           {
             if [ -s mutants.out/missed.txt ]; then
