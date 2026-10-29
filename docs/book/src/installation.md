@@ -7,7 +7,7 @@ Linux. Download the archive for your platform, verify the checksum, and
 place the binary on your `PATH`:
 
 ```sh
-curl -LO https://github.com/frontyard/verdigris/releases/download/v1.0.0/verd-x86_64-unknown-linux-musl.tar.gz
+curl -LO https://github.com/frontyard/verdigris/releases/download/v1.1.0/verd-x86_64-unknown-linux-musl.tar.gz
 sha256sum -c checksums.txt --ignore-missing
 tar xzf verd-*.tar.gz
 sudo install -m755 verd /usr/local/bin/
@@ -25,7 +25,7 @@ upgrades keep your edits), and enables the `verd.service` systemd
 unit, which starts on port 80 answering 404/421 until you add a site:
 
 ```sh
-curl -LO https://github.com/frontyard/verdigris/releases/download/v1.0.0/verd_1.0.0-1_amd64.deb
+curl -LO https://github.com/frontyard/verdigris/releases/download/v1.1.0/verd_1.0.0-1_amd64.deb
 sudo apt install ./verd_1.0.0-1_amd64.deb
 sudoedit /etc/verd/verd.toml && sudo systemctl reload verd
 ```
@@ -41,7 +41,7 @@ The same layout is published as `.rpm` (`x86_64`/`aarch64`) for
 Fedora, RHEL, openSUSE, and friends:
 
 ```sh
-curl -LO https://github.com/frontyard/verdigris/releases/download/v1.0.0/verd-1.0.0-1.x86_64.rpm
+curl -LO https://github.com/frontyard/verdigris/releases/download/v1.1.0/verd-1.0.0-1.x86_64.rpm
 sudo dnf install ./verd-1.0.0-1.x86_64.rpm
 sudoedit /etc/verd/verd.toml && sudo systemctl enable --now verd
 ```

@@ -11,6 +11,8 @@ workflow publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-29
+
 ### Added
 
 - **`.deb` and `.rpm` packages** — every release now also publishes
@@ -975,7 +977,8 @@ reverse proxy with load balancing and retries, response caching
 (RAM/disk/hybrid), compression, rate limiting, CORS, security headers,
 admin API with atomic reloads, Prometheus metrics.
 
-[Unreleased]: https://github.com/frontyard/verdigris/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/frontyard/verdigris/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/frontyard/verdigris/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/frontyard/verdigris/compare/v0.4.1...v1.0.0
 [0.4.1]: https://github.com/frontyard/verdigris/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/frontyard/verdigris/compare/v0.3.1...v0.4.0
