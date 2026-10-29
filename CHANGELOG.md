@@ -22,6 +22,12 @@ workflow publishes the matching section as the GitHub release notes.
   (enabled on Debian; subject to preset policy on RPM distros).
   Signed and attested like the other artifacts.
 
+### Build & CI
+
+- **Codecov token + badge** — the lcov upload in `ci.yml` now
+  authenticates with the `CODECOV_TOKEN` repo secret, and a Codecov
+  coverage badge shows in `README.md`.
+
 ## [1.0.0] - 2026-10-29
 
 ### Added

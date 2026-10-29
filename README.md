@@ -2,6 +2,7 @@
 
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/frontyard/verdigris/badge)](https://scorecard.dev/viewer/?uri=github.com/frontyard/verdigris)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15915/badge)](https://www.bestpractices.dev/projects/15915)
+[![codecov](https://codecov.io/gh/frontyard/verdigris/graph/badge.svg)](https://codecov.io/gh/frontyard/verdigris)
 
 Verdigris is a self-hosting web server and reverse proxy in a single
 static binary: nginx-class performance with Caddy-like zero-configuration
