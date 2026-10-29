@@ -362,4 +362,40 @@ mod tests {
         assert_eq!(h["vary"], "Origin");
         assert_eq!(h["access-control-expose-headers"], "x-total");
     }
+
+    #[test]
+    fn only_a_full_preflight_is_intercepted() {
+        let c = cors(&["*"]);
+        let mk = |method: &str, headers: &[(&str, &str)]| {
+            let mut b = http::Request::builder().method(method).uri("http://x/");
+            for (k, v) in headers {
+                b = b.header(*k, *v);
+            }
+            b.body(()).unwrap().into_parts().0
+        };
+        // a bare OPTIONS is an ordinary request, not a CORS preflight
+        assert!(c.preflight(&mk("OPTIONS", &[])).is_none());
+        // OPTIONS + Origin without a requested method → not a preflight
+        assert!(
+            c.preflight(&mk("OPTIONS", &[("origin", "https://a.com")]))
+                .is_none()
+        );
+        // OPTIONS + ACRM without Origin → not a preflight
+        assert!(
+            c.preflight(&mk("OPTIONS", &[("access-control-request-method", "GET")]))
+                .is_none()
+        );
+        // a real CORS request (GET + Origin + ACRM) passes through too
+        assert!(
+            c.preflight(&mk(
+                "GET",
+                &[
+                    ("origin", "https://a.com"),
+                    ("access-control-request-method", "GET")
+                ]
+            ))
+            .is_none()
+        );
+        assert!(c.preflight(&preflight_parts("https://a.com")).is_some());
+    }
 }

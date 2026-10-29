@@ -524,6 +524,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn purge_prefix_counts_and_removes() {
+        let c = store_named(
+            "[cache.c]\ntier = \"ram\"\nmax_object_bytes = \"8B\"\n",
+            "c",
+        );
+        for p in ["/api/a", "/api/b", "/img/x"] {
+            let k = key_for(p);
+            let mut m = meta(&k);
+            m.path = p.into();
+            c.record(m, Bytes::from_static(b"abc")).await;
+        }
+        // exactly the prefix's entries go — the count is reported, not
+        // fabricated
+        assert_eq!(c.purge_prefix("/api").await, 2);
+        assert!(matches!(
+            c.lookup(&key_for("/api/a"), &http::HeaderMap::new()).await,
+            Lookup::Miss
+        ));
+        assert!(matches!(
+            c.lookup(&key_for("/img/x"), &http::HeaderMap::new()).await,
+            Lookup::Found(_)
+        ));
+        assert_eq!(c.purge_prefix("/api").await, 0);
+    }
+
+    #[tokio::test]
     async fn build_all_reuses_unchanged_stores() {
         let cfg = parse_test_config("[cache.c]\ntier = \"ram\"\nmax_object_bytes = \"8B\"\n");
         let first = Cache::build_all(&cfg, None, crate::BuildMode::Live).unwrap();

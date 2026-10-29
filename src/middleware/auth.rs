@@ -482,4 +482,30 @@ mod tests {
         assert!(!ct_eq(b"abc", b"abd"));
         assert!(!ct_eq(b"abc", b"abcd"));
     }
+
+    #[test]
+    fn classify_hash_covers_argon2_and_every_bcrypt_ident() {
+        let argon = argon2::PasswordHasher::hash_password(&argon2::Argon2::default(), b"p")
+            .unwrap()
+            .to_string();
+        assert!(matches!(classify_hash(&argon), Ok(Hash::Argon2(_))));
+        for v in [
+            bcrypt::Version::TwoA,
+            bcrypt::Version::TwoB,
+            bcrypt::Version::TwoY,
+        ] {
+            let h = bcrypt::hash_with_result(b"p", 4)
+                .unwrap()
+                .format_for_version(v);
+            assert!(matches!(classify_hash(&h), Ok(Hash::Bcrypt(_))), "{h}");
+        }
+        // well-formed prefix but truncated body → parse fails → Err
+        let mut bad = bcrypt::hash_with_result(b"p", 4)
+            .unwrap()
+            .format_for_version(bcrypt::Version::TwoB);
+        bad.truncate(20);
+        assert!(classify_hash(&bad).is_err());
+        assert!(classify_hash("plaintext").is_err());
+        assert!(classify_hash("$2x$bogus").is_err());
+    }
 }

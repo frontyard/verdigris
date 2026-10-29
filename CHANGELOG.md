@@ -193,6 +193,13 @@ workflow publishes the matching section as the GitHub release notes.
   repo paths; `release.sh` keeps the `installation.md` download URL in
   lockstep with the version bump; and a `surface_audit` test asserts
   the JSON schema never marks a defaulted field required.
+- **Mutation sweep results land on the run page** — `mutants.yml` now
+  self-timeboxes inside the job cap (no more canceled-run red X),
+  writes verdict counts, kill rate, and every surviving mutant as a
+  source link to the step summary, and unions survivors across recent
+  sweeps into a running TODO list. `cargo_mutants.toml` excludes
+  provably-equivalent mutants, and a nextest per-test timeout turns
+  hang-inducing mutants into ordinary test failures.
 
 ### Changed
 
@@ -524,6 +531,11 @@ workflow publishes the matching section as the GitHub release notes.
   full `u64` range from unsigned-capable formats; the new shorthand
   visitor narrowed integers to `i64` first. TOML integers are signed
   and unaffected.
+- **HTTP/2 active health checks never succeeded** — probes to h2
+  upstreams sent a path-only URI, which the h2 codec rejects for
+  missing `:scheme`/`:authority`, so every affected member was
+  perpetually marked sick and ejected. Probes now send the absolute
+  URI built from the upstream's authority.
 
 ## [0.4.1] - 2026-10-27
 

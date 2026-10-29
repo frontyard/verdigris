@@ -205,4 +205,36 @@ mod tests {
         r.insert(&["a.com".into()], k2.clone());
         assert!(Arc::ptr_eq(&r.lookup("a.com").unwrap(), &k2));
     }
+
+    #[test]
+    fn cert_expiries_reports_each_binding() {
+        let r = CertResolver::default();
+        r.insert(&["exp.test".into()], ck());
+        let exps = r.cert_expiries();
+        assert_eq!(exps.len(), 1);
+        assert_eq!(exps[0].0, "exp.test");
+        assert!(
+            exps[0].1 > 0.0,
+            "a fresh self-signed cert must have positive ttl, got {}",
+            exps[0].1
+        );
+    }
+
+    #[test]
+    fn set_on_demand_installs_issuer() {
+        #[derive(Debug)]
+        struct Noop;
+        impl OnDemandIssue for Noop {
+            fn issue(&self, _host: &str) -> Option<Arc<CertifiedKey>> {
+                None
+            }
+        }
+        let r = CertResolver::default();
+        assert!(r.on_demand.read().unwrap().is_none());
+        r.set_on_demand(Arc::new(Noop));
+        assert!(
+            r.on_demand.read().unwrap().is_some(),
+            "set_on_demand must install the issuer, not drop it"
+        );
+    }
 }

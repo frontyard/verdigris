@@ -124,6 +124,18 @@ mod tests {
         assert_eq!(rx.await.unwrap().as_ref(), b"hello");
     }
 
+    #[test]
+    fn size_hint_delegates_to_inner() {
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        let b = new(crate::body::full("hello"), tx, 100, Some(5));
+        // a `-> Default` stub returns an unbounded hint — callers that
+        // preallocate or compare Content-Length lose the real bound
+        assert_eq!(b.size_hint().exact(), Some(5));
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        let b = new(crate::body::empty(), tx, 100, None);
+        assert_eq!(b.size_hint().exact(), Some(0));
+    }
+
     #[tokio::test]
     async fn commits_without_final_poll_via_expected() {
         // simulate hyper dropping the body after the exact-length frame:

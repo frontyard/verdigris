@@ -745,4 +745,51 @@ ip_deny = ["10.0.1.5/32"]
         assert!(m.check_ip(ip("10.0.1.5")).is_err(), "route deny applies");
         assert!(m.check_ip(ip("192.168.0.1")).is_err());
     }
+
+    #[test]
+    fn security_apply_emits_configured_headers_only() {
+        let s = Security::build(&cfg::SecurityConfig::default(), None, None).unwrap();
+        let mut h = http::HeaderMap::new();
+        s.apply(&mut h, false);
+        assert_eq!(h["x-content-type-options"], "nosniff");
+        assert_eq!(h["x-frame-options"], "DENY");
+        assert_eq!(h["referrer-policy"], "strict-origin-when-cross-origin");
+        // HSTS is TLS-only
+        assert!(h.get("strict-transport-security").is_none());
+        let mut h = http::HeaderMap::new();
+        s.apply(&mut h, true);
+        assert!(
+            h["strict-transport-security"]
+                .to_str()
+                .unwrap()
+                .contains("max-age=15552000")
+        );
+
+        // empty-valued fields emit nothing — and no empty header may
+        // appear in their place either
+        let s = Security::build(
+            &cfg::SecurityConfig {
+                frame_options: String::new(),
+                referrer_policy: String::new(),
+                ..cfg::SecurityConfig::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+        let mut h = http::HeaderMap::new();
+        s.apply(&mut h, true);
+        assert!(h.get("x-frame-options").is_none());
+        assert!(h.get("referrer-policy").is_none());
+
+        // a handler's own value wins (insert-if-absent)
+        let s = Security::build(&cfg::SecurityConfig::default(), None, None).unwrap();
+        let mut h = http::HeaderMap::new();
+        h.insert(
+            http::header::X_FRAME_OPTIONS,
+            HeaderValue::from_static("ALLOWALL"),
+        );
+        s.apply(&mut h, false);
+        assert_eq!(h["x-frame-options"], "ALLOWALL");
+    }
 }

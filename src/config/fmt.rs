@@ -264,4 +264,19 @@ mod tests {
         assert!(out.contains("status = 200"), "{out}");
         assert!(out.contains("body = \"hi\""), "{out}");
     }
+
+    #[test]
+    fn trailing_whitespace_and_comments_cleaned() {
+        // whitespace before a comment collapses to exactly one space —
+        // a `chars().all(is_whitespace)` guard flipped to `false` would
+        // leave the run of spaces in place
+        let out = format_str("x = 1   # note\n").unwrap();
+        assert!(out.contains("x = 1 # note"), "{out}");
+        assert!(!out.contains("x = 1  "), "{out}");
+
+        // a line of pure whitespace between entries is stripped entirely
+        let out = format_str("x = 1   \ny = 2\n").unwrap();
+        assert!(out.contains("x = 1\n"), "{out}");
+        assert!(!out.contains("   \n"), "{out}");
+    }
 }

@@ -447,6 +447,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn file_body_chunks_at_file_chunk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f");
+        std::fs::write(&path, vec![7u8; (FILE_CHUNK + 10) as usize]).unwrap();
+        let f = std::fs::File::open(&path).unwrap();
+        let mut b = file(f, 0, FILE_CHUNK + 10);
+        // frames are exactly FILE_CHUNK until the tail — a `*`→`+` on
+        // the constant would silently shrink every read syscall
+        let first = b.frame().await.unwrap().unwrap().into_data().unwrap();
+        assert_eq!(first.len() as u64, FILE_CHUNK);
+        let second = b.frame().await.unwrap().unwrap().into_data().unwrap();
+        assert_eq!(second.len(), 10);
+        assert!(b.frame().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn mmap_body_terminates_and_hints_remaining() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f");
+        std::fs::write(&path, b"0123456789").unwrap();
+        let f = std::fs::File::open(&path).unwrap();
+        let map = FileMap::new(&f).unwrap();
+        // must terminate: a `pos + FRAME`→`pos * FRAME` slip yields
+        // empty 0-length frames forever
+        let collected = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            mapped(&map, 0, 10).collect(),
+        )
+        .await
+        .expect("mapped body must terminate")
+        .unwrap();
+        assert_eq!(&collected.to_bytes()[..], b"0123456789");
+
+        // size_hint counts *remaining* bytes — `end - pos`, not `end + pos`
+        let mut b = mapped(&map, 0, 10);
+        assert_eq!(b.size_hint().exact(), Some(10));
+        let first = b.frame().await.unwrap().unwrap().into_data().unwrap();
+        assert_eq!(first.len(), 10);
+        assert_eq!(b.size_hint().exact(), Some(0));
+
+        // same invariant past one MMAP_FRAME boundary
+        let big = dir.path().join("big");
+        std::fs::write(&big, vec![1u8; (MMAP_FRAME + 5) as usize]).unwrap();
+        let map = FileMap::new(&std::fs::File::open(&big).unwrap()).unwrap();
+        let mut b = mapped(&map, 0, MMAP_FRAME + 5);
+        let first = b.frame().await.unwrap().unwrap().into_data().unwrap();
+        assert_eq!(first.len() as u64, MMAP_FRAME);
+        assert_eq!(b.size_hint().exact(), Some(5));
+    }
+
+    #[tokio::test]
     async fn limit_body_enforces_and_counts() {
         let inner = full("0123456789");
         let b = LimitBody::new(inner, 5);

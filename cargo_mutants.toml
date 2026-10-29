@@ -1,0 +1,15 @@
+# Weekly cargo-mutants sweep config (`.github/workflows/mutants.yml`).
+#
+# `exclude_re` skips whole functions, so it is reserved for functions
+# whose generated mutants are all provably equivalent or unobservable —
+# each entry carries its reason. Everything else is triaged by tests or
+# `#[mutants::skip]` (not used yet: needs the cargo-mutants attr feature).
+exclude_re = [
+    # `armed.is_none() &&` guard converges both branches — every operator
+    # mutant on the `>=` comparison is semantically equivalent.
+    "TimeoutIo.*arm_send_deadline",
+    # `-> false` is equivalent: ephemeral handles still emit into the
+    # installed recorder (install-aware caching is a perf detail only).
+    # `-> true` is the real hazard — covered by a unit test instead.
+    "metrics::installed",
+]

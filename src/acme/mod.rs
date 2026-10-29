@@ -768,4 +768,62 @@ mod tests {
         );
         assert!(!m.renew_due(&hosts));
     }
+
+    #[test]
+    fn renew_due_jitter_is_modulo_not_offset() {
+        // jitter = hostname_len % 3600 seconds. `%`→`+` turns the jitter
+        // into len+3600, pushing the due boundary back a whole hour —
+        // a cert expiring inside the renewal window must still be due.
+        let dir = tempfile::tempdir().unwrap();
+        let now = time::OffsetDateTime::now_utc();
+        let m = mgr(dir.path(), Duration::from_secs(3600));
+        let hosts = vec!["h.e".to_string()]; // len 3 → jitter 3s
+        store_cert(
+            &m.storage,
+            &hosts[0],
+            // ~31-day lifetime → threshold = renew_before = 3600s
+            now - time::Duration::days(31),
+            // inside the window: 3590s < 3600-3 — but NOT < 3600-3603
+            now + time::Duration::seconds(3590),
+        );
+        assert!(m.renew_due(&hosts));
+    }
+
+    #[tokio::test]
+    async fn ensure_respects_retry_backoff_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = time::OffsetDateTime::now_utc();
+        let m = Arc::new(mgr(dir.path(), Duration::from_secs(3600)));
+        let hosts = vec!["h.e".to_string()];
+        // a valid stored cert — installed iff ensure() actually runs
+        store_cert(
+            &m.storage,
+            &hosts[0],
+            now - time::Duration::days(1),
+            now + time::Duration::days(30),
+        );
+        // a future next_attempt means "don't retry yet" — a `>`→`<`
+        // flip would open the gate for a pending backoff instead of
+        // for an elapsed one
+        {
+            let entry = m.managed.entry(hosts[0].clone()).or_default();
+            *entry.next_attempt.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(Instant::now() + Duration::from_secs(3600));
+        }
+        m.ensure(&hosts).await;
+        assert_eq!(
+            m.resolver.binding_count(),
+            0,
+            "backed-off ensure() must not run"
+        );
+
+        // an elapsed backoff lets the next attempt through
+        {
+            let entry = m.managed.entry(hosts[0].clone()).or_default();
+            *entry.next_attempt.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(Instant::now() - Duration::from_secs(1));
+        }
+        m.ensure(&hosts).await;
+        assert_eq!(m.resolver.binding_count(), 1);
+    }
 }

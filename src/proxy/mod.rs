@@ -1028,4 +1028,20 @@ mod handle_tests {
         // spawn_background on a cluster without active health → noop
         clusters.spawn_background(tokio_util::sync::CancellationToken::new());
     }
+
+    #[test]
+    fn retry_slot_gates_on_predicate_and_cap() {
+        let p = proxy_for(vec!["http://127.0.0.1:1".into()], |p| {
+            p.retries.max_per_request = 1;
+        });
+        // non-idempotent or non-replayable never gets a slot
+        assert!(p.retry_slot(false, true, 0).is_none());
+        assert!(p.retry_slot(true, false, 0).is_none());
+        assert!(p.retry_slot(false, false, 0).is_none());
+        // idempotent + replayable under the cap → a slot (the empty
+        // cluster budget admits the first retry)
+        assert!(p.retry_slot(true, true, 0).is_some());
+        // per-request cap reached → no slot even with budget left
+        assert!(p.retry_slot(true, true, 1).is_none());
+    }
 }

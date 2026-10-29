@@ -175,9 +175,7 @@ impl Disk {
                 }
             }
         }
-        if kept + dropped > 0 {
-            tracing::info!(kept, dropped, "cache: disk index rebuilt");
-        }
+        tracing::info!(kept, dropped, "cache: disk index rebuilt");
     }
 
     /// Find the slot file for a key+meta pair (vary-matched by caller).
@@ -238,24 +236,7 @@ impl Disk {
                 off: m.off,
                 len,
             },
-            None => {
-                // un-mappable object: same hit path via positioned reads
-                let file = std::fs::File::open(&slot.file).ok()?;
-                let mut head = [0u8; 12];
-                std::os::unix::fs::FileExt::read_exact_at(&file, &mut head, 0).ok()?;
-                if &head[..8] != MAGIC {
-                    return None;
-                }
-                let off = 12 + u32::from_be_bytes(head[8..12].try_into().unwrap()) as u64;
-                if file.metadata().ok()?.len() < off + len {
-                    return None;
-                }
-                crate::cache::ram::StoredBody::File {
-                    file: std::sync::Arc::new(file),
-                    off,
-                    len,
-                }
-            }
+            None => object_fd_body(&slot.file, len)?,
         };
         Some(Stored { meta, body })
     }
@@ -492,6 +473,25 @@ fn map_object(path: &std::path::Path, body_len: u64) -> Option<MappedSlot> {
         return None;
     }
     Some(MappedSlot { map, off })
+}
+
+/// Un-mappable object: same hit path via positioned reads.
+fn object_fd_body(file: &std::path::Path, len: u64) -> Option<crate::cache::ram::StoredBody> {
+    let file = std::fs::File::open(file).ok()?;
+    let mut head = [0u8; 12];
+    std::os::unix::fs::FileExt::read_exact_at(&file, &mut head, 0).ok()?;
+    if &head[..8] != MAGIC {
+        return None;
+    }
+    let off = 12 + u32::from_be_bytes(head[8..12].try_into().unwrap()) as u64;
+    if file.metadata().ok()?.len() < off + len {
+        return None;
+    }
+    Some(crate::cache::ram::StoredBody::File {
+        file: std::sync::Arc::new(file),
+        off,
+        len,
+    })
 }
 
 /// Serialize `[magic][len][meta json][body]` to `path` via tmp+rename.
@@ -879,5 +879,40 @@ mod tests {
         // nonexistent path
         assert!(read_object_head(&dir.path().join("ghost")).is_err());
         assert!(read_object(&p).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn object_fd_body_reads_body_at_header_offset() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("o");
+        let meta_json = serde_json::to_vec(&meta("k")).unwrap();
+        let body = b"body-bytes!";
+        let mut buf = Vec::new();
+        buf.extend_from_slice(MAGIC);
+        buf.extend_from_slice(&(meta_json.len() as u32).to_be_bytes());
+        buf.extend_from_slice(&meta_json);
+        buf.extend_from_slice(body);
+        std::fs::write(&p, &buf).unwrap();
+
+        let Some(crate::cache::ram::StoredBody::File { file, off, len }) =
+            object_fd_body(&p, body.len() as u64)
+        else {
+            panic!("fd fallback must yield a body");
+        };
+        // the body starts after the 12-byte header + meta — an off-by-one
+        // in `12 + mlen` reads meta bytes as body (or rejects the file)
+        assert_eq!(off, (12 + meta_json.len()) as u64);
+        assert_eq!(len, body.len() as u64);
+        let mut got = vec![0u8; len as usize];
+        std::os::unix::fs::FileExt::read_exact_at(file.as_ref(), &mut got, off).unwrap();
+        assert_eq!(got, body);
+
+        // bad magic or a truncated tail → miss, not a short read
+        let mut bad = buf.clone();
+        bad[0] = b'X';
+        std::fs::write(&p, &bad).unwrap();
+        assert!(object_fd_body(&p, body.len() as u64).is_none());
+        std::fs::write(&p, &buf[..buf.len() - 2]).unwrap();
+        assert!(object_fd_body(&p, body.len() as u64).is_none());
     }
 }

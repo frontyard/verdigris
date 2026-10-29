@@ -387,8 +387,8 @@ impl Static {
         parts: &http::request::Parts,
     ) -> Option<(&'static str, PathBuf, std::fs::Metadata)> {
         let accept = header_str(parts, http::header::ACCEPT_ENCODING)?;
-        let mut best: Option<(u16, usize, &'static str, PathBuf, std::fs::Metadata)> = None;
-        for (order, &(enc, ext)) in PRECOMPRESSED.iter().enumerate() {
+        let mut best: Option<(u16, &'static str, PathBuf, std::fs::Metadata)> = None;
+        for &(enc, ext) in PRECOMPRESSED.iter() {
             let q = encoding_quality(accept, enc);
             if q == 0 {
                 continue;
@@ -396,17 +396,14 @@ impl Static {
             let candidate = appended_extension(fs_path, ext);
             if let Ok(m) = std::fs::metadata(&candidate)
                 && m.is_file()
+                // PRECOMPRESSED is preference-ordered; strictly-greater
+                // keeps the earliest (preferred) encoding on a quality tie
+                && best.as_ref().is_none_or(|(bq, _, _, _)| q > *bq)
             {
-                let better = match &best {
-                    None => true,
-                    Some((bq, bo, _, _, _)) => q > *bq || (q == *bq && order < *bo),
-                };
-                if better {
-                    best = Some((q, order, enc, candidate, m));
-                }
+                best = Some((q, enc, candidate, m));
             }
         }
-        best.map(|(_, _, enc, p, m)| (enc, p, m))
+        best.map(|(_, enc, p, m)| (enc, p, m))
     }
 
     /// Content-Type for the ORIGINAL file (extensions like `.gz` never leak).
@@ -825,6 +822,15 @@ mod tests {
         assert!(glob_match("*.js", "app.js"));
         assert!(!glob_match("*.js", "app.css"));
     }
+
+    #[test]
+    fn uri_escape_percent_encodes() {
+        // unreserved bytes + '/' pass through; everything else is %XX
+        assert_eq!(uri_escape("ok/dir/f.txt"), "ok/dir/f.txt");
+        assert_eq!(uri_escape("a b.txt"), "a%20b.txt");
+        assert_eq!(uri_escape("x+y&z"), "x%2By%26z");
+        assert_eq!(uri_escape("füle"), "f%C3%BCle");
+    }
 }
 
 #[cfg(test)]
@@ -1105,5 +1111,41 @@ mod handler_tests {
             c.cache_control.insert("*".into(), "bad\r\nvalue".into());
         });
         assert!(Static::build(&c, "/", "s").is_err());
+    }
+
+    #[tokio::test]
+    async fn precompressed_tie_prefers_earlier_encoding() {
+        let d = tmp();
+        std::fs::write(d.path().join("f.txt"), "plain").unwrap();
+        std::fs::write(d.path().join("f.txt.br"), "br!").unwrap();
+        std::fs::write(d.path().join("f.txt.gz"), "gz!").unwrap();
+        let s = Static::build(&cfg_with(d.path(), |c| c.precompressed = true), "/", "s").unwrap();
+        // br and gzip both at q=1: PRECOMPRESSED order is the server
+        // preference — br must win; a `>`→`>=` flip serves gzip instead
+        let r = s
+            .handle(
+                http::Request::builder()
+                    .method(Method::GET)
+                    .uri("/f.txt")
+                    .header("accept-encoding", "gzip, br")
+                    .body(crate::body::empty())
+                    .unwrap(),
+                &ctx("/f.txt"),
+            )
+            .await;
+        assert_eq!(r.headers()["content-encoding"], "br");
+        assert_eq!(body_text(r).await, "br!");
+    }
+
+    #[tokio::test]
+    async fn non_file_non_dir_fs_entry_is_404() {
+        let d = tmp();
+        // a unix socket passes metadata() but is neither file nor dir —
+        // the `m.is_file()` guard must route it to try_files/404, never
+        // to serve_file (open(2) on a socket fails with ENXIO → 500)
+        let _sock = std::os::unix::net::UnixListener::bind(d.path().join("s.sock")).unwrap();
+        let s = Static::build(&cfg_with(d.path(), |_| {}), "/", "s").unwrap();
+        let r = s.handle(req(Method::GET, "/s.sock"), &ctx("/s.sock")).await;
+        assert_eq!(r.status(), 404);
     }
 }

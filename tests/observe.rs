@@ -350,3 +350,54 @@ proxy = {{ upstream = ["http://127.0.0.1:{up_port}"] }}
     );
     let _ = sd.send(true);
 }
+
+#[tokio::test]
+async fn metrics_put_label_inflight_and_duration_values() {
+    let cfg = r#"
+[[site]]
+default = true
+tls = "off"
+
+[[site.route]]
+prefix = "/"
+respond = { status = 200, body = "ok" }
+"#;
+    let (base, admin, _rt, sd) = start(cfg).await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .put(format!("{base}/"))
+        .body("x")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    drop(resp);
+
+    let text = reqwest::get(format!("{admin}/metrics"))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    // the request is complete — the inflight gauge must be back at 0.
+    // `requests_inflight(1.0)` twice instead of +1/-1 would leak it
+    let inflight = text
+        .lines()
+        .find(|l| l.starts_with("verd_active_requests"))
+        .and_then(|l| l.rsplit_once(' ')?.1.parse::<f64>().ok())
+        .expect("inflight gauge emitted");
+    assert_eq!(
+        inflight, 0.0,
+        "completed request left inflight at {inflight}"
+    );
+    // PUT buckets to its own method label, not "other"
+    assert!(text.contains("method=\"PUT\""), "missing PUT label: {text}");
+    // the duration histogram records seconds, not milliseconds
+    let sum = text
+        .lines()
+        .find(|l| l.starts_with("verd_request_duration_seconds_sum"))
+        .and_then(|l| l.rsplit_once(' ')?.1.parse::<f64>().ok())
+        .expect("duration sum emitted");
+    assert!(sum < 1.0, "a real request takes <1s, got {sum}");
+    let _ = sd.send(true);
+}

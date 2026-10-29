@@ -722,6 +722,8 @@ mod coverage_tests {
         assert_eq!(escape("a\"b"), "a\\\"b");
         assert!(escape("a\x01b").contains("\\x01"));
         assert_eq!(escape("uni—dash"), "uni—dash");
+        // 0x20 is printable — a `<`→`<=` slip must not escape spaces
+        assert_eq!(escape("a b"), "a b");
 
         let mut r = rec();
         r.finalize(std::time::Instant::now(), 503, 42);
@@ -729,5 +731,66 @@ mod coverage_tests {
         assert_eq!(r.bytes, 42);
         let f = r.fields();
         assert_eq!(f.status, 503);
+    }
+
+    #[test]
+    fn finish_headers_captures_status_length_and_cache() {
+        let mut r = rec();
+        let mut resp = http::Response::new(crate::body::full("hello"));
+        *resp.status_mut() = http::StatusCode::CREATED;
+        let h = resp.headers_mut();
+        h.insert(
+            http::header::CONTENT_LENGTH,
+            http::HeaderValue::from_static("5"),
+        );
+        h.insert(
+            http::header::HeaderName::from_static("x-cache"),
+            http::HeaderValue::from_static("HIT"),
+        );
+        r.finish_headers(&resp);
+        assert_eq!(r.status, 201);
+        assert_eq!(r.bytes, 5);
+        assert_eq!(r.cache.as_deref(), Some("HIT"));
+    }
+
+    #[test]
+    fn mid_sample_hash_gates_emission() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("access.log");
+        let log = AccessLogger::build(
+            &cfg::AccessLog {
+                enabled: true,
+                output: path.to_string_lossy().into(),
+                sample: 0.5,
+                ..Default::default()
+            },
+            crate::BuildMode::Live,
+        )
+        .unwrap();
+        // pick one req_id per side of the 0.5 boundary under this
+        // logger's salt — `%`→`+`/`/` shifts the whole distribution,
+        // `>=`→`<` inverts the gate
+        let frac = |id: &str| {
+            let h = id.bytes().fold(log.sample_salt, |a, b| {
+                a.wrapping_mul(31).wrapping_add(b as u64)
+            });
+            (h % 10_000) as f64 / 10_000.0
+        };
+        let keep = (0u32..)
+            .map(|i| format!("k{i}"))
+            .find(|id| frac(id) < 0.5)
+            .unwrap();
+        let drop = (0u32..)
+            .map(|i| format!("d{i}"))
+            .find(|id| frac(id) >= 0.5)
+            .unwrap();
+        let mut r = rec();
+        r.req_id = keep.clone();
+        log.log(&r);
+        r.req_id = drop;
+        log.log(&r);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text.lines().count(), 1, "{text}");
+        assert!(text.contains(&keep));
     }
 }

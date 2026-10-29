@@ -108,7 +108,7 @@ every-push). Manual `/devin review` comments from a human also work.
 | `cflite_batch.yml` | daily 03:17 UTC | Long fuzz batch; pushes evolved corpus to the `corpus` branch |
 | `cflite_cron.yml` | Sunday 05:31 UTC | Corpus pruning + minimization; coverage report to `coverage` branch |
 | `soak.yml` | Sunday 04:00 UTC | `cargo test --test fault -- --ignored` — long-running fault tests |
-| `mutants.yml` | Wednesday 05:20 UTC | `cargo-mutants --shuffle --test-tool=nextest`, ~100-min cap; **advisory**, archives `mutants.out/` |
+| `mutants.yml` | Wednesday 05:20 UTC | `cargo-mutants --shuffle --test-tool=nextest`, 90-min in-job cap (timeboxes itself so results always post); **advisory** — run summary links every survivor to its mutated line and unions `missed.txt` across recent sweeps; archives `mutants.out/` |
 | `weekly.yml` | Tuesday 06:10 UTC | `cargo nextest run --release` on stable (gated) + full suite on nightly (advisory) |
 | `links.yml` | Monday 06:45 UTC | `lychee` link check across docs (`lychee.toml`) |
 | `scorecard.yml` | Monday 06:30 UTC + pushes | OpenSSF Scorecard → SARIF + public badge API |
