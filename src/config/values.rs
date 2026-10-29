@@ -319,6 +319,9 @@ impl<'de> super::model::Shorthand<'de> for ByteSize {
     fn from_int(n: i64) -> Option<Self> {
         u64::try_from(n).ok().map(Self)
     }
+    fn from_uint(n: u64) -> Option<Self> {
+        Some(Self(n))
+    }
     fn from_str(s: &str) -> Option<Self> {
         Self::parse(s).ok()
     }
@@ -455,6 +458,20 @@ mod tests {
     #[derive(serde::Deserialize)]
     struct ByteSizeHolder {
         v: ByteSize,
+    }
+
+    #[test]
+    fn byte_size_full_u64_range() {
+        // TOML integers are i64; unsigned-capable formats drive
+        // `visit_u64`, which used to narrow through i64 and reject
+        // everything past `i64::MAX` — the full range must parse.
+        for n in [u64::MAX, i64::MAX as u64 + 1] {
+            let b = ByteSize::deserialize(serde::de::value::U64Deserializer::<
+                serde::de::value::Error,
+            >::new(n))
+            .unwrap();
+            assert_eq!(b.0, n);
+        }
     }
 
     #[test]

@@ -353,6 +353,16 @@ workflow publishes the matching section as the GitHub release notes.
   (`content-length`, `connection`, `transfer-encoding`, …) set via
   `respond.headers` or `request_headers`/`response_headers`, which now
   error instead of corrupting the wire.
+- **Config shorthand errors name the offending key** — mistakes inside
+  table and list forms (`compress = { algo = "br" }`, `hosts = [5]`)
+  report the real problem instead of the generic "must be a …"
+  fallback; in exchange a few scalar shorthands lose their
+  value-specific reason (`dns = "banana"` drops the humantime detail,
+  `admin.tls = "bogus"` no longer echoes the rejected mode).
+- **Positional-array shorthand forms no longer parse** —
+  `respond = [200, "text"]` and friends were an untagged-deserializer
+  artifact, not a grammar form; arrays now only mean a field's
+  documented list shorthand, as `docs/config-grammar.md` specifies.
 
 ### Security
 
@@ -504,19 +514,14 @@ workflow publishes the matching section as the GitHub release notes.
   `tls = "off"`), stale `0.2.2`/`v0.1.0` version strings, and
   book-relative links in `llms-full.txt` that resolved nowhere.
 - **Config parse and `client_ip` perf regressions** — every shorthand
-  deserializer (route/site middleware blocks, `upstream.*` entries and
-  their server lists, `tls`/`listen`/`host_header`/`server_header`,
-  CIDR and byte-size values, scalar-or-list sugar) now dispatches on
-  the value's own type in one pass instead of buffering into serde's
-  `Content` and retrying per variant, and the X-Forwarded-For trust
-  walk no longer allocates a list per request. Errors inside the
-  table/list forms now name the offending key instead of the generic
-  "must be a …" fallback — though a few scalar shorthands lose their
-  value-specific reason (`admin.tls = "bogus"` no longer echoes the
-  rejected mode, `dns = "banana"` drops the humantime detail).
-  Undocumented positional-array forms (e.g. `respond = [200, "text"]`)
-  no longer parse — arrays only mean a field's documented list
-  shorthand, as `docs/config-grammar.md` specifies.
+  deserializer now dispatches on the value's own type in one pass
+  instead of buffering into serde's `Content` and retrying variants,
+  and the X-Forwarded-For trust walk no longer allocates a list per
+  request.
+- **Oversized byte counts parse again** — `ByteSize` fields accept the
+  full `u64` range from unsigned-capable formats; the new shorthand
+  visitor narrowed integers to `i64` first. TOML integers are signed
+  and unaffected.
 
 ## [0.4.1] - 2026-10-27
 
