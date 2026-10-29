@@ -319,6 +319,9 @@ impl<'de> super::model::Shorthand<'de> for ByteSize {
     fn from_int(n: i64) -> Option<Self> {
         u64::try_from(n).ok().map(Self)
     }
+    fn from_uint(n: u64) -> Option<Self> {
+        Some(Self(n))
+    }
     fn from_str(s: &str) -> Option<Self> {
         Self::parse(s).ok()
     }

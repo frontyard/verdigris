@@ -30,6 +30,12 @@ pub(crate) trait Shorthand<'de>: Deserialize<'de> {
     fn from_int(_: i64) -> Option<Self> {
         None
     }
+    /// Unsigned ints narrow through `i64` by default — TOML integers
+    /// are signed, so this only fires for unsigned-capable formats.
+    /// Impls holding the full `u64` range (`ByteSize`) override it.
+    fn from_uint(v: u64) -> Option<Self> {
+        i64::try_from(v).ok().and_then(Self::from_int)
+    }
     fn from_str(_: &str) -> Option<Self> {
         None
     }
@@ -68,10 +74,7 @@ impl<'de, T: Shorthand<'de>> serde::de::Visitor<'de> for ShorthandVisitor<T> {
     }
 
     fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<T, E> {
-        i64::try_from(v)
-            .ok()
-            .and_then(T::from_int)
-            .ok_or_else(|| E::custom(T::EXPECTING))
+        T::from_uint(v).ok_or_else(|| E::custom(T::EXPECTING))
     }
 
     fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<T, E> {
