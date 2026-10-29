@@ -22,11 +22,33 @@ workflow publishes the matching section as the GitHub release notes.
   (enabled on Debian; subject to preset policy on RPM distros).
   Signed and attested like the other artifacts.
 
+### Fixed
+
+- **HTTP/2 active health checks never succeeded** — probes to h2
+  upstreams sent a path-only URI, which the h2 codec rejects for
+  missing `:scheme`/`:authority`, so every affected member was
+  perpetually marked sick and ejected. Probes now send the absolute
+  URI built from the upstream's authority.
+- **IPv6 upstreams were unreachable** — `h2c://[::1]` and friends stored
+  the bracketed literal as the member host, so it never parsed as an
+  `IpAddr`: members took the DNS path (where the bracketed name can't
+  resolve), and TLS probes/dials offered the bracketed string as SNI.
+  The host is now stored bare and `authority()` restores the brackets —
+  including at the default port, where a bare `::1` would produce an
+  invalid probe URI.
+
 ### Build & CI
 
 - **Codecov token + badge** — the lcov upload in `ci.yml` now
   authenticates with the `CODECOV_TOKEN` repo secret, and a Codecov
   coverage badge shows in `README.md`.
+- **Mutation sweep results land on the run page** — `mutants.yml` now
+  self-timeboxes inside the job cap (no more canceled-run red X),
+  writes verdict counts, kill rate, and every surviving mutant as a
+  source link to the step summary, and unions survivors across recent
+  sweeps into a running TODO list. `cargo_mutants.toml` excludes
+  provably-equivalent mutants, and a nextest per-test timeout turns
+  hang-inducing mutants into ordinary test failures.
 
 ## [1.0.0] - 2026-10-29
 
@@ -210,13 +232,6 @@ workflow publishes the matching section as the GitHub release notes.
   repo paths; `release.sh` keeps the `installation.md` download URL in
   lockstep with the version bump; and a `surface_audit` test asserts
   the JSON schema never marks a defaulted field required.
-- **Mutation sweep results land on the run page** — `mutants.yml` now
-  self-timeboxes inside the job cap (no more canceled-run red X),
-  writes verdict counts, kill rate, and every surviving mutant as a
-  source link to the step summary, and unions survivors across recent
-  sweeps into a running TODO list. `cargo_mutants.toml` excludes
-  provably-equivalent mutants, and a nextest per-test timeout turns
-  hang-inducing mutants into ordinary test failures.
 
 ### Changed
 
@@ -548,11 +563,6 @@ workflow publishes the matching section as the GitHub release notes.
   full `u64` range from unsigned-capable formats; the new shorthand
   visitor narrowed integers to `i64` first. TOML integers are signed
   and unaffected.
-- **HTTP/2 active health checks never succeeded** — probes to h2
-  upstreams sent a path-only URI, which the h2 codec rejects for
-  missing `:scheme`/`:authority`, so every affected member was
-  perpetually marked sick and ejected. Probes now send the absolute
-  URI built from the upstream's authority.
 
 ## [0.4.1] - 2026-10-27
 

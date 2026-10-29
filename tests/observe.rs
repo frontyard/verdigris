@@ -312,28 +312,31 @@ proxy = {{ upstream = ["http://127.0.0.1:{up_port}"] }}
         .text()
         .await
         .unwrap();
+    // escaped: the scrape body is multi-line — echoing it raw in an
+    // assert message forges log lines (and trips log-injection scans)
+    let dump = text.escape_debug();
     // request counter with bounded route label + status
     assert!(
         text.contains("verd_requests_total{") && text.contains("status=\"200\""),
-        "missing requests_total: {text}"
+        "missing requests_total: {dump}"
     );
-    assert!(text.contains("route="), "missing route label: {text}");
+    assert!(text.contains("route="), "missing route label: {dump}");
     assert!(
         text.contains("method=\"GET\""),
-        "missing method label: {text}"
+        "missing method label: {dump}"
     );
     assert!(
         text.contains("verd_request_duration_seconds_bucket{route=") && text.contains("le="),
-        "missing bucketed duration histogram: {text}"
+        "missing bucketed duration histogram: {dump}"
     );
     assert!(text.contains("verd_response_bytes_total{route="));
     assert!(
         text.contains("verd_request_bytes_total{route="),
-        "missing request_bytes_total: {text}"
+        "missing request_bytes_total: {dump}"
     );
     assert!(
         text.contains("verd_upstream_requests_total{cluster=") && text.contains("result=\"ok\""),
-        "missing upstream_requests_total: {text}"
+        "missing upstream_requests_total: {dump}"
     );
     assert!(text.contains("verd_upstream_healthy{cluster="));
     assert!(text.contains("verd_upstream_inflight{cluster="));
@@ -346,7 +349,7 @@ proxy = {{ upstream = ["http://127.0.0.1:{up_port}"] }}
     assert!(text.contains("verd_uptime_seconds"));
     assert!(
         text.contains("verd_build_info{version="),
-        "missing build_info: {text}"
+        "missing build_info: {dump}"
     );
     let _ = sd.send(true);
 }
@@ -391,7 +394,11 @@ respond = { status = 200, body = "ok" }
         "completed request left inflight at {inflight}"
     );
     // PUT buckets to its own method label, not "other"
-    assert!(text.contains("method=\"PUT\""), "missing PUT label: {text}");
+    assert!(
+        text.contains("method=\"PUT\""),
+        "missing PUT label: {}",
+        text.escape_debug()
+    );
     // the duration histogram records seconds, not milliseconds
     let sum = text
         .lines()

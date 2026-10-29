@@ -215,8 +215,7 @@ mod tests {
         assert_eq!(exps[0].0, "exp.test");
         assert!(
             exps[0].1 > 0.0,
-            "a fresh self-signed cert must have positive ttl, got {}",
-            exps[0].1
+            "a fresh self-signed cert must have positive ttl"
         );
     }
 

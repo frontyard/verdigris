@@ -52,14 +52,23 @@ jobs:
           count() { { [ -f "$1" ] && wc -l < "$1"; } || echo 0; }
           xcode() { cut -d= -f2 mutants.exit 2>/dev/null || echo '?'; }
 
-          bullets() { # mutants list file → linked markdown bullets (≤150)
+          # `sha<TAB>file:line: desc` rows → linked markdown bullets, capped
+          # at 150. Links use the row's own commit — line numbers drift
+          # between sweeps, so a historical entry must link at the run
+          # that recorded it, not HEAD. Rows past the cap get an explicit
+          # omitted count instead of silently disappearing.
+          bullets() {
+            total=$(wc -l < "$1")
             n=0
-            while IFS= read -r l && [ "$n" -lt 150 ]; do
+            while IFS=$'\t' read -r sha l && [ "$n" -lt 150 ]; do
               f=${l%%:*}; r=${l#*:}; ln=${r%%:*}
-              printf -- '- [`%s:%s`](https://github.com/%s/blob/%s/%s#L%s) — `%s`\n' \
-                "$f" "$ln" "$REPO" "$SHA" "$f" "$ln" "${r#*:*: }"
+              printf -- "- [\`%s:%s\`](https://github.com/%s/blob/%s/%s#L%s) — \`%s\`\n" \
+                "$f" "$ln" "$REPO" "${sha:-$SHA}" "$f" "$ln" "${r#*:*: }"
               n=$((n + 1))
             done < "$1"
+            left=$((total - n))
+            [ "$left" -gt 0 ] &&
+              echo "_…and $left more — full list in the \`mutants-out\` artifact._"
           }
 
           {
@@ -94,40 +103,57 @@ jobs:
           # Union this slice's survivors with earlier sweeps' (artifact
           # retention ~90d ≈ one full shuffled cycle), so the all-time
           # list below is a running TODO, not just this week's slice.
+          # Rows carry the recording run's headSha for the link; gh's
+          # list is newest-first, so dedupe keeps the newest sha an
+          # entry was seen at.
           mkdir -p /tmp/mutants-hist
-          { gh run list --workflow mutants.yml --repo "$REPO" --limit 20 \
-              --json databaseId --jq '.[].databaseId' 2>/dev/null || true; } |
-            while read -r id; do
+          : > /tmp/missed-all.tsv
+          [ -s mutants.out/missed.txt ] &&
+            awk -v s="$SHA" '{print s "\t" $0}' mutants.out/missed.txt \
+              >> /tmp/missed-all.tsv
+          gh run list --workflow mutants.yml --repo "$REPO" --limit 20 \
+            --json databaseId,headSha \
+            --jq '.[] | "\(.databaseId)\t\(.headSha)"' 2>/dev/null |
+            while IFS=$'\t' read -r id hsha; do
               [ "$id" = "$RUN_ID" ] && continue
-              gh run download "$id" --repo "$REPO" --name mutants-out \
-                --dir "/tmp/mutants-hist/$id" < /dev/null 2>/dev/null || true
+              if gh run download "$id" --repo "$REPO" --name mutants-out \
+                --dir "/tmp/mutants-hist/$id" < /dev/null 2>/dev/null; then
+                printf '%s\n' "$hsha" > "/tmp/mutants-hist/$id/sha"
+                [ -s "/tmp/mutants-hist/$id/missed.txt" ] &&
+                  awk -v s="$hsha" '{print s "\t" $0}' \
+                    "/tmp/mutants-hist/$id/missed.txt" >> /tmp/missed-all.tsv
+              fi
             done
           {
             if [ -s mutants.out/missed.txt ]; then
+              awk -v s="$SHA" '{print s "\t" $0}' mutants.out/missed.txt \
+                > /tmp/missed-run.tsv
               echo
               echo "### missed this run"
               echo
               echo "<details><summary>every survivor — click through to the mutated line</summary>"
               echo
-              bullets mutants.out/missed.txt
+              bullets /tmp/missed-run.tsv
               echo
               echo "</details>"
             fi
             if [ -s mutants.out/timeout.txt ]; then
+              awk -v s="$SHA" '{print s "\t" $0}' mutants.out/timeout.txt \
+                > /tmp/timeout-run.tsv
               echo
               echo "### timed out — the suite hung under the mutant"
               echo
-              bullets mutants.out/timeout.txt
+              bullets /tmp/timeout-run.tsv
             fi
             if compgen -G '/tmp/mutants-hist/*/missed.txt' > /dev/null; then
-              sort -u /tmp/mutants-hist/*/missed.txt mutants.out/missed.txt \
-                > /tmp/missed-all.txt 2>/dev/null || true
+              awk -F'\t' '!seen[$2]++' /tmp/missed-all.tsv \
+                > /tmp/missed-union.tsv
               echo
-              echo "### survivor union across recent sweeps ($(wc -l < /tmp/missed-all.txt) unique)"
+              echo "### survivor union across recent sweeps ($(wc -l < /tmp/missed-union.tsv) unique)"
               echo
               echo "<details><summary>running TODO — kill each with a test or bless it with \`#[mutants::skip]\`</summary>"
               echo
-              bullets /tmp/missed-all.txt
+              bullets /tmp/missed-union.tsv
               echo
               echo "</details>"
             fi
