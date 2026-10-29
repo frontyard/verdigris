@@ -5,5 +5,5 @@ pub mod logbody;
 pub mod metrics;
 mod reqid;
 
-pub use accesslog::{AccessLogger, Filter, LogRecord, UpstreamUsed};
+pub use accesslog::{AccessLogger, Filter, LogRecord, UpstreamUsed, check_log_path, open_append};
 pub use reqid::RequestId;

@@ -337,8 +337,9 @@ impl Write for Sink {
 }
 
 impl AccessLogger {
-    /// Build from config.
-    pub fn build(cfg: &cfg::AccessLog) -> Result<Self, String> {
+    /// Build from config. `mode` gates the file open: [`crate::BuildMode::Check`]
+    /// verifies the destination looks writable without creating it.
+    pub fn build(cfg: &cfg::AccessLog, mode: crate::BuildMode) -> Result<Self, String> {
         let filter = match &cfg.filter {
             Some(f) => Filter::parse(f)?,
             None => Filter::default(),
@@ -346,7 +347,11 @@ impl AccessLogger {
         let (out, path) = match cfg.output.as_str() {
             "stdout" | "" => (Sink::Stdout, None),
             "stderr" => (Sink::Stderr, None),
-            path => (Sink::File(open_append(path)?), Some(path.to_string())),
+            path if mode.live() => (Sink::File(open_append(path)?), Some(path.to_string())),
+            path => {
+                check_log_path(path)?;
+                (Sink::Stderr, Some(path.to_string()))
+            }
         };
         Ok(Self {
             enabled: cfg.enabled,
@@ -433,13 +438,46 @@ impl AccessLogger {
     }
 }
 
-/// Open `path` for appending.
-fn open_append(path: &str) -> Result<std::fs::File, String> {
+/// Open `path` for appending, creating the parent directory when it is
+/// missing (same treatment the cache directory gets).
+pub fn open_append(path: &str) -> Result<std::fs::File, String> {
+    if let Some(dir) = std::path::Path::new(path)
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("cannot create log dir {}: {e}", dir.display()))?;
+    }
     std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
         .map_err(|e| format!("cannot open access log {path}: {e}"))
+}
+
+/// A `BuildMode::Check` look at a log output path: the file is never
+/// opened or created, but an obviously-bad destination (a directory
+/// where the file belongs, or a file standing where a parent directory
+/// needs to be created) is an error.
+pub fn check_log_path(path: &str) -> Result<(), String> {
+    let p = std::path::Path::new(path);
+    if p.is_dir() {
+        return Err(format!("log output {path} is a directory"));
+    }
+    let mut dir = p.parent();
+    while let Some(d) = dir {
+        if d.as_os_str().is_empty() || d.is_dir() {
+            return Ok(());
+        }
+        if d.exists() {
+            return Err(format!(
+                "log output {path}: {} is not a directory",
+                d.display()
+            ));
+        }
+        dir = d.parent();
+    }
+    Ok(())
 }
 
 /// Escape ASCII control characters and `"` for the single-line pretty
@@ -556,6 +594,28 @@ mod coverage_tests {
         }
     }
 
+    /// `sample` gates emission: 0.0 drops every record, 1.0 keeps all.
+    /// (Mid-range values are hash-distributed; the extremes pin the
+    /// contract.)
+    #[test]
+    fn sample_gates_emission() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("access.log");
+        for (sample, expect_lines) in [(0.0, 0), (1.0, 1)] {
+            let cfg = cfg::AccessLog {
+                enabled: true,
+                output: path.to_string_lossy().into(),
+                sample,
+                ..Default::default()
+            };
+            let log = AccessLogger::build(&cfg, crate::BuildMode::Live).unwrap();
+            log.log(&rec());
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert_eq!(text.lines().count(), expect_lines, "sample={sample}");
+            std::fs::remove_file(&path).unwrap();
+        }
+    }
+
     #[test]
     fn filter_operators() {
         // each op family on each field kind
@@ -605,7 +665,7 @@ mod coverage_tests {
             format: crate::config::model::LogFormat::Json,
             ..Default::default()
         };
-        let l = AccessLogger::build(&cfg).unwrap();
+        let l = AccessLogger::build(&cfg, crate::BuildMode::Live).unwrap();
         l.log(&rec());
         l.reopen(); // swaps the file sink
         l.log(&rec());
@@ -617,14 +677,14 @@ mod coverage_tests {
             filter: Some("bogus = x".into()),
             ..cfg
         };
-        assert!(AccessLogger::build(&cfg).is_err());
+        assert!(AccessLogger::build(&cfg, crate::BuildMode::Live).is_err());
         // disabled → nothing written
         let cfg = crate::config::model::AccessLog {
             enabled: false,
             output: dir.path().join("b.log").to_string_lossy().into(),
             ..Default::default()
         };
-        let l = AccessLogger::build(&cfg).unwrap();
+        let l = AccessLogger::build(&cfg, crate::BuildMode::Live).unwrap();
         l.log(&rec());
         // sample=0 → records dropped by the hash gate
         let cfg = crate::config::model::AccessLog {
@@ -632,7 +692,7 @@ mod coverage_tests {
             output: "stdout".into(),
             ..Default::default()
         };
-        let l = AccessLogger::build(&cfg).unwrap();
+        let l = AccessLogger::build(&cfg, crate::BuildMode::Live).unwrap();
         l.log(&rec());
         // pretty format
         let cfg = crate::config::model::AccessLog {
@@ -640,7 +700,7 @@ mod coverage_tests {
             format: crate::config::model::LogFormat::Pretty,
             ..Default::default()
         };
-        let l = AccessLogger::build(&cfg).unwrap();
+        let l = AccessLogger::build(&cfg, crate::BuildMode::Live).unwrap();
         l.log(&rec());
         assert!(
             std::fs::read_to_string(dir.path().join("c.log"))
@@ -648,7 +708,11 @@ mod coverage_tests {
                 .contains("GET")
         );
         // reopen on stdout logger → no-op
-        let l = AccessLogger::build(&crate::config::model::AccessLog::default()).unwrap();
+        let l = AccessLogger::build(
+            &crate::config::model::AccessLog::default(),
+            crate::BuildMode::Live,
+        )
+        .unwrap();
         l.reopen();
     }
 

@@ -28,7 +28,7 @@ conventions:
 | `clippy` | `cargo clippy --all-targets -- -D warnings` on **stable + MSRV 1.88** | blocks |
 | `test` | `cargo nextest run --all-targets` + `cargo test --doc` on stable + MSRV | blocks |
 | `rustdoc` | `cargo doc` with warnings denied | blocks |
-| `generated` | Regenerates `docs/book/src/reference.md` and `llms-full.txt`; fails if they drift | blocks |
+| `generated` | Regenerates `docs/book/src/reference.md` and `llms-full.txt`; fails if they drift. Also runs `check-snippets.py` so a `src/config`-only PR can't break doc snippets while skipping `docs.yml` | blocks |
 | `package` | `cargo publish --dry-run --locked` | blocks |
 | `deny` | `cargo deny check` — advisories, bans, licenses, sources | blocks |
 | `coverage` | `cargo llvm-cov` with a 55% line floor; lcov upload to Codecov is **advisory** (a Codecov outage never gates a PR) | blocks |

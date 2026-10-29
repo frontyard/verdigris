@@ -51,16 +51,26 @@ pub struct Runtime {
 impl Runtime {
     /// Build a runtime from a validated config.
     pub fn build(config: Arc<cfg::Config>) -> Result<Arc<Self>, BuildError> {
-        Self::build_with(config, None)
+        Self::build_with(config, None, crate::BuildMode::Live)
+    }
+
+    /// Compile everything `build` compiles, but without touching the
+    /// filesystem — `verd validate` runs this so a green result means the
+    /// server would actually start.
+    pub fn check(config: Arc<cfg::Config>) -> Result<Arc<Self>, BuildError> {
+        Self::build_with(config, None, crate::BuildMode::Check)
     }
 
     /// Build a runtime, optionally reusing unchanged pieces (cache stores)
-    /// from `prior` — the reload path.
+    /// from `prior` — the reload path. `mode` gates filesystem side
+    /// effects: [`crate::BuildMode::Check`] performs every compile-time check
+    /// read-only.
     pub fn build_with(
         config: Arc<cfg::Config>,
         prior: Option<&Runtime>,
+        mode: crate::BuildMode,
     ) -> Result<Arc<Self>, BuildError> {
-        let mw_factory = middleware::Factory::new(&config, prior.map(|p| &p.mw_factory))
+        let mw_factory = middleware::Factory::new(&config, prior.map(|p| &p.mw_factory), mode)
             .map_err(|e| BuildError::Router(format!("middleware: {e}")))?;
         let hosts =
             router::build(&config, &mw_factory).map_err(|e| BuildError::Router(e.to_string()))?;
@@ -68,16 +78,23 @@ impl Runtime {
             "off" | "" => None,
             v => http::HeaderValue::from_str(v).ok(),
         };
-        let access = observe::AccessLogger::build(&config.log.access)
+        let access = observe::AccessLogger::build(&config.log.access, mode)
             .map_err(|e| BuildError::Access(e.to_string()))?;
         let has_tls = config.server.listen.iter().any(|l| l.tls);
-        let tls = TlsRuntime::build(&config)
+        let tls = TlsRuntime::build(&config, mode)
             .map_err(BuildError::Tls)?
             .map(Arc::new);
         let acme = match &tls {
             Some(t) => crate::acme::build(&config, &t.resolver).map_err(BuildError::Tls)?,
             None => None,
         };
+        if !mode.live() {
+            // lazy paths a live build would only hit on first request —
+            // a check run must surface their errors now
+            for c in hosts.clusters.iter() {
+                c.check().map_err(BuildError::Tls)?;
+            }
+        }
         let limits = Arc::new(ConnLimits::new(&config.server));
         Ok(Arc::new(Self {
             config,
@@ -220,19 +237,36 @@ impl Drop for ConnSlot {
 /// current runtime while in-flight ones keep theirs.
 pub struct Shared {
     rt: arc_swap::ArcSwap<Runtime>,
+    /// The config sources the `--watch` loop should observe;
+    /// `reload_inner` publishes each generation's set so include
+    /// additions/removals take effect immediately.
+    watch_plan: tokio::sync::watch::Sender<crate::config::WatchPlan>,
 }
 
 impl Shared {
     /// Wrap the first-generation runtime.
     pub fn new(rt: Arc<Runtime>) -> Arc<Self> {
+        Self::with_watch(rt, crate::config::WatchPlan::default())
+    }
+
+    /// Wrap the first-generation runtime with the config's watch set.
+    pub fn with_watch(rt: Arc<Runtime>, watch: crate::config::WatchPlan) -> Arc<Self> {
+        let (watch_plan, _) = tokio::sync::watch::channel(watch);
         Arc::new(Self {
             rt: arc_swap::ArcSwap::from(rt),
+            watch_plan,
         })
     }
 
     /// The current generation.
     pub fn load(&self) -> Arc<Runtime> {
         self.rt.load_full()
+    }
+
+    /// Subscribe to watch-set changes (the `--watch` task rebuilds its
+    /// notify watcher when this fires).
+    pub fn watch_rx(&self) -> tokio::sync::watch::Receiver<crate::config::WatchPlan> {
+        self.watch_plan.subscribe()
     }
 }
 
@@ -428,8 +462,31 @@ async fn reload_inner(
         return Err("configuration is invalid".to_string());
     }
     let old = shared.load();
-    let new_rt =
-        Runtime::build_with(Arc::new(loaded.config), Some(&old)).map_err(|e| e.to_string())?;
+    let watch = loaded.watch_plan();
+    let new_rt = Runtime::build_with(Arc::new(loaded.config), Some(&old), crate::BuildMode::Live)
+        .map_err(|e| e.to_string())?;
+
+    // publish the new watch set before the swap so the watcher tracks
+    // this generation's includes and ${file:} references right away
+    {
+        let prev = shared.watch_plan.borrow().clone();
+        if prev != watch {
+            let added: Vec<_> = watch.dirs.difference(&prev.dirs).collect();
+            let removed: Vec<_> = prev.dirs.difference(&watch.dirs).collect();
+            tracing::info!(
+                added = added.len(),
+                removed = removed.len(),
+                "config watch set changed"
+            );
+            for p in added {
+                tracing::debug!(dir = %p.display(), "watching new config source dir");
+            }
+            for p in removed {
+                tracing::debug!(dir = %p.display(), "no longer watching config source dir");
+            }
+        }
+        shared.watch_plan.send_replace(watch);
+    }
 
     // listener diff: bind all newly-required sockets before committing
     let desired: std::collections::HashSet<(SocketAddr, bool)> = new_rt
@@ -513,5 +570,31 @@ mod tests {
         drop(g2);
         assert_eq!(limits.active(), 0);
         assert!(limits.per_ip.get(&ip).is_none());
+    }
+
+    #[test]
+    fn conn_limits_reject_at_global_and_per_ip_caps() {
+        let mut cfg = cfg::ServerConfig {
+            max_connections: 1,
+            max_connections_per_ip: 8,
+            ..Default::default()
+        };
+        let limits = Arc::new(ConnLimits::new(&cfg));
+        let ip1 = "10.0.0.1".parse().unwrap();
+        let ip2 = "10.0.0.2".parse().unwrap();
+        let g = limits.admit(ip1).unwrap();
+        // global cap: any further connection is refused, whatever the IP
+        assert!(limits.admit(ip2).is_none());
+        drop(g);
+        assert!(limits.admit(ip2).is_some());
+
+        // per-IP cap: same IP can't double up while global still allows
+        cfg.max_connections = 8;
+        cfg.max_connections_per_ip = 1;
+        let limits = Arc::new(ConnLimits::new(&cfg));
+        let g = limits.admit(ip1).unwrap();
+        assert!(limits.admit(ip1).is_none());
+        assert!(limits.admit(ip2).is_some());
+        drop(g);
     }
 }

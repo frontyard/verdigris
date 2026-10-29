@@ -10,9 +10,16 @@
 - `verd schema` prints the complete JSON Schema of the config. When
   unsure about a field name, type, or default, consult it — it is
   generated from the same structs the binary parses.
-- `verd validate -c FILE` checks a config (syntax, types, and
-  cross-field rules) without starting the server.
-- `verd fmt -c FILE` normalizes a config file's formatting.
+- `verd validate -c FILE` checks a config and dry-runs the full
+  runtime build (read-only). `--format json` emits a machine-readable
+  report; `--strict` fails on warnings.
+- `verd init` writes a starter `verd.toml` (`-o PATH`, `-o -` for
+  stdout, `--force` to overwrite).
+- `verd fmt -c FILE` normalizes a config file's formatting (`--all`
+  covers included files; `--check` only reports).
+- `verd config -c FILE` prints the merged, interpolated, effective
+  config with secrets redacted — check what shorthands, includes, and
+  `${VAR}`/`${file:}` expanded to.
 - `docs/book/src/reference.md` is a generated table of every field.
 - `llms-full.txt` (repo root) concatenates this file plus the full
   reference for one-shot ingestion.
@@ -22,18 +29,20 @@
 Top-level keys: `server`, `timeouts`, `limits`, `log`, `admin`, `acme`,
 `upstream`, `cache`, `include`, `site`.
 
-- `[server]` holds `listen` (array of `{ addr, tls }`), connection caps,
+- `[server]` holds `listen` (`"ip:port"` strings or `{ addr, tls }`
+  tables), connection caps,
   `security` headers, `graceful_timeout`. **`[limits]` and `[timeouts]`
   are top-level siblings of `[server]`, not children.**
 - `[[site]]` = a virtual host set: `hosts` (or `default = true`),
   `tls`, `root`/`proxy` catch-all shorthands, and `[[site.route]]` tables.
-- A route = matcher (`prefix` — `path` is a shorthand — `exact`,
-  `regex`, `match`) + **exactly one handler** (`static`, `proxy`,
-  `redirect`, `respond`) + middleware (`ip_allow`, `ip_deny`, `auth`,
-  `rate_limit`, `cors`, `headers`, `security`, `compress`, `cache`,
-  `limits`, `timeouts`). More specific prefixes win.
+- A route = matcher (`exact`, `prefix`, `regex`, `match`) + **exactly
+  one handler** (`static`, `proxy`, `redirect`, `respond`) + middleware
+  (`ip_allow`, `ip_deny`, `auth`, `rate_limit`, `cors`,
+  `response_headers`, `security`, `compress`, `cache`, `limits`,
+  `timeouts`). More specific prefixes win.
 - Upstreams may be named (`[upstream.NAME]` clusters with `servers`,
-  `lb`, `health`, `timeouts`, `tls`) or inline URL lists.
+  `lb`, `max_connections`, `health`, `timeouts`, `tls`) or inline URL
+  lists.
 
 ## Recipes (each validates against `verd validate`)
 
@@ -45,6 +54,7 @@ listen = [{ addr = "0.0.0.0:8080", tls = false }]
 
 [[site]]
 hosts = ["example.com"]
+tls = "off"                      # plaintext dev site (default is "auto" ACME)
 root = "/var/www/site"           # shorthand: catch-all static route
 ```
 
@@ -87,7 +97,7 @@ TLS — pick one per site:
 ```toml
 # inside [[site]] — choose ONE:
 tls = "auto"          # ACME/Let's Encrypt; needs [acme] email + port 80 or 443
-# tls = "selfsigned"  # throwaway dev cert per host at boot
+# tls = "self_signed" # throwaway dev cert per host at boot
 # tls = { cert = "/etc/verd/site.pem", key = "/etc/verd/site.key" }
 # tls = "off"         # plaintext only
 ```
@@ -150,24 +160,34 @@ cache = { store = "main", ttl = "5m", stale_if_error = "5m" }
   not per-algorithm switches.
 - `include` takes a file, a directory (expands `*.toml` inside the
   dir), or a glob like `conf.d/*.toml` — a glob matching nothing is
-  silently ignored.
-- `pass_host = true` (the default) rewrites `Host` to the upstream
-  authority; `false` passes the client's original `Host` through.
+  silently ignored. A file included via two paths merges once; an
+  include cycle is an error.
+- `hosts` entries are hostnames (or `*.suffix` wildcards / `"*"` with
+  `default = true`) — no scheme, port, or path; `*.x.com:443` and
+  `https://x.com` are rejected.
+- A bare `{ tls = true }` listen table binds `:443` (no `addr` needed);
+  `{ addr = "…" }` alone is plaintext.
+- `host_header = "upstream"` (the default) rewrites `Host` to the
+  upstream authority; `"original"` passes the client's `Host` through.
 - `site.proxy` is a catch-all site shorthand accepting a cluster name,
   one URL, or a URL list; per-route use `route.proxy = { upstream =
   "name" | "url" | [urls] }`.
-- `rate` specs: `100/s`, `600/m`, `10000/h`, `50000/day`.
+- `rate` specs: `100/s`, `600/m`, `10000/h`, `50000/day`, or a custom
+  window like `10/30s`.
   `key`: `ip` | `identity` | `route` | `header:<Name>`.
 - Durations: `500ms`, `10s`, `5m`, `1h`, `1d`. Sizes: `B`, `KiB`,
   `MiB`, `GiB`. Both are strings (`"10s"`, `"256MiB"`).
 - Cache entries are keyed by scheme + authority (incl. port) + raw
   request target: HTTP and HTTPS, `host` and `host:8443`, and
   differently-encoded paths never share an entry.
-- `${ENV_VAR}` and `${file:/path}` interpolation works for secrets.
+- `${ENV_VAR}` and `${file:/path}` interpolation works for secrets —
+  relative `${file:}` paths anchor to the config file's directory.
   `verd validate` resolves them, so exports/files must exist then.
 
 ## Doc pages
 
+- [Introduction](docs/book/src/introduction.md)
+- [Installation](docs/book/src/installation.md)
 - [Quickstart](docs/book/src/quickstart.md)
 - [Examples](docs/book/src/examples.md)
 - [Configuration model](docs/book/src/configuration.md)
@@ -178,6 +198,10 @@ cache = { store = "main", ttl = "5m", stale_if_error = "5m" }
 - [Caching](docs/book/src/caching.md)
 - [Observability](docs/book/src/observability.md)
 - [Admin API & lifecycle](docs/book/src/admin.md)
+- [Docker & deployment](docs/book/src/docker.md)
 - [Tuning](docs/book/src/tuning.md)
 - [Migrating from nginx/Caddy](docs/book/src/migration.md)
+- [Upgrading](docs/book/src/upgrade.md)
+- [Operations](docs/book/src/operations.md)
+- [Command line](docs/book/src/cli.md)
 - [Full field reference (generated)](docs/book/src/reference.md)

@@ -24,9 +24,9 @@ BIN = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
 BIN = os.path.abspath(BIN)
 
 ROUTE_FIELDS = re.compile(
-    r"^(auth|cors|rate_limit|compress|security|headers|cache|limits|timeouts"
-    r"|ip_allow|ip_deny|proxy|static|respond|redirect|exact|prefix|path|regex"
-    r"|match|priority)\s*="
+    r"^(auth|cors|rate_limit|compress|security|response_headers|cache|limits"
+    r"|timeouts|ip_allow|ip_deny|proxy|static|respond|redirect|exact|prefix"
+    r"|regex|match|priority)\s*="
 )
 SITE_FIELDS = re.compile(r"^(tls|hosts|name|root|proxy|redirect_https"
                          r"|redirect_host|trusted_proxies|default)\s*=")
@@ -36,6 +36,7 @@ ENV = dict(
     ADMIN_TOKEN="x" * 24,
     API_TOKEN="x" * 24,
     KEY1="x" * 24,
+    CF_API_TOKEN="x" * 24,
 )
 
 def wrap(block: str) -> str:

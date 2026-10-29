@@ -10,7 +10,7 @@
 //! insertion, request coalescing, freshening (304 → renewed metadata),
 //! and admin purge.
 
-mod disk;
+pub(crate) mod disk;
 pub mod entry;
 pub mod key;
 mod policy;
@@ -121,24 +121,36 @@ impl Cache {
     /// disk rebuild is sync std::fs; it's a one-shot boot cost). `prior`
     /// carries the previous generation's stores: a store whose config is
     /// unchanged is reused whole — RAM contents, open disk index and all.
+    /// `mode` [`crate::BuildMode::Check`] skips directory creation and the index
+    /// rebuild: disk tiers are path-checked and stand in as RAM — the
+    /// checked generation never serves traffic.
     pub fn build_all(
         config: &cfg::Config,
         prior: Option<&HashMap<String, Arc<Cache>>>,
+        mode: crate::BuildMode,
     ) -> Result<HashMap<String, Arc<Cache>>, String> {
         let mut out = HashMap::new();
         for (name, c) in &config.cache {
-            if let Some(old) = prior.and_then(|p| p.get(name))
+            if mode.live()
+                && let Some(old) = prior.and_then(|p| p.get(name))
                 && old.same_config(c)
             {
                 out.insert(name.clone(), old.clone());
                 continue;
             }
+            // build errors name the field path — `verd validate` dry-build
+            // failures carry `cache.<name>` like upstream errors do
+            let named = |e: String| format!("cache.{name}: {e}");
             let store = match c.tier {
                 cfg::CacheTier::Ram => Store::Ram(Ram::new(c)),
-                cfg::CacheTier::Disk => Store::Disk(Disk::open_sync(c)?),
+                _ if !mode.live() => {
+                    Disk::check_path(c).map_err(named)?;
+                    Store::Ram(Ram::new(c))
+                }
+                cfg::CacheTier::Disk => Store::Disk(Disk::open_sync(c).map_err(named)?),
                 cfg::CacheTier::Hybrid => Store::Hybrid {
                     ram: Ram::new(c),
-                    disk: Disk::open_sync(c)?,
+                    disk: Disk::open_sync(c).map_err(named)?,
                 },
             };
             out.insert(
@@ -350,7 +362,10 @@ mod tests {
 
     fn store_named(toml_text: &str, name: &str) -> Arc<Cache> {
         let cfg = parse_test_config(toml_text);
-        Cache::build_all(&cfg, None).unwrap().remove(name).unwrap()
+        Cache::build_all(&cfg, None, crate::BuildMode::Live)
+            .unwrap()
+            .remove(name)
+            .unwrap()
     }
 
     fn key_for(target: &str) -> Key {
@@ -511,13 +526,13 @@ mod tests {
     #[tokio::test]
     async fn build_all_reuses_unchanged_stores() {
         let cfg = parse_test_config("[cache.c]\ntier = \"ram\"\nmax_object_bytes = \"8B\"\n");
-        let first = Cache::build_all(&cfg, None).unwrap();
-        let second = Cache::build_all(&cfg, Some(&first)).unwrap();
+        let first = Cache::build_all(&cfg, None, crate::BuildMode::Live).unwrap();
+        let second = Cache::build_all(&cfg, Some(&first), crate::BuildMode::Live).unwrap();
         assert!(Arc::ptr_eq(&first["c"], &second["c"]));
 
         // changed config → rebuilt store
         let cfg2 = parse_test_config("[cache.c]\ntier = \"ram\"\nram_bytes = \"1MiB\"\n");
-        let third = Cache::build_all(&cfg2, Some(&first)).unwrap();
+        let third = Cache::build_all(&cfg2, Some(&first), crate::BuildMode::Live).unwrap();
         assert!(!Arc::ptr_eq(&first["c"], &third["c"]));
     }
 

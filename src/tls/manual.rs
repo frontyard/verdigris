@@ -22,6 +22,28 @@ pub fn load_pair(m: &ManualTls) -> Result<Arc<CertifiedKey>, String> {
     Ok(Arc::new(build_key(certs, key)?))
 }
 
+/// `BuildMode::Check` variant: cert/key files that exist are parsed
+/// (catches malformed PEM and cert/key mismatches); missing files are
+/// skipped — the validator already warns about them, and they may only
+/// exist on the deploy host.
+pub fn check_pair(m: &ManualTls) -> Result<(), String> {
+    match (m.cert.exists(), m.key.exists()) {
+        (true, true) => {
+            let certs = load_certs(&m.cert)?;
+            let key = load_key(&m.key)?;
+            build_key(certs, key)?;
+        }
+        (true, false) => {
+            load_certs(&m.cert)?;
+        }
+        (false, true) => {
+            load_key(&m.key)?;
+        }
+        (false, false) => {}
+    }
+    Ok(())
+}
+
 /// Parse a PEM file into a certificate chain; must contain ≥1 certificate.
 pub fn load_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>, String> {
     let data = std::fs::read(path)

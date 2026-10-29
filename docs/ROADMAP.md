@@ -73,6 +73,22 @@ and one commit. See the mission file for the authoritative spec.
   by the stream semaphore and self-cleaning, but a TLS+ALPN burst on https
   members is pricey. Fix if it ever matters: a per-member dial mutex that
   re-checks `h2_live()` before dialing.
+- Unix-domain admin listener (deferred feature — recorded design, not
+  yet implemented). `admin.listen` is `Vec<SocketAddr>`/TCP-only, so a
+  tokenless loopback admin trusts every local uid on the host (the
+  `Host`/`Origin` gates stop browsers, not `curl`). Intended form:
+  `admin = { socket = "/run/verd/admin.sock" }` — a dedicated field,
+  mutually exclusive with `listen`, and `token`/`tls` rejected
+  alongside it (filesystem permissions do both jobs: a `0600` socket
+  in a `0700` dir is owner-uid admin by construction, like
+  `docker.sock`). Notes for whoever implements it: socket created
+  `0600` with parent dir via `fsperm`, stale-socket unlink on start,
+  `UnixStream::peer_cred()` uid replaces `IpAddr` in `AdminCaps` and
+  in log fields, `StalledIo` generalizes over
+  `AsyncRead + AsyncWrite + Unpin`, plus the usual grammar-doc +
+  `surface_audit`/`field_census` rows and schema/`reference.md`
+  regeneration. Optional `socket_group`/`socket_mode` if group-shared
+  administration ever matters.
 - ~~Verify `bcrypt` crate accepts `$2y$` htpasswd hashes (P6)~~ — verified:
   bcrypt 0.19 parses `2y/2b/2a/2x` (crypt_blowfish `$2y$` == fixed `$2b$`
   algorithm) and verd exercises real `$2y$` verification in

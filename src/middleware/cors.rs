@@ -237,6 +237,7 @@ mod tests {
             expose: vec!["x-total".into()],
             credentials: false,
             max_age: Some(std::time::Duration::from_secs(600)),
+            enabled: true,
         })
         .unwrap()
     }

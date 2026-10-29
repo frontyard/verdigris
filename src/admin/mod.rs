@@ -14,6 +14,7 @@ use axum::routing::{get, post};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 
+use crate::config::model::AdminTls;
 use crate::server::{Reload, Runtime, Shared};
 
 /// Router state: the swap point plus the reload request channel.
@@ -169,41 +170,15 @@ async fn version() -> Json<Value> {
 /// The live config, serialized, with secret-bearing keys blanked out.
 async fn show_config(State(state): State<Arc<AdminState>>) -> Json<Value> {
     let mut v = serde_json::to_value(&*state.rt().config).unwrap_or_else(|_| json!({}));
-    redact(&mut v);
+    redact(&mut v, &mut Vec::new(), false);
     Json(v)
 }
 
-/// Recursively replace values whose key name suggests a secret.
-fn redact(v: &mut Value) {
-    match v {
-        Value::Object(m) => {
-            for (k, val) in m.iter_mut() {
-                if crate::config::key_is_secret(k) {
-                    // blank the whole value — an array of api keys or a map
-                    // of secrets under a secret-named key is still secret
-                    *val = json!("***");
-                } else {
-                    redact(val);
-                }
-            }
-        }
-        Value::Array(a) => a.iter_mut().for_each(redact),
-        Value::String(s) => {
-            // credentials embedded in URL userinfo: `scheme://user:pass@host`
-            // — the `url` key doesn't smell secret but the value is
-            if let Some(scheme_end) = s.find("://") {
-                let rest = &s[scheme_end + 3..];
-                let authority_end = rest.find('/').unwrap_or(rest.len());
-                let authority = &rest[..authority_end];
-                if let Some(at) = authority.rfind('@')
-                    && at > 0
-                {
-                    *s = format!("{}://***@{}", &s[..scheme_end], &authority[at + 1..]);
-                }
-            }
-        }
-        _ => {}
-    }
+/// Recursively blank leaf values under secret-named keys — shared
+/// implementation in `config::redact_json` so this endpoint and
+/// `verd config --format json` apply the same policy.
+fn redact(v: &mut Value, path: &mut Vec<String>, under_secret: bool) {
+    crate::config::redact_json(v, path, under_secret);
 }
 
 /// Cluster/member status snapshot.
@@ -367,18 +342,30 @@ async fn purge(
 pub async fn serve(
     shared: Arc<Shared>,
     reload_tx: tokio::sync::mpsc::Sender<Reload>,
-    mut shutdown: tokio::sync::watch::Receiver<bool>,
+    shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> std::io::Result<()> {
     let rt = shared.load();
-    let addr = rt.config.admin.listen;
-    let listener = TcpListener::bind(addr).await.map_err(|e| {
-        std::io::Error::new(e.kind(), format!("cannot bind admin listener {addr}: {e}"))
-    })?;
+    let addrs = &rt.config.admin.listen;
+    let mut listeners = Vec::with_capacity(addrs.len());
+    for &addr in addrs {
+        listeners.push(TcpListener::bind(addr).await.map_err(|e| {
+            std::io::Error::new(e.kind(), format!("cannot bind admin listener {addr}: {e}"))
+        })?);
+    }
 
     let acceptor = match &rt.config.admin.tls {
-        Some(m) => {
-            let ck = crate::tls::manual::load_pair(m)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+        Some(t) => {
+            let ck = match t {
+                AdminTls::Manual(m) => crate::tls::manual::load_pair(m)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?,
+                AdminTls::SelfSigned => {
+                    let hosts: Vec<String> = std::iter::once("localhost".to_string())
+                        .chain(addrs.iter().map(|a| a.ip().to_string()))
+                        .collect();
+                    crate::tls::selfsigned::generate(&hosts)
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?
+                }
+            };
             let resolver = Arc::new(crate::tls::resolver::CertResolver::default());
             resolver.set_default(ck);
             let mut sc = rustls::ServerConfig::builder()
@@ -391,24 +378,263 @@ pub async fn serve(
     };
 
     let state = Arc::new(AdminState { shared, reload_tx });
-    tracing::info!(%addr, tls = acceptor.is_some(), "admin listener bound");
+    for &addr in addrs {
+        tracing::info!(%addr, tls = acceptor.is_some(), "admin listener bound");
+    }
     if rt.config.admin.token.is_none() {
         tracing::warn!(
-            %addr,
+            ?addrs,
             "admin listener has no token — restricted to loopback-originated requests; \
              set admin.token to enable remote management"
         );
     }
-    match acceptor {
-        None => {
-            axum::serve(listener, router(state))
-                .with_graceful_shutdown(async move {
-                    let _ = shutdown.changed().await;
-                })
-                .await
-        }
-        Some(acc) => serve_tls(listener, acc, router(state), shutdown).await,
+    let mut set = tokio::task::JoinSet::new();
+    for listener in listeners {
+        let app = router(state.clone());
+        let sd = shutdown.clone();
+        match &acceptor {
+            None => set.spawn(serve_plain(listener, app, sd)),
+            Some(acc) => set.spawn(serve_tls(listener, acc.clone(), app, sd)),
+        };
     }
+    while let Some(res) = set.join_next().await {
+        res.map_err(|e| std::io::Error::other(format!("admin listener task: {e}")))??;
+    }
+    Ok(())
+}
+
+/// Admin-plane connection admission: a global cap plus a per-IP cap.
+/// The bearer gate runs *after* hyper has parsed a request, so anything
+/// below it must not be able to pin fds/tasks unboundedly.
+struct AdminCaps {
+    global: std::sync::atomic::AtomicUsize,
+    per_ip: dashmap::DashMap<std::net::IpAddr, usize>,
+}
+
+/// Total admin connections per listener — control-plane traffic is
+/// low-volume by definition.
+const ADMIN_MAX_CONNS: usize = 128;
+/// Per-peer cap — one abusive client can't hold the whole budget.
+const ADMIN_MAX_PER_IP: usize = 16;
+/// Any single stalled read or write beyond this kills the connection —
+/// slowloris header drip, drip-fed bodies, and never-read responses.
+const ADMIN_IO_IDLE: std::time::Duration = std::time::Duration::from_secs(30);
+/// Grace window for in-flight connections during shutdown drain —
+/// a lingering keep-alive socket must not hold process exit.
+const ADMIN_DRAIN: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Drain in-flight connection tasks on shutdown, bounded by
+/// `ADMIN_DRAIN`: requests get a grace window to finish, then any
+/// lingering connection (idle keep-alive included) is aborted —
+/// `StalledIo` alone would hold exit up to `ADMIN_IO_IDLE` per conn.
+async fn drain_conns(conns: &mut tokio::task::JoinSet<()>) {
+    let drain = async { while conns.join_next().await.is_some() {} };
+    if tokio::time::timeout(ADMIN_DRAIN, drain).await.is_err() {
+        tracing::debug!("admin drain deadline reached — aborting lingering connections");
+        conns.abort_all();
+    }
+}
+
+impl AdminCaps {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            global: std::sync::atomic::AtomicUsize::new(0),
+            per_ip: dashmap::DashMap::new(),
+        })
+    }
+
+    fn admit(self: &Arc<Self>, ip: std::net::IpAddr) -> Option<AdminConnGuard> {
+        use std::sync::atomic::Ordering;
+        if self.global.load(Ordering::Relaxed) >= ADMIN_MAX_CONNS {
+            return None;
+        }
+        let mut entry = self.per_ip.entry(ip).or_insert(0);
+        if *entry >= ADMIN_MAX_PER_IP {
+            return None;
+        }
+        *entry += 1;
+        drop(entry);
+        // second global check after the per-IP increment: an over-cap
+        // race hands the slot back
+        if self.global.fetch_add(1, Ordering::Relaxed) >= ADMIN_MAX_CONNS {
+            if let Some(mut e) = self.per_ip.get_mut(&ip) {
+                *e = e.saturating_sub(1);
+            }
+            return None;
+        }
+        Some(AdminConnGuard {
+            caps: self.clone(),
+            ip,
+        })
+    }
+}
+
+/// Decrements the per-IP/global counters when the connection task ends.
+struct AdminConnGuard {
+    caps: Arc<AdminCaps>,
+    ip: std::net::IpAddr,
+}
+
+impl Drop for AdminConnGuard {
+    fn drop(&mut self) {
+        if let Some(mut e) = self.caps.per_ip.get_mut(&self.ip) {
+            *e = e.saturating_sub(1);
+            if *e == 0 {
+                drop(e);
+                self.caps.per_ip.remove(&self.ip);
+            }
+        }
+        self.caps
+            .global
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Accepted-socket wrapper: any single stalled read or write beyond
+/// `ADMIN_IO_IDLE` fails the connection. `axum::serve`/hyper apply no
+/// read deadline of their own, and the auth gate sits behind request
+/// parsing — unauthenticated peers could otherwise drip headers
+/// forever. Processing time itself is unaffected (no io is polled while
+/// a handler runs). Stays `Unpin` (the sleep is boxed) so
+/// `serve_connection` can take it.
+struct StalledIo {
+    inner: tokio::net::TcpStream,
+    sleep: std::pin::Pin<Box<tokio::time::Sleep>>,
+    armed: bool,
+}
+
+impl StalledIo {
+    fn new(inner: tokio::net::TcpStream) -> Self {
+        Self {
+            inner,
+            sleep: Box::pin(tokio::time::sleep(ADMIN_IO_IDLE)),
+            armed: false,
+        }
+    }
+
+    /// Poll a stalled io wait: on `Pending`, arm the idle deadline once
+    /// and let it fire through the task's own waker.
+    fn poll_stalled(
+        this: &mut Self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Error> {
+        if !this.armed {
+            this.sleep
+                .as_mut()
+                .reset(tokio::time::Instant::now() + ADMIN_IO_IDLE);
+            this.armed = true;
+        }
+        match this.sleep.as_mut().poll(cx) {
+            std::task::Poll::Ready(()) => std::task::Poll::Ready(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "admin io idle",
+            )),
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
+    }
+}
+
+impl tokio::io::AsyncRead for StalledIo {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        match std::pin::Pin::new(&mut this.inner).poll_read(cx, buf) {
+            std::task::Poll::Pending => Self::poll_stalled(this, cx).map(Err),
+            ready => {
+                this.armed = false;
+                ready
+            }
+        }
+    }
+}
+
+impl tokio::io::AsyncWrite for StalledIo {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let this = self.get_mut();
+        match std::pin::Pin::new(&mut this.inner).poll_write(cx, buf) {
+            std::task::Poll::Pending => Self::poll_stalled(this, cx).map(Err),
+            ready => {
+                this.armed = false;
+                ready
+            }
+        }
+    }
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+    fn poll_write_vectored(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_write_vectored(cx, bufs)
+    }
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
+    }
+}
+
+/// Plain-HTTP accept loop for the admin app: caps + per-io idle bound,
+/// then one `auto` connection per socket (whatever hyper negotiates).
+async fn serve_plain(
+    listener: TcpListener,
+    app: axum::Router,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) -> std::io::Result<()> {
+    use hyper::service::service_fn;
+    use hyper_util::rt::TokioIo;
+    use tower_service::Service as _;
+
+    let caps = AdminCaps::new();
+    let mut conns = tokio::task::JoinSet::new();
+    loop {
+        tokio::select! {
+            _ = shutdown.changed() => break,
+            _ = conns.join_next(), if !conns.is_empty() => {}
+            r = listener.accept() => {
+                let Ok((stream, peer)) = r else { continue };
+                let Some(slot) = caps.admit(peer.ip()) else {
+                    tracing::debug!(%peer, "admin connection refused: cap reached");
+                    continue;
+                };
+                let app = app.clone();
+                conns.spawn(async move {
+                    // the admission slot lives exactly as long as the conn task
+                    let _slot = slot;
+                    let svc = service_fn(move |req| {
+                        let mut app = app.clone();
+                        async move { app.call(req).await }
+                    });
+                    let builder = hyper_util::server::conn::auto::Builder::new(
+                        hyper_util::rt::TokioExecutor::new(),
+                    );
+                    let conn =
+                        builder.serve_connection(TokioIo::new(StalledIo::new(stream)), svc);
+                    if let Err(e) = conn.await {
+                        tracing::debug!(%peer, error = %e, "admin connection error");
+                    }
+                });
+            }
+        }
+    }
+    drain_conns(&mut conns).await;
+    Ok(())
 }
 
 /// Minimal TLS accept loop for the admin app: one `hyper` connection per
@@ -425,6 +651,7 @@ async fn serve_tls(
     use hyper_util::rt::TokioIo;
     use tower_service::Service as _;
 
+    let caps = AdminCaps::new();
     let mut conns = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
@@ -434,14 +661,20 @@ async fn serve_tls(
             _ = conns.join_next(), if !conns.is_empty() => {}
             r = listener.accept() => {
                 let Ok((stream, peer)) = r else { continue };
+                let Some(slot) = caps.admit(peer.ip()) else {
+                    tracing::debug!(%peer, "admin connection refused: cap reached");
+                    continue;
+                };
                 let acc = acceptor.clone();
                 let app = app.clone();
                 conns.spawn(async move {
+                    // the admission slot lives exactly as long as the conn task
+                    let _slot = slot;
                     // bound the handshake — a peer that connects and stalls
                     // would otherwise hold a task (and an fd) forever
                     let tls = match tokio::time::timeout(
                         std::time::Duration::from_secs(10),
-                        acc.accept(stream),
+                        acc.accept(StalledIo::new(stream)),
                     )
                     .await
                     {
@@ -472,13 +705,31 @@ async fn serve_tls(
             }
         }
     }
-    while conns.join_next().await.is_some() {}
+    drain_conns(&mut conns).await;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn admin_caps_enforce_and_release() {
+        let caps = AdminCaps::new();
+        let ip: std::net::IpAddr = "127.0.0.1".parse().unwrap();
+        let other: std::net::IpAddr = "10.0.0.1".parse().unwrap();
+        let mut guards = Vec::new();
+        for _ in 0..ADMIN_MAX_PER_IP {
+            guards.push(caps.admit(ip).expect("under per-ip cap"));
+        }
+        assert!(caps.admit(ip).is_none(), "per-ip cap reached");
+        // another peer still gets in under the global cap
+        let g = caps.admit(other).expect("other ip admitted");
+        drop(g);
+        // releasing slots frees them again
+        drop(guards.pop());
+        assert!(caps.admit(ip).is_some());
+    }
 
     #[test]
     fn loopback_host_detection() {
@@ -736,9 +987,9 @@ mod api_tests {
             "urls": ["http://u:p@h/x"],
             "plain": "value",
         });
-        redact(&mut v);
+        redact(&mut v, &mut Vec::new(), false);
         assert_eq!(v["password"], "***");
-        assert_eq!(v["api_key"], "***");
+        assert_eq!(v["api_key"], json!(["***", "***"]));
         assert_eq!(v["nested"]["secret"], "***");
         assert_eq!(v["nested"]["safe"], "keep");
         assert_eq!(v["url"], "https://***@host");

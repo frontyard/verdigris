@@ -41,7 +41,8 @@ impl Pattern {
 pub struct Conditions {
     /// Allowed methods; empty = any.
     pub methods: Vec<Method>,
-    /// Required headers.
+    /// Required headers. An empty pattern requires presence only —
+    /// same rule as `query` (match an empty value with `re:^$`).
     pub headers: Vec<(HeaderName, Pattern)>,
     /// Required query params. An empty pattern requires presence only.
     pub query: Vec<(String, Pattern)>,
@@ -74,6 +75,14 @@ impl Conditions {
             return false;
         }
         for (name, pat) in &self.headers {
+            // an empty exact pattern means "presence only" — same rule
+            // as query params (an empty-value match is `re:^$`)
+            if matches!(pat, Pattern::Exact(s) if s.is_empty()) {
+                if !parts.headers.contains_key(name) {
+                    return false;
+                }
+                continue;
+            }
             match parts.headers.get(name).and_then(|v| v.to_str().ok()) {
                 Some(v) if pat.is_match(v) => {}
                 _ => return false,
@@ -191,5 +200,26 @@ mod tests {
         // empty conditions match anything
         let c2 = Conditions::default();
         assert!(c2.matches(&mk("DELETE", "/", None)));
+    }
+
+    #[test]
+    fn empty_header_pattern_is_presence_only() {
+        // same rule as query: `""` means "header must be present" —
+        // matching an empty value is `re:^$`
+        let m = MatchConditions {
+            headers: [("x-flag".into(), "".into())].into_iter().collect(),
+            ..Default::default()
+        };
+        let c = Conditions::build(&m).unwrap();
+        let mk = |v: Option<&str>| {
+            let mut b = http::Request::builder().method("GET").uri("/");
+            if let Some(v) = v {
+                b = b.header("x-flag", v);
+            }
+            b.body(crate::body::empty()).unwrap().into_parts().0
+        };
+        assert!(c.matches(&mk(Some("anything"))));
+        assert!(c.matches(&mk(Some(""))));
+        assert!(!c.matches(&mk(None)));
     }
 }

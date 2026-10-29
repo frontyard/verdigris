@@ -26,7 +26,7 @@ async fn start(
         addr: format!("127.0.0.1:{port}").parse().unwrap(),
         tls: false,
     }];
-    cfg.admin.listen = format!("127.0.0.1:{admin_port}").parse().unwrap();
+    cfg.admin.listen = vec![format!("127.0.0.1:{admin_port}").parse().unwrap()];
 
     let rt = Runtime::build(Arc::new(cfg)).expect("runtime builds");
     // readiness gate: config valid + runtime built, but listeners are not
@@ -99,11 +99,11 @@ default = true
 tls = "off"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = {{ status = 200, body = "hi\n" }}
 
 [[site.route]]
-path = "/skip"
+prefix = "/skip"
 respond = {{ status = 200, body = "skip\n" }}
 "#,
         log = log.display()
@@ -177,7 +177,7 @@ default = true
 tls = "off"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 static = {{ root = "{www}" }}
 "#,
         log = log.display(),
@@ -227,7 +227,7 @@ default = true
 tls = "off"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = {{ status = 200, body = "complete\n" }}
 "#,
         log = log.display()
@@ -276,11 +276,11 @@ default = true
 tls = "off"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = {{ status = 200, body = "m\n" }}
 
 [[site.route]]
-path = "/proxy"
+prefix = "/proxy"
 proxy = {{ upstream = ["http://127.0.0.1:{up_port}"] }}
 "#
     );

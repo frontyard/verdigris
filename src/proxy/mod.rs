@@ -62,7 +62,7 @@ impl Clusters {
                 Entry::Occupied(e) => Ok(e.get().clone()),
                 Entry::Vacant(e) => {
                     let c = cfg::UpstreamConfig {
-                        servers: urls.clone(),
+                        servers: urls.iter().cloned().map(Into::into).collect(),
                         ..Default::default()
                     };
                     Ok(e.insert(Arc::new(Cluster::build(key, &c)?)).clone())
@@ -113,7 +113,7 @@ pub struct Proxy {
     rewrite: Option<CompiledRewrite>,
     headers: Option<middleware::HeaderOps>,
     retries: cfg::RetryPolicy,
-    pass_host: bool,
+    host_header: cfg::HostHeader,
 }
 
 struct CompiledRewrite {
@@ -156,6 +156,7 @@ impl Proxy {
         let headers = p
             .request_headers
             .as_ref()
+            .filter(|h| h.enabled)
             .map(middleware::HeaderOps::build)
             .transpose()?;
         Ok(Self {
@@ -163,7 +164,7 @@ impl Proxy {
             rewrite,
             headers,
             retries: p.retries.clone(),
-            pass_host: p.pass_host,
+            host_header: p.host_header.clone(),
         })
     }
 
@@ -196,21 +197,42 @@ impl Proxy {
     }
 
     /// The `no healthy upstream` response for this cluster.
-    fn unavailable(&self) -> http::Response<BoxBody> {
+    fn unavailable(
+        &self,
+        parts: &http::request::Parts,
+        ctx: &RequestCtx,
+    ) -> http::Response<BoxBody> {
         let status = StatusCode::from_u16(self.cluster.unavailable.status)
             .unwrap_or(StatusCode::BAD_GATEWAY);
-        let body = self
-            .cluster
-            .unavailable
-            .body
-            .clone()
-            .unwrap_or_else(|| "no healthy upstream".to_string());
-        let mut resp = http::Response::new(body::full(format!("{body}\n")));
+        let body = match &self.cluster.unavailable.body {
+            Some(tpl) => crate::handler::substitute_parts(
+                tpl,
+                &ctx.path,
+                &parts.uri,
+                &parts.method,
+                parts
+                    .extensions
+                    .get::<crate::observe::RequestId>()
+                    .map(|r| r.as_str()),
+                ctx,
+            ),
+            None => "no healthy upstream".to_string(),
+        };
+        // 1xx/204/304 forbid a response body — emit none rather than
+        // produce invalid framing.
+        let forbidden = body::response_body_forbidden(&http::Method::GET, status);
+        let mut resp = http::Response::new(if forbidden {
+            body::empty()
+        } else {
+            body::full(format!("{body}\n"))
+        });
         *resp.status_mut() = status;
-        resp.headers_mut().insert(
-            http::header::CONTENT_TYPE,
-            HeaderValue::from_static("text/plain; charset=utf-8"),
-        );
+        if !forbidden {
+            resp.headers_mut().insert(
+                http::header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            );
+        }
         resp
     }
 
@@ -302,7 +324,7 @@ impl Proxy {
         let mut _budget_slot = None;
         loop {
             let Some(member) = lb::pick(&cluster, ctx.client_ip, &tried) else {
-                return self.unavailable();
+                return self.unavailable(&parts, ctx);
             };
             tried.push(member.id);
             cluster
@@ -334,16 +356,17 @@ impl Proxy {
             // per member/connection kind
             let mut headers = parts.headers.clone();
             headers::preserve_te_trailers(&mut headers, &orig_headers, h2);
-            // exactly one outbound Host: the upstream authority when
-            // pass_host, else the client Host we routed on. `insert`
+            // exactly one outbound Host: the upstream authority for
+            // host_header = "upstream", else the client Host we routed on.
+            // `insert`
             // collapses duplicate client Host headers (we routed on the
             // first; the upstream must see that same value, not both),
             // and it synthesizes Host for h2-inbound requests (whose
             // authority lives in :authority) heading to h1 upstreams.
-            let host_out = if self.pass_host {
-                member.url.authority()
-            } else {
-                orig_host.clone()
+            let host_out = match &self.host_header {
+                cfg::HostHeader::Upstream => member.url.authority(),
+                cfg::HostHeader::Original => orig_host.clone(),
+                cfg::HostHeader::Custom(v) | cfg::HostHeader::Verbatim(v) => v.clone(),
             };
             if let Ok(v) = HeaderValue::from_str(&host_out) {
                 headers.insert(HOST, v);
@@ -784,7 +807,7 @@ mod handle_tests {
             rewrite: None,
             request_headers: None,
             retries: cfg::RetryPolicy::default(),
-            pass_host: true,
+            host_header: cfg::HostHeader::Upstream,
         }
     }
 
@@ -799,15 +822,19 @@ mod handle_tests {
     #[tokio::test]
     async fn handle_happy_path_and_host_modes() {
         let (addr, hosts) = fake(200, "hi").await;
-        // pass_host → upstream sees its own authority
-        let p = proxy_for(vec![format!("http://{addr}")], |p| p.pass_host = true);
+        // host_header = "upstream" → upstream sees its own authority
+        let p = proxy_for(vec![format!("http://{addr}")], |p| {
+            p.host_header = cfg::HostHeader::Upstream
+        });
         let r = p.handle(req("/x"), &ctx("/x")).await;
         assert_eq!(r.status(), 200);
         r.into_body().collect().await.unwrap();
         assert_eq!(hosts.lock().unwrap().as_str(), addr.to_string());
 
-        // !pass_host → upstream sees the routed client Host
-        let p = proxy_for(vec![format!("http://{addr}")], |p| p.pass_host = false);
+        // host_header = "original" → upstream sees the routed client Host
+        let p = proxy_for(vec![format!("http://{addr}")], |p| {
+            p.host_header = cfg::HostHeader::Original
+        });
         let r = p.handle(req("/y"), &ctx("/y")).await;
         assert_eq!(r.status(), 200);
         r.into_body().collect().await.unwrap();
@@ -830,7 +857,10 @@ mod handle_tests {
         // replace_prefix
         let p = proxy_for(vec![format!("http://{addr}")], |p| {
             p.rewrite = Some(cfg::Rewrite {
-                replace_prefix: Some(cfg::PrefixPair::Tuple("/old".into(), "/new".into())),
+                replace_prefix: Some(cfg::PrefixPair {
+                    from: "/old".into(),
+                    to: "/new".into(),
+                }),
                 ..Default::default()
             });
         });
@@ -928,7 +958,7 @@ mod handle_tests {
     async fn unavailable_custom_response() {
         let (addr, _) = fake(200, "hi").await;
         let mut c = cfg::UpstreamConfig {
-            servers: vec![format!("http://{addr}")],
+            servers: vec![format!("http://{addr}").into()],
             unavailable: cfg::UnavailableResponse {
                 status: 503,
                 body: Some("try later".into()),
@@ -943,7 +973,7 @@ mod handle_tests {
             rewrite: None,
             headers: None,
             retries: cfg::RetryPolicy::default(),
-            pass_host: true,
+            host_header: cfg::HostHeader::Upstream,
         };
         for m in &p.cluster.members {
             m.mark_sick(Duration::from_secs(60));

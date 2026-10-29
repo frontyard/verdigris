@@ -19,7 +19,7 @@ disk_path = "{}"
         dir.display()
     );
     if let Ok(cfg) = toml::from_str::<verd::config::model::Config>(&cfg_text) {
-        let _ = verd::cache::Cache::build_all(&cfg, None);
+        let _ = verd::cache::Cache::build_all(&cfg, None, verd::BuildMode::Live);
     }
     let _ = std::fs::remove_file(&obj);
 });

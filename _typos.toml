@@ -3,6 +3,8 @@
 
 [default.extend-words]
 abd = "abd" # fixture string paired with "abc" in pattern tests
+alls = "alls" # "catch-alls" (catch-all routes) in docs and comments
+upsteam = "upsteam" # deliberate typo in the host_header_typo_warns test
 Mye = "Mye" # substring inside the fixed bcrypt hash in middleware/auth.rs
 ned = "ned" # example username in docs and llms.txt
 sie = "sie" # stale-if-error (cache semantics)

@@ -4,7 +4,7 @@ Each example is a complete `verd.toml` — copy it, replace the domains
 and paths, check it with `verd validate`, then `verd run`. The HTTPS
 examples assume DNS already resolves to the machine and ports 80 and
 443 are reachable; drop the `[acme]` section and use `tls = "off"` or
-`"selfsigned"` where that's not true.
+`"self_signed"` where that's not true.
 
 ## Static site with automatic HTTPS
 
@@ -46,7 +46,7 @@ hosts = ["app.example.com"]
 tls = "auto"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 static = { root = "/var/www/app/dist", spa = true,
            cache_control = { "/assets/*" = "public, max-age=31536000, immutable" } }
 ```
@@ -93,7 +93,7 @@ proxy = { upstream = "http://127.0.0.1:3000",
           rewrite = { strip_prefix = "/api" } }
 
 [[site.route]]
-path = "/"
+prefix = "/"
 static = { root = "/var/www/site", spa = true }
 ```
 
@@ -114,6 +114,7 @@ email = "ops@example.com"
 servers = ["http://10.0.0.11:8080", "http://10.0.0.12:8080",
            "http://10.0.0.13:8080"]
 lb = "least_conn"                 # round_robin | least_conn | ip_hash
+max_connections = 256             # per-member connection cap
 
 [upstream.api.health.active]      # periodic probes on each member
 path = "/healthz"
@@ -127,7 +128,6 @@ cooldown = "30s"
 [upstream.api.timeouts]
 connect = "3s"
 response_header = "10s"
-max_connections = 256
 
 [[site]]
 hosts = ["api.example.com"]
@@ -167,7 +167,7 @@ default = true
 tls = "off"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = { status = 404, body = "unknown host" }
 ```
 
@@ -194,9 +194,6 @@ root = "/var/www/example"
 hosts = ["www.example.com"]
 tls = "auto"
 redirect_host = "example.com"     # http://www… → https://example.com…
-
-[[site.route]]
-path = "/"
 redirect = { to = "https://example.com{path}{query}", status = 308 }
 ```
 
@@ -209,7 +206,7 @@ hosts = ["old.example.com", "www.old.example.com"]
 tls = "auto"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 redirect = { to = "https://new.example.com{path}{query}", status = 301 }
 ```
 
@@ -233,7 +230,7 @@ tls = "auto"
 
 [[site.route]]
 prefix = "/ws"
-proxy = { upstream = "http://127.0.0.1:4000" }
+proxy = "http://127.0.0.1:4000"
 timeouts = { request_deadline = "0s", send = "0s" }
 ```
 
@@ -256,8 +253,8 @@ hosts = ["grafana.internal.example"]
 tls = "auto"
 
 [[site.route]]
-path = "/"
-proxy = { upstream = "http://10.0.0.5:3000" }
+prefix = "/"
+proxy = "http://10.0.0.5:3000"
 ip_allow = ["10.0.0.0/8", "192.168.0.0/16"]
 auth = { basic = { realm = "ops",
                    users = { oncall = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$3nGf8u5Z2p2mJx0yq9Rk3g" } } }
@@ -267,6 +264,27 @@ Password values must be argon2/bcrypt hashes — generate with `argon2`
 or `htpasswd -B`; an `htpasswd` file path works instead of inline
 `users`. For machine clients use `bearer` or `api_key` with `${VAR}`
 interpolation. See [Middleware](middleware.md).
+
+When several routes share the same guard, move the middleware onto the
+site instead of repeating it per route — routes inherit it and can opt
+out with `enabled = false`:
+
+```toml
+[[site]]
+hosts = ["grafana.internal.example"]
+ip_allow = ["10.0.0.0/8", "192.168.0.0/16"]   # applies to every route
+auth = { basic = { realm = "ops",
+                   users = { oncall = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$3nGf8u5Z2p2mJx0yq9Rk3g" } } }
+
+[[site.route]]
+prefix = "/"
+proxy = "http://10.0.0.5:3000"
+
+[[site.route]]
+prefix = "/healthz"
+respond = { status = 200, body = "ok" }
+auth = { enabled = false }                    # no auth on this route
+```
 
 ## Public API: rate limiting and CORS
 
@@ -286,7 +304,7 @@ tls = "auto"
 
 [[site.route]]
 prefix = "/v1"
-proxy = { upstream = "api" }
+proxy = "api"
 rate_limit = { key = "ip", rate = "100/m", burst = 25 }
 cors = { origins = ["https://app.example.com"],
          methods = ["GET", "POST", "OPTIONS"],
@@ -327,8 +345,8 @@ hosts = ["cdn.example.com"]
 tls = "auto"
 
 [[site.route]]
-path = "/"
-proxy = { upstream = "app" }
+prefix = "/"
+proxy = "app"
 cache = { store = "main", stale_while_revalidate = "30s",
           stale_if_error = "1h" }
 ```
@@ -354,7 +372,7 @@ exact = "/healthz"
 respond = { status = 200, body = "ok" }
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = { status = 503, body = "back in a few minutes",
             headers = { "retry-after" = "300" } }
 ```
@@ -378,7 +396,7 @@ root = "./public"
 ```
 
 To test HTTPS locally swap the listener for
-`{ addr = "127.0.0.1:8443", tls = true }` and set `tls = "selfsigned"`
+`{ addr = "127.0.0.1:8443", tls = true }` and set `tls = "self_signed"`
 on the site — a throwaway certificate is generated at boot.
 
 ## Splitting a large config

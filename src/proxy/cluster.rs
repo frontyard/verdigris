@@ -8,7 +8,7 @@
 use std::collections::VecDeque;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -184,6 +184,12 @@ pub struct Member {
     pub id: usize,
     /// The parsed server URL.
     pub url: UpstreamUrl,
+    /// Selection weight relative to the other primaries.
+    pub weight: u32,
+    /// Standby member — only picked when no primary is healthy.
+    pub backup: bool,
+    /// Smooth-weighted-round-robin running weight.
+    pub(crate) ew: AtomicI64,
     /// Instant the member was built — epoch for `sick_until` millis.
     epoch: Instant,
     /// Millis since `epoch` until which the member is out of rotation.
@@ -213,6 +219,8 @@ impl Member {
     fn build(
         id: usize,
         url: UpstreamUrl,
+        weight: u32,
+        backup: bool,
         max_connections: usize,
         cluster: metrics::SharedString,
     ) -> Arc<Self> {
@@ -221,6 +229,9 @@ impl Member {
         Arc::new(Self {
             id,
             url,
+            weight,
+            backup,
+            ew: AtomicI64::new(0),
             epoch: Instant::now(),
             sick_until: AtomicU64::new(0),
             fails: AtomicU32::new(0),
@@ -230,7 +241,7 @@ impl Member {
             h2: Mutex::new(None),
             dns: tokio::sync::Mutex::new(DnsState::default()),
             literal,
-            sem: Arc::new(Semaphore::new(max_connections.max(1))),
+            sem: Arc::new(Semaphore::new(max_connections)),
             meters,
         })
     }
@@ -242,8 +253,16 @@ impl Member {
     /// Whether the member is eligible for traffic right now. Members that
     /// were marked sick re-enter automatically once the cooldown lapses.
     pub fn healthy(&self) -> bool {
+        self.healthy_at(Instant::now())
+    }
+
+    /// `healthy` judged against a caller-supplied instant — `lb::pick`
+    /// snapshots one clock read so every member is evaluated at the same
+    /// time (and pays one `Instant::now()` per pick instead of per member).
+    pub(crate) fn healthy_at(&self, now: Instant) -> bool {
         !self.draining.load(Ordering::Relaxed)
-            && self.now_ms() >= self.sick_until.load(Ordering::Relaxed)
+            && now.saturating_duration_since(self.epoch).as_millis() as u64
+                >= self.sick_until.load(Ordering::Relaxed)
     }
 
     /// Administrative drain/undrain (admin API). Draining members finish
@@ -701,9 +720,21 @@ impl Cluster {
             .iter()
             .enumerate()
             .map(|(i, raw)| {
-                UpstreamUrl::parse(raw)
+                if raw.weight == 0 {
+                    return Err(format!(
+                        "upstream.{name}.servers[{i}]: weight must be at least 1"
+                    ));
+                }
+                UpstreamUrl::parse(&raw.url)
                     .map(|url| {
-                        Member::build(i, url, c.timeouts.max_connections, cluster_lbl.clone())
+                        Member::build(
+                            i,
+                            url,
+                            raw.weight,
+                            raw.backup,
+                            c.max_connections,
+                            cluster_lbl.clone(),
+                        )
                     })
                     .map_err(|e| format!("upstream.{name}.servers[{i}]: {e}"))
             })
@@ -735,6 +766,16 @@ impl Cluster {
             .get_or_init(|| build_tls_client(&self.tls))
             .clone()
             .map_err(UpError::Tls)
+    }
+
+    /// `BuildMode::Check` extra: force the TLS client build now — it is
+    /// lazy in `Live` so an https upstream with a bad `tls` block would
+    /// only fail on first request, after `verd validate` said OK.
+    pub fn check(&self) -> Result<(), String> {
+        if self.members.iter().any(|m| m.url.tls) {
+            self.tls_client().map(|_| ()).map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 
     /// Lazily build the DNS resolver (needs a Tokio context, so not built
@@ -949,7 +990,14 @@ mod tests {
 
     #[test]
     fn member_health_cycle() {
-        let m = Member::build(0, UpstreamUrl::parse("http://x").unwrap(), 4, "test".into());
+        let m = Member::build(
+            0,
+            UpstreamUrl::parse("http://x").unwrap(),
+            1,
+            false,
+            4,
+            "test".into(),
+        );
         assert!(m.healthy());
         let p = cfg::PassiveHealth {
             failures: 2,
@@ -971,15 +1019,15 @@ mod tests {
         Cluster::build(
             "t",
             &cfg::UpstreamConfig {
-                servers,
+                servers: servers.into_iter().map(Into::into).collect(),
                 lb: cfg::LoadBalancing::default(),
                 health: cfg::HealthCheck::default(),
                 timeouts: cfg::UpstreamTimeouts {
                     connect: Duration::from_millis(300),
                     idle,
-                    max_connections: max_conn,
                     ..Default::default()
                 },
+                max_connections: max_conn,
                 dns: cfg::UpstreamDns::default(),
                 tls: cfg::UpstreamTls::default(),
                 unavailable: cfg::UnavailableResponse::default(),
@@ -1358,7 +1406,7 @@ mod tests {
         };
         let rebuild = |servers: Vec<String>| {
             let mut c = cfg::UpstreamConfig {
-                servers,
+                servers: servers.into_iter().map(Into::into).collect(),
                 health: hc.clone(),
                 ..Default::default()
             };

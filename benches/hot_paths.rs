@@ -87,7 +87,7 @@ prefix = "/static"
 respond = { body = "ok" }
 
 [[site.route]]
-path = "/health"
+prefix = "/health"
 respond = { body = "ok" }
 
 [[site]]
@@ -107,7 +107,7 @@ respond = { body = "default" }
 
 fn build_index() -> HostIndex {
     let cfg: Config = toml::from_str(CONFIG_TOML).unwrap();
-    let mw = Factory::new(&cfg, None).unwrap();
+    let mw = Factory::new(&cfg, None, verd::BuildMode::Live).unwrap();
     router::build(&cfg, &mw).unwrap()
 }
 
@@ -324,7 +324,7 @@ fn strip_utm_param(bencher: Bencher) {
 #[divan::bench]
 fn cache_lookup_hit(bencher: Bencher) {
     let cfg: Config = toml::from_str(CONFIG_TOML).unwrap();
-    let mw = Factory::new(&cfg, None).unwrap();
+    let mw = Factory::new(&cfg, None, verd::BuildMode::Live).unwrap();
     let cache = mw.caches()["main"].clone();
     let key = key::primary(
         &http::Method::GET,
@@ -379,6 +379,7 @@ fn security_headers(bencher: Bencher) {
             csp: Some("default-src 'self'".into()),
             cross_domain_policy: "none".into(),
         },
+        None,
         None,
     )
     .unwrap();

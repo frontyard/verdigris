@@ -202,7 +202,7 @@ pub fn build(config: &cfg::Config, mw: &middleware::Factory) -> Result<HostIndex
         let mut route_cfgs: Vec<cfg::RouteConfig> = site_cfg.route.clone();
         if let Some(root) = &site_cfg.root {
             route_cfgs.push(cfg::RouteConfig {
-                path: Some("/".into()),
+                prefix: Some("/".into()),
                 static_files: Some(cfg::StaticHandler {
                     root: root.clone(),
                     ..Default::default()
@@ -212,14 +212,22 @@ pub fn build(config: &cfg::Config, mw: &middleware::Factory) -> Result<HostIndex
         }
         if let Some(up) = &site_cfg.proxy {
             route_cfgs.push(cfg::RouteConfig {
-                path: Some("/".into()),
-                proxy: Some(cfg::ProxyHandler {
-                    upstream: up.clone(),
-                    rewrite: None,
-                    request_headers: None,
-                    retries: cfg::RetryPolicy::default(),
-                    pass_host: true,
-                }),
+                prefix: Some("/".into()),
+                proxy: Some(up.clone()),
+                ..Default::default()
+            });
+        }
+        if let Some(resp) = &site_cfg.respond {
+            route_cfgs.push(cfg::RouteConfig {
+                prefix: Some("/".into()),
+                respond: Some(resp.clone()),
+                ..Default::default()
+            });
+        }
+        if let Some(redir) = &site_cfg.redirect {
+            route_cfgs.push(cfg::RouteConfig {
+                prefix: Some("/".into()),
+                redirect: Some(redir.clone()),
                 ..Default::default()
             });
         }
@@ -236,14 +244,20 @@ pub fn build(config: &cfg::Config, mw: &middleware::Factory) -> Result<HostIndex
             let handler = handler::build(route_cfg, &site_name, &mut clusters, &route_id)
                 .map_err(|e| BuildError::Route(format!("{}: {e}", ctx())))?;
             let middleware = mw
-                .build(site_cfg, route_cfg)
+                .build(si, site_cfg, route_cfg)
                 .map_err(|e| BuildError::Route(format!("{}: {e}", ctx())))?;
 
             let mut timeouts = config.timeouts.clone();
+            if let Some(over) = &site_cfg.timeouts {
+                timeouts.apply_overrides(over);
+            }
             if let Some(over) = &route_cfg.timeouts {
                 timeouts.apply_overrides(over);
             }
             let mut limits = config.limits.clone();
+            if let Some(over) = &site_cfg.limits {
+                limits.apply_overrides(over);
+            }
             if let Some(over) = &route_cfg.limits {
                 limits.apply_overrides(over);
             }
@@ -330,6 +344,10 @@ pub fn build(config: &cfg::Config, mw: &middleware::Factory) -> Result<HostIndex
         }
     }
 
+    // longest suffix first: `*.b.com` must beat `*.com` regardless of
+    // declaration order (stable sort keeps decl order within ties)
+    wildcards.sort_by_key(|w| std::cmp::Reverse(w.0.len()));
+
     Ok(HostIndex {
         exact,
         wildcards,
@@ -351,7 +369,7 @@ fn build_matcher(route: &cfg::RouteConfig) -> Result<PathMatch, String> {
     if let Some(p) = &route.exact {
         return Ok(PathMatch::Exact(p.clone()));
     }
-    if let Some(p) = route.prefix.as_ref().or(route.path.as_ref()) {
+    if let Some(p) = route.prefix.as_ref() {
         return Ok(PathMatch::Prefix(p.clone()));
     }
     if let Some(r) = &route.regex {
@@ -386,7 +404,7 @@ mod tests {
 
     fn site_index(text: &str) -> HostIndex {
         let cfg = crate::config::validate::parse_test_config(text);
-        let mw = middleware::Factory::new(&cfg, None).unwrap();
+        let mw = middleware::Factory::new(&cfg, None, crate::BuildMode::Live).unwrap();
         build(&cfg, &mw).unwrap()
     }
 
@@ -397,17 +415,17 @@ mod tests {
 [[site]]
 hosts = ["a.example.com"]
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = { body = "a" }
 [[site]]
 hosts = ["*.example.com"]
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = { body = "wild" }
 [[site]]
 default = true
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = { body = "d" }
 "#,
         );
@@ -424,6 +442,27 @@ respond = { body = "d" }
             idx.lookup("A.EXAMPLE.COM:443").unwrap().name,
             "a.example.com"
         );
+    }
+
+    #[test]
+    fn longest_wildcard_suffix_wins_regardless_of_order() {
+        let idx = site_index(
+            r#"
+[[site]]
+hosts = ["*.com"]
+[[site.route]]
+prefix = "/"
+respond = { body = "broad" }
+[[site]]
+hosts = ["*.b.com"]
+[[site.route]]
+prefix = "/"
+respond = { body = "specific" }
+"#,
+        );
+        // declared after the broad wildcard but must win
+        assert_eq!(idx.lookup("x.b.com").unwrap().name, "*.b.com");
+        assert_eq!(idx.lookup("x.c.com").unwrap().name, "*.com");
     }
 
     #[test]
@@ -455,7 +494,7 @@ respond = { body = "d" }
 [[site]]
 hosts = ["x"]
 [[site.route]]
-path = "/api/"
+prefix = "/api/"
 respond = { status = 200, body = "prefix" }
 [[site.route]]
 exact = "/api/v1"
@@ -473,13 +512,13 @@ respond = { status = 200, body = "exact" }
 [[site]]
 hosts = ["x"]
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = { body = "root" }
 [[site.route]]
-path = "/api/"
+prefix = "/api/"
 respond = { body = "api" }
 [[site.route]]
-path = "/api/v1/"
+prefix = "/api/v1/"
 respond = { body = "v1" }
 "#,
         );

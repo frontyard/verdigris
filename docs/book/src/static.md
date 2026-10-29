@@ -2,7 +2,7 @@
 
 ```toml
 [[site.route]]
-path = "/"
+prefix = "/"
 static = { root = "/var/www/site", index = ["index.html"] }
 ```
 
@@ -18,3 +18,27 @@ static = { root = "/var/www/site", index = ["index.html"] }
 
 Directory listings are off by default — requests to a directory redirect
 to its `index` or return `404`.
+
+`site.root` is a shorthand for exactly this — `root = "/var/www/site"`
+at site level materializes a catch-all `static` route.
+
+## Cache-Control and error pages
+
+`cache_control` maps path globs to `Cache-Control` values. Matching is
+by **specificity, not declaration order**: fewest `*` first, then
+most literal characters — `"/app.css"` beats `"*.css"` beats `"*"`, so
+a catch-all never shadows the specific entries:
+
+```toml
+[[site]]
+hosts = ["example.com"]
+[[site.route]]
+prefix = "/"
+static = { root = "/var/www/site",
+           cache_control = { "*" = "no-cache", "*.css" = "public, max-age=86400" },
+           error_pages = { "5xx" = "oops.html", 404 = "not-found.html" } }
+```
+
+`error_pages` maps statuses to pages inside `root` — exact codes
+(`404`) or whole classes (`"4xx"`, `"5xx"`); an exact code wins over
+its class.

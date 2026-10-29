@@ -8,70 +8,209 @@ use schemars::JsonSchema;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// Serde adapter for `BTreeMap<u16, V>`: TOML keys are strings, so keys
-/// like `"404"` are parsed into `u16` status codes.
-pub mod status_map {
-    use std::collections::BTreeMap;
+/// Serde adapter for `Vec<T>` fields: `x = "v"` parses as `["v"]` —
+/// scalar sugar for the common single-entry case (see
+/// `docs/config-grammar.md`; `include` deliberately stays strict).
+/// Serializes as the list form — canonical output is always an array.
+pub mod one_or_many {
+    use std::fmt;
+    use std::marker::PhantomData;
 
-    use serde::de::Error;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use serde::de::value::{MapAccessDeserializer, SeqAccessDeserializer};
+    use serde::de::{self, IntoDeserializer, Visitor};
+    use serde::{Deserialize, Deserializer};
 
-    /// Deserialize string keys into `u16` HTTP status codes.
-    pub fn deserialize<'de, D, V>(d: D) -> Result<BTreeMap<u16, V>, D::Error>
+    /// Deserialize `v` or `[v, …]` into `Vec<T>`.
+    ///
+    /// An array is always the list form: a `T` that is a
+    /// struct-with-defaults would otherwise positionally accept `[]` and
+    /// produce a bogus single element. Any other value is handed to `T`
+    /// directly — one pass, no `#[serde(untagged)]` buffering, and `T`'s
+    /// own error (with its path) reaches the user.
+    pub fn deserialize<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
     where
         D: Deserializer<'de>,
-        V: Deserialize<'de>,
+        T: Deserialize<'de>,
     {
-        BTreeMap::<String, V>::deserialize(d)?
-            .into_iter()
-            .map(|(k, v)| {
-                k.parse::<u16>()
-                    .map(|k| (k, v))
-                    .map_err(|_| D::Error::custom(format!("invalid HTTP status code {k:?}")))
-            })
-            .collect()
+        d.deserialize_any(OneOrMany(PhantomData))
     }
 
-    /// Serialize status codes back to string keys.
-    pub fn serialize<S, V>(m: &BTreeMap<u16, V>, s: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-        V: Serialize,
-    {
-        m.iter()
-            .map(|(k, v)| (k.to_string(), v))
-            .collect::<BTreeMap<_, _>>()
-            .serialize(s)
+    struct OneOrMany<T>(PhantomData<T>);
+
+    impl<'de, T: Deserialize<'de>> OneOrMany<T> {
+        fn one<D: Deserializer<'de>>(d: D) -> Result<Vec<T>, D::Error> {
+            T::deserialize(d).map(|v| vec![v])
+        }
+    }
+
+    impl<'de, T: Deserialize<'de>> Visitor<'de> for OneOrMany<T> {
+        type Value = Vec<T>;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a value or a list of values")
+        }
+
+        fn visit_seq<A: de::SeqAccess<'de>>(self, seq: A) -> Result<Vec<T>, A::Error> {
+            Vec::deserialize(SeqAccessDeserializer::new(seq))
+        }
+
+        fn visit_map<A: de::MapAccess<'de>>(self, map: A) -> Result<Vec<T>, A::Error> {
+            Self::one(MapAccessDeserializer::new(map))
+        }
+
+        fn visit_bool<E: de::Error>(self, v: bool) -> Result<Vec<T>, E> {
+            Self::one(v.into_deserializer())
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Vec<T>, E> {
+            Self::one(v.into_deserializer())
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Vec<T>, E> {
+            Self::one(v.into_deserializer())
+        }
+
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Vec<T>, E> {
+            Self::one(v.into_deserializer())
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Vec<T>, E> {
+            Self::one(v.into_deserializer())
+        }
+
+        fn visit_borrowed_str<E: de::Error>(self, v: &'de str) -> Result<Vec<T>, E> {
+            Self::one(de::value::BorrowedStrDeserializer::new(v))
+        }
+
+        fn visit_string<E: de::Error>(self, v: String) -> Result<Vec<T>, E> {
+            Self::one(v.into_deserializer())
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Vec<T>, E> {
+            Self::one(().into_deserializer())
+        }
+    }
+
+    struct List<T>(Vec<T>);
+
+    impl<'de, T: Deserialize<'de>> Deserialize<'de> for List<T> {
+        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            d.deserialize_any(OneOrMany(PhantomData)).map(List)
+        }
+    }
+
+    /// `v` or `[v, …]` or none into `Option<Vec<T>>` — same sugar for
+    /// optional list fields.
+    pub mod option {
+        use serde::{Deserialize, Deserializer};
+
+        /// Deserialize `v`, `[v, …]`, or none into `Option<Vec<T>>`.
+        pub fn deserialize<'de, D, T>(d: D) -> Result<Option<Vec<T>>, D::Error>
+        where
+            D: Deserializer<'de>,
+            T: Deserialize<'de>,
+        {
+            Option::<super::List<T>>::deserialize(d).map(|o| o.map(|l| l.0))
+        }
     }
 }
 
-/// Serde adapter for [`Duration`] fields: a humantime string (`"30s"`,
-/// `"180d"`) or a bare integer number of seconds (accepted for
-/// compatibility with configs written before the field took strings).
-/// Serializes as the canonical humantime string.
-pub mod secs_or_duration {
+/// Serde adapter for `Vec<IpNet>`/`Option<Vec<IpNet>>` fields: the
+/// same scalar-or-list sugar as `one_or_many`, plus bare IPs — a
+/// `"10.0.0.1"` entry parses as the host route `10.0.0.1/32` (and
+/// `::1` as `/128`), since a prefix is almost never what an operator
+/// means to omit.
+pub mod cidr {
+    use std::net::IpAddr;
+
+    use ipnet::IpNet;
+    use serde::Deserializer;
+    use serde::de::Error;
+
+    /// Parse a CIDR or a bare IP (interpreted as a host route).
+    pub fn parse(s: &str) -> Result<IpNet, String> {
+        s.parse::<IpNet>().or_else(|_| {
+            s.parse::<IpAddr>()
+                .map(|ip| match ip {
+                    IpAddr::V4(a) => IpNet::V4(ipnet::Ipv4Net::from(a)),
+                    IpAddr::V6(a) => IpNet::V6(ipnet::Ipv6Net::from(a)),
+                })
+                .map_err(|_| {
+                    format!("invalid network {s:?} — expected a CIDR (\"10.0.0.0/8\") or IP (\"10.0.0.1\")")
+                })
+        })
+    }
+
+    /// Deserialize `v` or `[v, …]` into `Vec<IpNet>`.
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<IpNet>, D::Error> {
+        let raw: Vec<String> = super::one_or_many::deserialize(d)?;
+        raw.iter()
+            .map(|s| parse(s).map_err(Error::custom))
+            .collect()
+    }
+
+    /// Same sugar for `Option<Vec<IpNet>>` fields.
+    pub mod option {
+        use ipnet::IpNet;
+        use serde::Deserializer;
+        use serde::de::Error;
+
+        /// Deserialize `v`, `[v, …]`, or none into `Option<Vec<IpNet>>`.
+        pub fn deserialize<'de, D: Deserializer<'de>>(
+            d: D,
+        ) -> Result<Option<Vec<IpNet>>, D::Error> {
+            let raw: Option<Vec<String>> =
+                crate::config::values::one_or_many::option::deserialize(d)?;
+            raw.map(|v| {
+                v.iter()
+                    .map(|s| super::parse(s).map_err(Error::custom))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()
+        }
+    }
+}
+
+/// Canonical short form for a [`Duration`]: the largest unit that
+/// divides it evenly (`"180d"`, `"2h"`, `"90s"`), falling back to
+/// humantime's compound form when no single unit is exact. Used when
+/// serializing durations back out (`verd config`, schema defaults).
+pub fn format_duration(d: Duration) -> String {
+    let ns = d.as_nanos();
+    const UNITS: [(u128, &str); 7] = [
+        (86_400_000_000_000, "d"),
+        (3_600_000_000_000, "h"),
+        (60_000_000_000, "m"),
+        (1_000_000_000, "s"),
+        (1_000_000, "ms"),
+        (1_000, "us"),
+        (1, "ns"),
+    ];
+    for (unit_ns, suffix) in UNITS {
+        if ns >= unit_ns && ns.is_multiple_of(unit_ns) {
+            return format!("{}{}", ns / unit_ns, suffix);
+        }
+    }
+    humantime::format_duration(d).to_string()
+}
+
+/// Serde adapter for [`Duration`] fields: humantime strings only
+/// (`"30s"`, `"180d"`). Serializes as the compact canonical string.
+pub mod duration {
     use std::time::Duration;
 
     use serde::de::Error;
     use serde::{Deserialize, Deserializer, Serializer};
 
-    /// Deserialize `123` (seconds) or `"180d"`.
+    /// Deserialize a humantime string like `"180d"`.
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Repr {
-            Int(u64),
-            Str(String),
-        }
-        match Repr::deserialize(d)? {
-            Repr::Int(secs) => Ok(Duration::from_secs(secs)),
-            Repr::Str(s) => humantime::parse_duration(&s).map_err(Error::custom),
-        }
+        let s = String::deserialize(d)?;
+        humantime::parse_duration(&s).map_err(Error::custom)
     }
 
     /// Serialize as `"180d"`.
     pub fn serialize<S: Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&humantime::format_duration(*d).to_string())
+        s.serialize_str(&super::format_duration(*d))
     }
 
     /// Same for `Option<Duration>` fields.
@@ -81,30 +220,20 @@ pub mod secs_or_duration {
         use serde::de::Error;
         use serde::{Deserialize, Deserializer, Serializer};
 
-        /// Deserialize `null`, `123` (seconds), or `"180d"`.
+        /// Deserialize `null` or a humantime string.
         pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Duration>, D::Error> {
-            Option::<super::Repr>::deserialize(d)?
-                .map(|r| match r {
-                    super::Repr::Int(secs) => Ok(Duration::from_secs(secs)),
-                    super::Repr::Str(s) => humantime::parse_duration(&s).map_err(Error::custom),
-                })
+            Option::<String>::deserialize(d)?
+                .map(|s| humantime::parse_duration(&s).map_err(Error::custom))
                 .transpose()
         }
 
         /// Serialize `null` or `"180d"`.
         pub fn serialize<S: Serializer>(d: &Option<Duration>, s: S) -> Result<S::Ok, S::Error> {
             match d {
-                Some(d) => s.serialize_str(&humantime::format_duration(*d).to_string()),
+                Some(d) => s.serialize_str(&super::super::format_duration(*d)),
                 None => s.serialize_none(),
             }
         }
-    }
-
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Int(u64),
-        Str(String),
     }
 }
 
@@ -181,16 +310,20 @@ impl fmt::Display for ByteSize {
 
 impl<'de> Deserialize<'de> for ByteSize {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Repr {
-            Int(u64),
-            Str(String),
-        }
-        match Repr::deserialize(d)? {
-            Repr::Int(n) => Ok(Self(n)),
-            Repr::Str(s) => Self::parse(&s).map_err(D::Error::custom),
-        }
+        super::model::shorthand(d)
+    }
+}
+
+impl<'de> super::model::Shorthand<'de> for ByteSize {
+    const EXPECTING: &'static str = "a byte count or a size string like \"10MiB\"";
+    fn from_int(n: i64) -> Option<Self> {
+        u64::try_from(n).ok().map(Self)
+    }
+    fn from_str(s: &str) -> Option<Self> {
+        Self::parse(s).ok()
+    }
+    fn from_map<A: serde::de::MapAccess<'de>>(_: A) -> Result<Self, A::Error> {
+        Err(serde::de::Error::custom(Self::EXPECTING))
     }
 }
 
@@ -200,8 +333,10 @@ impl Serialize for ByteSize {
     }
 }
 
-/// A rate like `100/s`, `600/m`, `10000/h`, `50000/day`. Units: `s`, `m`,
-/// `h`, `d` or the words `second`, `minute`, `hour`, `day` (also plural).
+/// A rate like `100/s`, `600/m`, `10000/h`, `50000/day`, or `10/30s`
+/// for arbitrary periods. Units: `s`, `m`, `h`, `d` or the words
+/// `second`, `minute`, `hour`, `day` (also plural), or a humantime
+/// duration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
 pub struct RateSpec {
     /// Number of permits granted per `period`.
@@ -231,7 +366,8 @@ impl RateSpec {
             "m" | "min" | "minute" | "minutes" => Duration::from_secs(60),
             "h" | "hr" | "hour" | "hours" => Duration::from_secs(3600),
             "d" | "day" | "days" => Duration::from_secs(86400),
-            _ => return Err(format!("invalid rate unit in {s:?}")),
+            other => humantime::parse_duration(other)
+                .map_err(|_| format!("invalid rate unit in {s:?}"))?,
         };
         Ok(Self { permits, period })
     }
@@ -361,20 +497,5 @@ mod tests {
     struct RateHolder {
         #[allow(dead_code)]
         r: RateSpec,
-    }
-
-    #[test]
-    fn status_map_keys_are_statuses() {
-        use std::collections::BTreeMap;
-        use std::path::PathBuf;
-
-        #[derive(serde::Deserialize)]
-        struct Wrap {
-            #[serde(with = "status_map")]
-            m: BTreeMap<u16, PathBuf>,
-        }
-        let w: Wrap = toml::from_str("m = { \"404\" = \"/404.html\" }").unwrap();
-        assert_eq!(w.m[&404], PathBuf::from("/404.html"));
-        assert!(toml::from_str::<Wrap>("m = { \"oops\" = \"/x\" }").is_err());
     }
 }

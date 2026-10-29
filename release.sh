@@ -68,6 +68,10 @@ if [ "$cur" != "$new" ]; then
         docs/book/src/introduction.md
     grep -q "Documentation for verd $new" docs/book/src/introduction.md \
         || { echo "failed to update docs/book/src/introduction.md" >&2; exit 1; }
+    sed -i "s|releases/download/v[0-9.]*|releases/download/v$new|" \
+        docs/book/src/installation.md
+    grep -q "releases/download/v$new" docs/book/src/installation.md \
+        || { echo "failed to update docs/book/src/installation.md" >&2; exit 1; }
     cargo metadata --quiet --format-version 1 >/dev/null   # re-sync Cargo.lock
 fi
 
@@ -100,7 +104,7 @@ fi
 python3 docs/gen-llms-full.py
 
 # --- commit, tag, push -------------------------------------------------------
-git add Cargo.toml Cargo.lock CHANGELOG.md docs/book/book.toml docs/book/src/introduction.md llms-full.txt
+git add Cargo.toml Cargo.lock CHANGELOG.md docs/book/book.toml docs/book/src/introduction.md docs/book/src/installation.md llms-full.txt
 [ $regen -eq 1 ] && git add docs/book/src/reference.md || true
 git diff --cached --quiet || git commit -m "Release v$new"
 if [ $no_tag -eq 1 ]; then

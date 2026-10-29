@@ -24,14 +24,14 @@ impl Respond {
         })
     }
 
-    /// Produce the fixed response; `{path}`, `{host}`, `{method}`,
-    /// `{scheme}` placeholders substitute from the request.
+    /// Produce the fixed response; `{path}`, `{host}`, `{query}`,
+    /// `{method}`, `{scheme}` placeholders substitute from the request.
     pub fn handle(
         &self,
         req: &http::Request<BoxBody>,
         ctx: &RequestCtx,
     ) -> http::Response<BoxBody> {
-        let body = super::substitute(&self.body, req, ctx);
+        let body = super::substitute(&self.body, &ctx.path, req, ctx);
         super::response(self.status, self.headers.clone(), body, req.method())
     }
 }

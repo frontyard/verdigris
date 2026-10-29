@@ -11,17 +11,441 @@ workflow publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
+### Added
+
+- **Admin trust model documented** — `docs/book/src/admin.md` now
+  spells out what a tokenless loopback admin listener does and does
+  not protect against (any local uid can manage it; the browser
+  checks only stop browsers), and `docs/ROADMAP.md` records the
+  planned unix-domain socket design that closes the gap.
+
+- **`dns-01` ACME challenge via Cloudflare** — `acme.challenge =
+  "dns-01"` with `[acme.dns.cloudflare]` (`api_token`, optional
+  `zone_id`, `resolver`, `propagation_timeout`) publishes
+  `_acme-challenge` TXT records through the Cloudflare API, waits for
+  public DNS propagation, and retracts them after validation. This
+  enables wildcard certificates (`hosts = ["*.example.com"]`) and
+  issuance on hosts with no ACME-reachable ports at all.
+- **Route shorthand values** — `route.cache` accepts a bare store name
+  (`cache = "main"`), `route.compress` accepts `compress = true`,
+  and `route.proxy` accepts an upstream name, URL, or URL list —
+  `[[site.route]] proxy = "https://api.internal"` now expands to
+  `{ upstream = "…" }`, matching `site.proxy`.
+- **Dominant-field shorthands** — `route.match` accepts a method or
+  method list (`match = "GET"` → `{ methods = […] }`), `compress`
+  accepts an algorithm or list (`compress = "br"`,
+  `compress = ["br","zstd"]` at site and route level), and `auth.bearer`
+  /`auth.basic` accept a bare string (`bearer = "tok"` →
+  `{ tokens = ["tok"] }`, `basic = "u.htpasswd"` →
+  `{ htpasswd = "u.htpasswd" }`). All expand to the full table with
+  defaults; `bearer = "tok"` counts as an inline secret for
+  file-permission warnings and `basic = "…"` anchors relative to its
+  document like `htpasswd` does.
+- **`admin.enabled = false`** — disables the admin listener entirely
+  (default `127.0.0.1:2019` previously had no off-switch); `token`/`tls`
+  set under `enabled = false` produce dead-config warnings.
+- **Scalar sugar for simple lists** — single-value string/CIDR lists
+  (`hosts`, `server.listen`, `upstream.servers`, `ip_allow`/`ip_deny`,
+  `match.methods`, `bearer.tokens`, `api_key.keys`, CORS lists, cache
+  bypass lists, `algorithms`, `exempt`, …) accept a bare value as a
+  one-element list, so `hosts = "example.com"` parses. `include`
+  deliberately stays strict (`docs/config-grammar.md` records why).
+- **Config grammar documented and enforced** —
+  `docs/config-grammar.md` freezes the accepted field shapes, shorthand
+  parity rules, scalar-vs-list policy, off-switches, and diagnostic
+  conventions; `surface_audit` tests assert each invariant behaviorally.
+- **`[log]` server logging is now wired** — `log.level`, `log.format`
+  and `log.output` actually configure the server log (they were parsed
+  and documented but never applied). Level resolves `--log-level` /
+  `VERD_LOG` over the config value over `info`; `format` selects `json`
+  or `pretty`; `output` accepts `stdout`, `stderr` or a file path that
+  is reopened on `SIGUSR1` for logrotate.
+- **`verd init`** — scaffolds a starter `verd.toml` (`-o PATH` chooses
+  the destination, `-o -` prints to stdout, `--force` overwrites).
+- **`verd validate --format json` and `--strict`** — a machine-readable
+  diagnostics report (severity, config path, message, plus the resolved
+  source-file list) for CI and editor integrations; `--strict` also
+  fails on warnings.
+- **`verd fmt --all`** — formats every file reachable through
+  `include`, not just the top-level file.
+- **Unknown-field errors suggest close spellings** — a typo like
+  `host = "a"` now fails with `did you mean \`hosts\`?` appended,
+  across every `deny_unknown_fields` table uniformly.
+- **Site-level middleware defaults** — `auth`, `cors`, `rate_limit`,
+  `cache`, `compress`, `response_headers`, `ip_allow`/`ip_deny`,
+  `timeouts`, `limits`, and `security` can be set on `[[site]]` and are
+  inherited by every route (including the implicit `site.root`/
+  `site.proxy` catch-alls). A route's own block replaces the site
+  block (`response_headers` unions, `security` merges field-wise),
+  `enabled = false` opts a route out, a site `rate_limit` shares one
+  limiter across all inheriting routes, and IP ACLs tighten only —
+  denies union, allow-lists must both admit.
+- **Weighted and backup upstream servers** — `upstream.*.servers`
+  entries accept `{ url, weight, backup }` alongside bare URLs.
+  `round_robin` becomes smooth weighted round-robin, `least_conn`
+  compares `inflight / weight`, `ip_hash` hashes onto a
+  weight-proportional ring, and `backup = true` members serve only
+  while no primary is healthy.
+- **Handler and middleware shorthands** — `route.static = "/srv/www"`,
+  `redirect = "https://…{path}"`, `respond = "pong"`, and
+  `rate_limit = "100/s"` (per-IP) expand to their table forms.
+- **More off-switches and scalar sugar** — `proxy.retries = false`,
+  `log.access = false`, route `cache = false`, `upstream.dns = "60s"`,
+  `upstream.health.active = "/healthz"`, snake-case `acme.challenge`
+  aliases (`dns_01`, `tls_alpn_01`, `http_01`), custom
+  `host_header = "api.internal"` values, and bare scalars for
+  `static.index`, `static.try_files`, `cache.bypass.cookies`/`paths`,
+  and `*.remove` header lists.
+- **Unified template placeholders** — `redirect` targets and
+  `respond.body` share `{path}`, `{host}`, `{query}`, `{method}`,
+  `{scheme}` (`{method}` is new on redirect, `{query}` on respond).
+- **`site.proxy` full-table parity** — a site catch-all now accepts the
+  whole `route.proxy` table (`{ upstream, rewrite, request_headers,
+  retries, host_header }`), not just an upstream reference.
+- **`security = false`** — bare off-switch for `site.security` and
+  `route.security`, suppressing all inherited security headers.
+- **Bare-IP network entries** — `ip_allow`/`ip_deny`,
+  `trusted_proxies`, and `rate_limit.exempt` accept `"10.0.0.1"` as
+  the host route `10.0.0.1/32` (`::1` as `/128`) — the `/prefix` is no
+  longer mandatory.
+- **`redirect` status 303** — post/redirect/get joins the accepted
+  statuses (301/302/303/307/308).
+- **`acme.directory` aliases** — `"letsencrypt"` and
+  `"letsencrypt-staging"` resolve to their URLs at load.
+- **`listen = ":port"`** — the wildcard spelling binds all interfaces;
+  a bare `"8080"` still errors rather than guessing the host intent.
+- **`upstream.*.health.passive = 5`** — a failure count expands to
+  `{ failures = 5 }` with the default cooldown, matching the `active`
+  shorthand.
+- **Arbitrary rate periods** — `RateSpec` accepts humantime periods, so
+  `rate_limit = "10/30s"` means ten permits per 30 seconds.
+- **`verd config --format json`** — the same redacted dump the admin
+  `/config` endpoint serves; `toml` stays the default.
+- **`verd fmt --diff`** — prints a line-level diff of pending changes
+  instead of only failing (implies `--check`).
+- **`did you mean` for named references** — unknown `upstream` names
+  and `cache.store` values suggest the closest defined name, or list
+  the defined ones.
+- **Bare `false` for the remaining middleware blocks** —
+  `auth = false`, `cors = false`, `rate_limit = false`, and
+  `response_headers = false` work at site and route scope (a bare
+  `false` carries no settings and produces no dead-config warning);
+  `server_header = false` omits the `Server` header.
+- **`admin.listen = ":port"`** — the wildcard spelling matches
+  `server.listen` entries; the non-loopback `admin.token` rule still
+  applies.
+- **`rate_limit` table `key` defaults to `"ip"`** —
+  `rate_limit = { rate = "10/s" }` no longer errors for a missing key.
+- **More scalar shorthands** — `retries = 3` (`max_per_request`),
+  `respond = 404`, `upstream.*.unavailable = 503`,
+  `log.access = "/path"` (the output destination), `upstream.*.health =
+  "/path"` (an `active` probe), and `host_header = { value = "…" }`
+  (sent verbatim even when the value spells a keyword like
+  `"upstream"`).
+- **`site.respond` / `site.redirect`** — catch-all respond/redirect
+  shorthands accepting every `route.respond`/`route.redirect` shape;
+  `root`, `proxy`, `respond`, `redirect` remain mutually exclusive.
+  A whole site can now be `redirect = "https://apex.example{path}"`.
+- **`admin.tls = "self_signed"`** — a generated localhost certificate
+  for the admin listener (development convenience); `{ cert, key }`
+  stays the production form.
+- **`-c -` / `VERD_CONFIG=-`** — `run`, `validate`, `config`, and `fmt`
+  read the root document from stdin; `include` and `${file:}` resolve
+  against the current directory and sources report `<stdin>`. `verd
+  fmt -c -` prints the formatted document to stdout instead of writing
+  a file.
+- **`admin.listen` accepts a list** — `listen = ["127.0.0.1:2019",
+  ":2020"]` serves the admin API on every address (one `token`/`tls`
+  applies to all). The canonical dump renders it as an array even for
+  a single listener.
+- **`proxy.request_headers = false`** — the bare off-switch now works
+  on the proxy header block too, matching the other middleware fields.
+- **`error_pages` class keys** — `"4xx"`/`"5xx"` map a page to a whole
+  status class; an exact code (`404`) wins over its class.
+- **Four new placeholders** — `{uri}` (path + query as sent), `{args}`
+  (query without `?`), `{remote_ip}` (client IP under the route's
+  trust model), and `{request_id}` substitute in `respond.body`,
+  `redirect.to`, and — new this release — `upstream.*.unavailable.body`.
+- **Top-level off-switches and upstream shorthand** —
+  `server.security = false` and `admin = false` are the one-word forms
+  of `[server.security] enabled = false` / `[admin] enabled = false`,
+  matching the site/route middleware spellings; and
+  `upstream.<name> = "http://a:9000"` (or a URL list / `{ url, weight,
+  backup }` entry) names a cluster without a table — shorthand for
+  `servers` under cluster defaults.
+
 ### Build & CI
 
+- **Doc snippets gated on every PR** — `ci.yml`'s `generated docs in
+  sync` job now runs `docs/check-snippets.py`; previously it only ran
+  in `docs.yml` on `docs/**` changes, so a `src/config`-only PR could
+  break book/README TOML snippets with no check firing.
 - **CodSpeed perf tracking** — `codspeed.yml` benchmarks the
   per-request pipeline in simulation mode (`benches/hot_paths.rs`:
   normalization, host/route matching incl. condition-rejection climbs
   and regex fallback, client-IP resolution, upstream pick, cache key +
   RAM lookup, forwarded-header rewrite, response decoration, config
   parse as control), posting regression reports on every PR.
+- **Doc drift guards** — `gen-llms-full.py` now fails when `llms.txt`'s
+  index skips a `SUMMARY.md` page and rewrites book-relative links to
+  repo paths; `release.sh` keeps the `installation.md` download URL in
+  lockstep with the version bump; and a `surface_audit` test asserts
+  the JSON schema never marks a defaulted field required.
+
+### Changed
+
+- **Duration values must be strings** — all duration fields (e.g.
+  `hsts_max_age`, timeouts, cache TTLs) now only accept quoted
+  humantime strings like `"180d"` or `"30s"`; bare integers are
+  rejected. `verd config` prints them back in the compact canonical
+  form (`"180d"`).
+- **`verd validate` performs a full dry build** — routes, middleware,
+  upstreams, TLS material, access-log filters and auth files are all
+  compiled read-only, so a valid result means `verd run` would actually
+  start. Previously upstream URLs with paths, bad header names,
+  malformed password hashes and unreadable htpasswd files only failed
+  at startup.
+- **`--watch` follows the config's real sources** — it now tracks the
+  config file and its parents (atomic renames and editor save-swap
+  patterns fire), every `include` file, `include` dirs/globs so new
+  `*.toml` fragments are picked up, `${file:…}` secret files, and k8s
+  `..data` symlink swaps; the set is re-derived after each reload so
+  added or removed includes take effect without a restart. Events that
+  merely touch unrelated files in watched directories — including the
+  server's own log output — no longer trigger a reload.
+- **Exit codes unified** — config and runtime failures exit `1`
+  (including missing config, which used to exit `2`); `2` is reserved
+  for CLI usage errors.
+- **Wildcard hosts match longest suffix first** — `*.b.example.com`
+  wins over `*.example.com` regardless of declaration order.
+- **`true` documented on `false`-gated blocks** — every block that
+  accepts `false` also parses `true` (the table with defaults and
+  `enabled = true`); the docs now say so explicitly rather than
+  leaving it an accident of the parser.
+- **Malformed password hashes rejected at startup** — `auth.basic`
+  argon2/bcrypt values are fully parsed (not just prefix-sniffed), so
+  truncated or corrupt hashes fail `verd validate`/`verd run` instead
+  of failing closed at request time.
+- **`max_connections = 0` is an error** — on `server` and
+  `upstream.*` limits; previously an upstream cap of zero was silently
+  clamped to one.
+- **Secret redaction is path-aware** — `verd config` and the admin
+  `/config` dump now scrub password hashes, tokens and URL userinfo by
+  field position instead of substring, so `tls.key` file paths,
+  `eab.key_id`, and unrelated keys like `monkey` stay readable while
+  `users = { u = "$argon2id$…" }` no longer leaks.
+- **Pre-0.4.0 field names removed** — the compatibility aliases
+  `route.proxy.headers` (use `request_headers`), `route.headers` (use
+  `response_headers`), and `upstream.*.limits` (use `timeouts`) no
+  longer parse; configs using them now fail schema validation.
+- **Config surface tidied** — `route.path` (was an alias for `prefix`),
+  the `conditions` alias for `route.match`, and the `["/a","/b"]` tuple
+  form of `rewrite.replace_prefix` (use `{ from, to }`) are gone.
+  `upstream.*.timeouts.max_connections` moved to
+  `upstream.*.max_connections` (it was never a timeout).
+- **`proxy.pass_host` is now `proxy.host_header`** —
+  `host_header = "upstream"` (default) keeps the previous `pass_host =
+  true` behaviour; `host_header = "original"` passes the client's `Host`
+  through. The old bool read backwards (`true` did *not* pass the host).
+- **Canonical enum spellings tightened** — `tls` mode is now spelled
+  `self_signed` (`self-signed` still parses; `selfsigned` doesn't), and
+  squashed variants like `leastconn`, `roundrobin`, `iphash`, `http01`,
+  `dns01`, `tls-alpn01` are rejected — use the canonical or kebab-case
+  spelling shown in `verd schema` / the reference docs.
+- **Upstream pick now reads the clock once** — `lb::pick` evaluates all
+  members against a single `Instant` (one `clock_gettime` per selection
+  instead of one per member) and judges them at a consistent instant.
+- **Bare `{ tls = true }` listen tables bind `:443`** — previously they
+  defaulted `addr` to `0.0.0.0:80`, terminating TLS on the plaintext
+  port.
+- **Relative `${file:…}` paths resolve against the config file's
+  directory** — the same anchor `include` uses; previously they
+  resolved against the process working directory.
+- **Schema errors name the fragment and line** — an unknown key in an
+  included file now reports e.g. `conf.d/site.toml: TOML parse error at
+  line 3` instead of blaming the merged document, and errors include
+  the full field path.
+- **`compress.algorithms` takes canonical names only** — `br`, `zstd`,
+  `gzip`; the `brotli`/`gz` spellings are now rejected.
+- **`hosts` values must be hostnames** — entries containing a scheme,
+  path, or `host:port` (pasted URLs) are errors, and duplicates are
+  compared after port/case/trailing-dot normalization.
+- **New warnings for likely misconfigurations** — `error_pages` keys
+  outside 400–599, `rate_limit key = "identity"` on routes with no
+  auth, and `tls = "auto"` on non-public names (IPs, `localhost`,
+  `.internal`, …) or on a hostless site without on-demand issuance.
+- **BREAKING: config paths anchor to their file** — `site.root`,
+  `route.static` / `route.static.root`, `tls.cert`/`key`, `auth.basic.htpasswd`,
+  `cache.*.disk_path`, `acme.storage`/`ca_roots`,
+  `upstream.*.tls.ca`, and the log outputs now resolve relative to the
+  directory of the file (or `include`d fragment) that contains them
+  instead of the process working directory, so a config tree moves as
+  a unit. `static.error_pages` and `static.try_files` stay
+  root-relative by design — they name paths *inside* `root`.
+- **Diagnostics name sites and fragments** — site errors label
+  `site["name-or-first-host"]` (`site.name` preferred), and semantic
+  errors from `include`d fragments report the fragment file rather
+  than only `verd.toml`.
+- **`did you mean` covers enum variants** — a near-miss like
+  `challenge = "dns01"` suggests the accepted spellings the same way
+  unknown fields do.
+- **`Host` set via `request_headers` warns** —
+  `proxy.request_headers.set`/`add` carrying `host` overrides
+  `host_header`; the validator now says so instead of letting it win
+  silently.
+- **BREAKING: `match.headers = { "x-a" = "" }` is presence-only** —
+  an empty value now matches "header present", matching `match.query`'s
+  rule (previously it matched a literally-empty value). Use `re:^$` to
+  match empty values.
+- **BREAKING: duplicate `site.name` rejected** — two sites sharing a
+  `name` is an error; metric `route` labels collided before.
+- **BREAKING: `validate --format json` has one shape** — every outcome
+  emits `{ valid, strict, diagnostics, sources }`, with `"error"`
+  added on load/dry-build failures (previously each failure class had
+  its own key set).
+- **Stricter semantic validation** — `verd validate` now errors on
+  values that silently produced wrong behavior: `redirect.host`/
+  `site.redirect_host` values that can't be a `Location` authority,
+  `redirect.to` containing whitespace, `replace_prefix` missing a
+  leading `/`, invalid `security` header values (`frame_options`,
+  `referrer_policy`, `csp`, `cross_domain_policy`), a
+  `server.server_header` that isn't a valid header value,
+  `upstream.*.tls.sni` that isn't a DNS name, `rate_limit
+  key = "header:<name>"` with an invalid header name, malformed
+  `cache.bypass` methods/headers, malformed CORS methods/headers and
+  scheme-less `cors.origins` entries, `acme.on_demand.allowed_hosts`
+  entries that can't be allowlisted, invalid `log.access.filter`
+  expressions, and upstream URLs with paths/queries/userinfo (previously
+  only the scheme was checked). Catch-all CIDRs (`0.0.0.0/0`, `::/0`)
+  in `trusted_proxies`, `rate_limit.exempt`, `ip_allow`, and `ip_deny`
+  warn loudly; `{typo}` placeholders in `redirect`/`respond` templates
+  warn; `host_header` values within edit distance 2 of `upstream`/
+  `original` warn; missing `upstream.*.tls.ca`, `acme.ca_roots`, and
+  `cache.*.disk_path` parents warn.
+- **Field paths normalized** — serde and schema errors render
+  `site[0].route[2]` instead of `site.0.route.2`, matching the
+  `site["name"]` label style used by semantic diagnostics.
+- **Cache build errors carry a field path** — disk-store failures
+  report `cache.<name>: …` like upstream errors report
+  `upstream.<name>: …`.
+- **`admin.listen` normalizes to a list** — `verd config` and admin
+  `/config` render `listen = ["127.0.0.1:2019"]` even when one
+  listener is configured; consumers of the dump should treat it as an
+  array.
+- **`server_header = "off"` deprecated** — it still omits the header,
+  but `verd validate` warns; prefer `false` (or `""`).
+- **More dead-config and footgun diagnostics** — `verd validate` now
+  catches: an `[acme]` block with no `tls = "auto"` site; `site`/`route`
+  `ip_allow` entries that can never admit a client (outside every site
+  allowlist entry or fully covered by `ip_deny`); duplicate
+  `admin.listen` addresses and collisions with `server.listen`;
+  `upstream.tls` settings on upstreams with no `https://` server and
+  `tls.ca` under `verify = false`; `upstream.timeouts.connect`/
+  `response_header = "0s"` (instant timeout — now an error);
+  `rate_limit.burst = 0`; `log.output = "off"` or an empty path (a
+  literal filename/`""`, not an off-switch) and missing log parent
+  directories; `spa = true` with an empty or missing `index` fallback
+  and `spa` + `listing` precedence; `cache.ttl = "0s"`,
+  `cache.*.max_items = 0`, and invalid `cache.vary_headers`;
+  `compress.types` entries that aren't `type/subtype`; `0s`/`0B` site
+  and route `timeouts`/`limits` overrides; `error_pages` targets
+  missing under `static.root`; and hop-by-hop/framing headers
+  (`content-length`, `connection`, `transfer-encoding`, …) set via
+  `respond.headers` or `request_headers`/`response_headers`, which now
+  error instead of corrupting the wire.
+
+### Security
+
+- **`HEAD` requests no longer poison the cache** — a `HEAD` to an
+  uncached, cacheable URL stored its empty body under the shared
+  `GET` cache key, so every subsequent `GET` served `200` with
+  `Content-Length: 0` and an empty body until the entry expired. Any
+  unauthenticated client could blank any cached route. `HEAD`
+  responses are never stored now; `HEAD` *lookups* still share the
+  `GET` entry.
+- **`/purge` prefix purge actually works** — stored metadata recorded
+  the request *authority* in the field prefix purge matched on, so
+  `{"prefix": "/api"}` silently removed 0 entries. Prefix purge now
+  matches the request path as documented.
+- **`X-Forwarded-For` can no longer be spoofed through repeated
+  header lines** — `real_ip` read only the first `X-Forwarded-For`
+  line, which is fully client-controlled when a trusted proxy appends
+  its own line; all lines are now merged per RFC 7230 ordering before
+  the trusted-chain walk, fixing `ip_allow`/`ip_deny`, per-IP rate
+  limiting, and `{remote_ip}` identity behind such proxies.
+- **Malformed `Host` values are rejected with `400`** — authorities
+  containing `@`, whitespace, or other non-authority characters could
+  reach `Location` construction (e.g. `Host: brand.com@evil.net` →
+  `https://brand.com@evil.net/…` userinfo-disguised redirect) and
+  `{host}` template substitution.
+- **The admin listener enforces connection caps and io deadlines** —
+  128 concurrent connections / 16 per IP, and any read or write
+  stalled longer than 30s is dropped. The bearer check only runs
+  after a request is parsed, so unauthenticated slowloris could
+  previously pin unlimited sockets and tasks. Shutdown drains
+  in-flight connections on a bounded 5s grace so an idle keep-alive
+  socket can't hold process exit.
+- **`respond` bodies can no longer reflect request data under markup
+  content-types** — `{path}`, `{query}`, `{args}`, `{uri}`, and
+  `{request_id}` combined with `text/html` (or any `+html`/`+svg`
+  media type) was reflected XSS by configuration; it is now a config
+  error rather than a warning. Alphabet-constrained placeholders
+  (`{host}`, `{scheme}`, `{remote_ip}`, `{method}`) remain allowed,
+  as does any placeholder under non-markup content-types.
+- **`redirect.to` templates can no longer emit scheme-relative
+  `Location`s** — a template starting with `{path}`/`{uri}` (or a lone
+  `/`) combined with a decoded `/\host` path produced
+  `Location: /\evil.com`, which WHATWG URL parsing folds into
+  `//evil.com` — an open redirect to an attacker-chosen host.
+  Scheme-relative targets are now refused (header dropped, warning
+  logged).
+- **ACME on-demand retries no longer drain the issuance rate limit** —
+  repeated handshakes for a host whose issuance was already in flight
+  consumed rate-window permits, so ~5 SNI probes could starve all
+  on-demand issuance for the window. The gate now only charges when a
+  new order actually starts.
 
 ### Fixed
 
+- **Site-scoped `auth.basic.htpasswd` didn't rebase against its
+  fragment** — a relative path in an `include`d file resolved against
+  the CWD instead of the fragment's directory (route-level
+  `htpasswd` was already covered). Site and route auth now anchor the
+  same way.
+- **`cache = true` produced `unknown cache store ""`** — an enabled
+  cache with no store name now errors at validate time with
+  `cache needs a store — cache = "<name>" or { store = "<name>" }`.
+- **`cache_control` globs evaluate by specificity, not map order** —
+  a `"*"` entry previously shadowed every more specific pattern
+  (`BTreeMap` iterates sorted and first match won). Now fewest `*`
+  then most literal characters wins: exact > `"*.css"` > `"*"`.
+- **`proxy.request_headers = { enabled = false, … }` ignored** — the
+  ops were built and applied despite `enabled = false`; the flag is
+  honored now, and leftover settings warn as dead config.
+- **`${file:}` under a path field inlined file contents as the path** —
+  `cert = "${file:/x}"` or an `include` entry now fails at load with a
+  teaching error instead of producing a bogus path (`${VAR}` stays
+  legal).
+- **`unavailable` could emit a body where the status forbids one** —
+  `unavailable = { status = 204 }` produced invalid framing; bodyless
+  statuses (1xx/204/304) now serve an empty body and no Content-Type.
+- **`default = true` + `hosts = ["*"]` on one site** no longer
+  double-counts as two default sites and spuriously fails validation.
+- **Duplicate diagnostics removed** — listeners without TLS and
+  out-of-range `retries.budget_fraction` were each reported twice.
+- **`include` type errors surfaced** — a non-array `include` value or a
+  non-string entry was silently ignored; both are now load errors.
+- **Merge conflicts name the original source** — the diagnostic now
+  reports which file first set the conflicting key.
+- **Diamond `include` graphs duplicated arrays** — a fragment reachable
+  via two include paths merged twice (e.g. `[[site]]` entries appeared
+  twice); each file now merges once, and a genuine include cycle
+  reports `include cycle` instead of the nesting-depth error.
+- **Interpolation errors carry context** — `${VAR}` failures name the
+  config key that needed the variable, and config-permission warnings
+  only fire for files that were actually interpolated.
+- **Unused definitions warn** — `[upstream.*]` and `[cache.*]` blocks
+  never referenced by a route produce warnings.
 - **CodSpeed bench broke `nextest` and image builds** — the new
   `[[bench]]` target rejected nextest's test-enumeration flags and was
   missing from the Docker build context. `verd::bench/hot_paths` is now
@@ -32,6 +456,67 @@ workflow publishes the matching section as the GitHub release notes.
   bump invalidated it and broke the `generated docs in sync` CI check
   on release PRs. `release.sh` now regenerates it unconditionally
   (`--regen-docs` still gates the schema-driven `reference.md`).
+- **Secret permission checks now cover every source file** —
+  `include`d fragments containing inline secrets and `${file:…}`
+  secret targets are checked for world-readable/writable permissions;
+  previously only the main config file was checked, and a secret
+  reference in a later fragment could attach the warning to the wrong
+  file.
+- **`cache.bypass.cookies`/`paths` scalar parity** — both accept a
+  single string as a one-element list, matching the other bypass
+  lists and the grammar doc.
+- **`verd fmt --all` no longer blocked by schema errors** — `include`
+  sources are enumerated with a syntax-only walk, so a config that
+  fails model validation still formats (with a warning that validation
+  was skipped); malformed TOML and missing `include` targets still
+  fail.
+- **`verd run -c - --watch` warns it cannot watch stdin** — the config
+  has no file-backed source, so the flag was previously a silent no-op.
+- **`rate` fields claimed a struct shape in the JSON schema** —
+  `rate_limit.rate` and `acme.on_demand.rate` only accept strings like
+  `"100/s"`; the generated schema now says so.
+- **`text/html` respond check missed newer placeholders** — a
+  `respond.body` reflecting `{uri}`, `{args}`, `{remote_ip}`, or
+  `{request_id}` under `content-type: text/html` produced no warning;
+  the check now covers every request-derived placeholder.
+- **`acme.dns.cloudflare.api_base = "http://…"` was silent** — plain
+  HTTP sends the API token unencrypted; `verd validate` now warns
+  (`http://` stays accepted for test mocks, non-http(s) remains an
+  error).
+- **`respond = "404"` silently served 200** — the quoted form is a
+  body, not a status; a three-digit body under the default status now
+  warns that `respond = 404` (unquoted) sets the code.
+- **`verd schema` over-required upstream server entry fields** —
+  `{ url = "…" }` entries in `upstream.*.servers` parse with
+  `weight = 1`/`backup = false`, but the schema marked all three
+  fields required; it now requires only `url` and emits the real
+  defaults, so schema-driven editors no longer flag valid configs.
+- **Generated field reference dropped every enum/union's accepted
+  forms** — `lb`, `tls`, `challenge`, `policy`, `tier`, `format`,
+  api-key `location`, and the shorthand `*Schema` unions rendered as
+  bare headings; each now lists every accepted form with its
+  description.
+- **Book fixes surfaced by the `llms-full.txt` review** — middleware
+  claimed only `security` accepted the bare `x = false` spelling (all
+  middleware blocks do), the `[server]` layout row implied `limits`/
+  `timeouts` nest under it, the `llms.txt` index omitted six book
+  pages, the first recipe validated `tls = "auto"` by accident (now
+  `tls = "off"`), stale `0.2.2`/`v0.1.0` version strings, and
+  book-relative links in `llms-full.txt` that resolved nowhere.
+- **Config parse and `client_ip` perf regressions** — every shorthand
+  deserializer (route/site middleware blocks, `upstream.*` entries and
+  their server lists, `tls`/`listen`/`host_header`/`server_header`,
+  CIDR and byte-size values, scalar-or-list sugar) now dispatches on
+  the value's own type in one pass instead of buffering into serde's
+  `Content` and retrying per variant, and the X-Forwarded-For trust
+  walk no longer allocates a list per request. Errors inside the
+  table/list forms now name the offending key instead of the generic
+  "must be a …" fallback — though a few scalar shorthands lose their
+  value-specific reason (`admin.tls = "bogus"` no longer echoes the
+  rejected mode, `dns = "banana"` drops the humantime detail).
+  Undocumented positional-array forms (e.g. `respond = [200, "text"]`)
+  no longer parse — arrays only mean a field's documented list
+  shorthand, as `docs/config-grammar.md` specifies.
 
 ## [0.4.1] - 2026-10-27
 

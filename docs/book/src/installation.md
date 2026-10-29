@@ -7,7 +7,7 @@ Linux. Download the archive for your platform, verify the checksum, and
 place the binary on your `PATH`:
 
 ```sh
-curl -LO https://github.com/frontyard/verdigris/releases/download/v0.1.0/verd-x86_64-unknown-linux-musl.tar.gz
+curl -LO https://github.com/frontyard/verdigris/releases/download/v0.4.1/verd-x86_64-unknown-linux-musl.tar.gz
 sha256sum -c checksums.txt --ignore-missing
 tar xzf verd-*.tar.gz
 sudo install -m755 verd /usr/local/bin/

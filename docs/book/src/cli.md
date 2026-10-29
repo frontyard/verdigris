@@ -1,13 +1,13 @@
 # Command line
 
-`verd` is a single binary with five subcommands. All options can also be
-set via environment variables.
+`verd` is a single binary with seven subcommands.
 
 | Command | Purpose |
 | --- | --- |
-| `verd run` | Start the server. Default when a config file exists. |
-| `verd validate` | Check a config file for errors; exits non-zero on failure. |
-| `verd config` | Print the effective merged/interpolated config as TOML (secrets redacted). |
+| `verd run` | Start the server. |
+| `verd validate` | Check a config file for errors and dry-run the full runtime build (read-only); exits non-zero on failure. |
+| `verd init` | Write a starter `verd.toml`. |
+| `verd config` | Print the effective merged/interpolated config as TOML or JSON (secrets redacted). |
 | `verd fmt` | Normalize whitespace in a config file in place, preserving comments. |
 | `verd schema` | Print the JSON Schema for the config format to stdout. |
 | `verd version` | Print version, build commit, and target triple. |
@@ -16,16 +16,28 @@ set via environment variables.
 
 | Flag | Env var | Applies to | Effect |
 | --- | --- | --- | --- |
-| `-c, --config PATH` | `VERD_CONFIG` | `run`, `validate`, `config`, `fmt` | Config file path. Without it, `verd` searches `./verd.toml`, `./config/verd.toml`, `/etc/verd/verd.toml`. |
-| `--watch` | — | `run` | Reload config when the file changes on disk (in addition to `POST /reload`). |
+| `-c, --config PATH` | `VERD_CONFIG` | `run`, `validate`, `config`, `fmt` | Config file path. Without it, `verd` searches `./verd.toml` and `/etc/verd/verd.toml`. A directory argument errors with a pointer to `-c <dir>/verd.toml` — directories load via `include`, not `-c`. `-c -` reads the config from stdin — `include` and `${file:…}` resolve against the current directory and sources report `<stdin>` (`verd fmt -c -` prints the formatted document to stdout; `--check`/`--diff` compare instead). |
+| `--watch` | — | `run` | Reload config when it changes on disk (in addition to `POST /reload`). Observes the parent directories of every loaded source — the config file, `include`d files, `include` dirs/globs, and `${file:…}` secret files — so atomic renames, editor save-swaps, k8s `..data` swaps, and newly dropped-in `*.toml` include fragments all trigger a reload. Events on unrelated files in those directories (e.g. a log file written next to the config) are ignored. The watched set is re-derived after each reload. Environment variables are captured at load — a `${VAR}` change needs `SIGHUP` or `POST /reload`. With `-c -` the config comes from stdin — there is no file to watch, so `verd` warns that `--watch` has no effect. |
+| `--format FMT` | — | `validate` | `text` (default) prints diagnostics on stderr; `json` prints a machine-readable report on stdout — always `{ valid, strict, diagnostics, sources }`, plus `"error"` on load/dry-build failures. |
+| `--format FMT` | — | `config` | `toml` (default) prints canonical TOML; `json` prints the same redacted JSON the admin `/config` endpoint serves. |
+| `--strict` | — | `validate` | Fail on warnings too, not just errors. |
 | `--check` | — | `fmt` | Exit non-zero if unformatted instead of rewriting. |
-| `-o, --output PATH` | — | `schema` | Write the schema to a file instead of stdout. |
-| `--log-level LVL` | `VERD_LOG` | all | `error` / `warn` / `info` / `debug` / `trace`; default `info`. JSON logs when stderr is not a TTY. |
+| `--diff` | — | `fmt` | Print a line-level diff of pending changes (implies `--check`). |
+| `--all` | — | `fmt` | Also format every file reachable through `include`. Sources are discovered with a syntax-only walk, so formatting still works when a file has schema errors (a warning says validation was skipped); malformed TOML and missing `include` targets still fail. |
+| `-o, --output PATH` | — | `schema`, `init` | `schema`: write the schema to a file instead of stdout. `init`: where to write the config (default `./verd.toml`; `-` is stdout). |
+| `--force` | — | `init` | Overwrite an existing file. |
+| `--log-level LVL` | `VERD_LOG` | `run`, `validate` | Server log level filter (`error` / `warn` / `info` / `debug` / `trace`, or an env-filter spec like `verd=debug,hyper=info`). Overrides `[log] level`; default `info`. |
+
+The server log's format and destination are configured in the file
+(`[log] format` / `[log] output`), not on the command line — see
+[Observability](./observability.md).
 
 `verd --version` prints just the crate version; `verd version` also
 prints the build commit (when built with `VERD_GIT_SHA`) and target.
 
 ## Exit codes
 
-`0` success; `1` config errors / missing config; `2` CLI usage errors.
-`validate` prints one line per error or warning to stderr.
+`0` success; `1` config/runtime failures (including missing config);
+`2` CLI usage errors. `validate` prints one line per error or warning
+to stderr (or a JSON report on stdout with `--format json`); `--strict`
+turns warnings fatal.

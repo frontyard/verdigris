@@ -46,6 +46,23 @@ def fmt_default(prop):
     return f"`{json.dumps(prop['default'])}`"
 
 
+def member_form(prop):
+    """A one-cell label for a `oneOf`/`anyOf` member."""
+    if "const" in prop:
+        return f"`{json.dumps(prop['const'])}`"
+    if "$ref" in prop:
+        return f"`{prop['$ref'].rsplit('/', 1)[-1]}` table"
+    t = prop.get("type")
+    if t == "object":
+        keys = ", ".join(prop.get("properties") or {})
+        return f"`{{ {keys} }}`" if keys else "`{ … }`"
+    if t == "array":
+        return "`[…]`"
+    if isinstance(t, list):
+        return " \\| ".join(t)
+    return f"`{t}`" if t else "`any`"
+
+
 def section(name):
     d = DEFS.get(name)
     if not d:
@@ -65,6 +82,21 @@ def section(name):
             out.append(
                 f"| `{fname}` | {type_name(prop)}{r} | {fmt_default(prop)} | {pdesc} |"
             )
+        return "\n".join(out)
+    # unions and enums carry no `properties` — render accepted forms so
+    # the section isn't a bare heading (lb, tls, tier, format, …)
+    members = d.get("oneOf") or d.get("anyOf") or []
+    if members:
+        out.append("| form | description |")
+        out.append("|---|---|")
+        for p in members:
+            pdesc = (p.get("description") or "").replace("\n", " ").strip()
+            out.append(f"| {member_form(p)} | {pdesc} |")
+    elif "enum" in d:
+        out.append("| value |")
+        out.append("|---|")
+        for v in d["enum"]:
+            out.append(f"| `{json.dumps(v)}` |")
     return "\n".join(out)
 
 

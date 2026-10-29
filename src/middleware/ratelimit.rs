@@ -62,6 +62,11 @@ pub struct RateLimiter {
     exempt: Vec<ipnet::IpNet>,
     dry_run: bool,
     buckets: DashMap<String, Bucket>,
+    /// `key = "route"` on a *site-level* limiter buckets the whole site
+    /// under this fixed key — the limiter instance is already
+    /// site-scoped, so keying by matched route would silently multiply
+    /// the allowance by route count.
+    route_key: Option<String>,
     /// Flag set when a dry-run denial was logged at least once per sweep
     /// interval, to keep the log readable.
     dry_run_noted: AtomicBool,
@@ -70,6 +75,15 @@ pub struct RateLimiter {
 impl RateLimiter {
     /// Compile from config.
     pub fn build(c: &cfg::RateLimitConfig) -> Result<Self, String> {
+        Self::build_impl(c, None)
+    }
+
+    /// Compile a site-level limiter shared by the site's routes.
+    pub fn build_site(c: &cfg::RateLimitConfig) -> Result<Self, String> {
+        Self::build_impl(c, Some("route:site".to_owned()))
+    }
+
+    fn build_impl(c: &cfg::RateLimitConfig, route_key: Option<String>) -> Result<Self, String> {
         let kind = match c.key.as_str() {
             "ip" => KeyKind::Ip,
             "identity" => KeyKind::Identity,
@@ -84,9 +98,12 @@ impl RateLimiter {
                 )
             }
         };
-        let rate = c.rate.per_second();
+        let spec = c
+            .rate
+            .ok_or_else(|| "rate_limit.rate is required when enabled".to_string())?;
+        let rate = spec.per_second();
         if !(rate.is_finite() && rate > 0.0) {
-            return Err(format!("rate_limit rate must be positive, got {}", c.rate));
+            return Err(format!("rate_limit rate must be positive, got {spec}"));
         }
         let burst = c.burst.unwrap_or_else(|| {
             // default burst = one second of rate, at least 1
@@ -96,11 +113,12 @@ impl RateLimiter {
             kind,
             rate,
             burst,
-            permits: c.rate.permits,
-            period: c.rate.period,
+            permits: spec.permits,
+            period: spec.period,
             exempt: c.exempt.clone(),
             dry_run: c.dry_run,
             buckets: DashMap::new(),
+            route_key,
             dry_run_noted: AtomicBool::new(false),
         })
     }
@@ -134,7 +152,11 @@ impl RateLimiter {
                     .map(|id| format!("id:{id}"))
                     .unwrap_or_else(|| format!("ip:{ip}")),
             ),
-            KeyKind::Route => Some(format!("route:{route_id}")),
+            KeyKind::Route => Some(
+                self.route_key
+                    .clone()
+                    .unwrap_or_else(|| format!("route:{route_id}")),
+            ),
             // A missing/invalid header must not skip the limiter —
             // otherwise omitting it bypasses the rule entirely. Fall
             // back to the client IP so the request is still bounded.
@@ -259,8 +281,9 @@ mod tests {
 
     fn cfg_key(key: &str, rate: &str) -> cfg::RateLimitConfig {
         cfg::RateLimitConfig {
+            enabled: true,
             key: key.into(),
-            rate: crate::config::RateSpec::parse(rate).unwrap(),
+            rate: Some(crate::config::RateSpec::parse(rate).unwrap()),
             burst: None,
             exempt: Vec::new(),
             dry_run: false,
@@ -345,6 +368,23 @@ mod tests {
             );
             assert!(e.key().starts_with("hdr:"));
         }
+    }
+
+    #[test]
+    fn site_route_key_is_one_bucket() {
+        // a site-level `key = "route"` must not split into per-route
+        // buckets — the shared limiter's whole allowance applies to
+        // every route it covers
+        let rl = RateLimiter::build_site(&cfg_key("route", "1/s")).unwrap();
+        let ip = IpAddr::from_str("10.0.0.1").unwrap();
+        let p = parts();
+        assert!(rl.check(ip, None, &p, "r1").unwrap().allowed);
+        assert!(!rl.check(ip, None, &p, "r2").unwrap().allowed);
+        assert_eq!(rl.bucket_count(), 1);
+        // a route-local limiter still buckets per route
+        let rl = RateLimiter::build(&cfg_key("route", "1/s")).unwrap();
+        assert!(rl.check(ip, None, &p, "r1").unwrap().allowed);
+        assert!(rl.check(ip, None, &p, "r2").unwrap().allowed);
     }
 
     #[test]

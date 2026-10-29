@@ -1,5 +1,26 @@
 # Observability
 
+## Server log
+
+Diagnostics from the server itself — startup, listener binds, reloads,
+upstream health transitions — go through `[log]`:
+
+```toml
+[log]
+level = "info"               # error / warn / info / debug / trace,
+                             # or full tracing EnvFilter syntax:
+                             # "verd=debug,hyper=warn,tower_http=off"
+format = "json"              # or "pretty"
+output = "stderr"            # or "stdout" / a file path
+```
+
+Precedence: `--log-level` / `VERD_LOG` (command line) overrides
+`[log] level`, which overrides the built-in `info` default. Format and
+output have no flag — they only come from the config file.
+
+File output is appended and reopened on **SIGUSR1** (logrotate), same
+as the access log.
+
 ## Access log
 
 One JSON record per request (default), emitted when the response body
@@ -12,6 +33,8 @@ format = "json"            # or "pretty"
 output = "/var/log/verd/access.log"   # or "stdout" / "stderr"
 filter = 'path != "/healthz" && status != 404'
 sample = 0.25              # deterministic fraction
+# access = "/var/log/verd/access.log" is the same thing when the rest
+# is default — access = false disables logging entirely
 ```
 
 Fields: `ts` (RFC 3339 UTC), `req_id`, `client_ip`, `method`, `host`,
@@ -20,6 +43,8 @@ Fields: `ts` (RFC 3339 UTC), `req_id`, `client_ip`, `method`, `host`,
 
 Filter terms support `=`/`!=`/`==`, `=~`/`!~` globs, and `>`/`<`/`>=`/`<=`
 on `path`, `host`, `method`, `status`, `upstream`, `cache`, `identity`.
+Terms join with `&&` only — there is no `||` (for disjunctions, filter
+downstream in the collector).
 
 File output is reopened on **SIGUSR1** (logrotate).
 

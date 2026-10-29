@@ -18,7 +18,7 @@ hosts = ["example.test"]
 tls = "off"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = { status = 200, body = "root\n" }
 
 [[site.route]]
@@ -40,7 +40,7 @@ default = true
 tls = "off"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = { status = 404, body = "fallback\n" }
 "#;
 
@@ -82,7 +82,7 @@ async fn start_at(
     let cfg: Config = toml::from_str(config).unwrap();
     let mut cfg = cfg;
     cfg.server.listen = listeners;
-    cfg.admin.listen = format!("127.0.0.1:{admin_port}").parse().unwrap();
+    cfg.admin.listen = vec![format!("127.0.0.1:{admin_port}").parse().unwrap()];
 
     let rt = Runtime::build(Arc::new(cfg)).expect("runtime builds");
     let (tx, rx) = tokio::sync::watch::channel(false);
@@ -307,7 +307,7 @@ async fn unknown_host_without_default_is_421() {
 hosts = ["only.test"]
 tls = "off"
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = { body = "x" }
 "#;
     let (base, _admin, _rt, sd) = start(cfg).await;
@@ -525,7 +525,7 @@ tls = "off"
 
 [[site.route]]
 prefix = "/api"
-proxy = {{ upstream = "backends", rewrite = {{ strip_prefix = "/api" }}, headers = {{ set = {{ x-custom = "yes" }} }} }}
+proxy = {{ upstream = "backends", rewrite = {{ strip_prefix = "/api" }}, request_headers = {{ set = {{ x-custom = "yes" }} }} }}
 "#,
         p1 = up1.port,
         p2 = up2.port,
@@ -542,10 +542,10 @@ proxy = {{ upstream = "backends", rewrite = {{ strip_prefix = "/api" }}, headers
     let body = resp.text().await.unwrap();
     // strip_prefix applied, query preserved
     assert!(body.starts_with("GET /v1?q=1"), "got: {body}");
-    // pass_host rewrites Host to the upstream authority
+    // host_header = "upstream" rewrites Host to the upstream authority
     assert!(
         body.contains("\nhost: 127.0.0.1:"),
-        "pass_host authority: {body}"
+        "host authority: {body}"
     );
     // forwarded headers set (client 127.0.0.1 is not trusted → replaced)
     assert!(body.contains("\nx-forwarded-for: 127.0.0.1"), "{body}");
@@ -597,7 +597,7 @@ cooldown = "60s"
 default = true
 tls = "off"
 [[site.route]]
-path = "/"
+prefix = "/"
 proxy = {{ upstream = "backends" }}
 "#,
         dead = dead,
@@ -626,7 +626,7 @@ async fn proxy_all_down_is_502_and_custom_unavailable() {
 [upstream.dead]
 servers = ["http://127.0.0.1:{dead1}", "http://127.0.0.1:{dead2}"]
 unavailable = {{ status = 503, body = "all backends down" }}
-[upstream.dead.limits]
+[upstream.dead.timeouts]
 connect = "1s"
 [upstream.dead.health.passive]
 failures = 1
@@ -636,7 +636,7 @@ cooldown = "60s"
 default = true
 tls = "off"
 [[site.route]]
-path = "/"
+prefix = "/"
 proxy = {{ upstream = "dead", retries = {{ max_per_request = 4 }} }}
 "#
     );
@@ -879,7 +879,7 @@ hosts = ["secure.test"]
 tls = {{ cert = "{cert}", key = "{key}" }}
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = {{ body = "secure\n" }}
 "#,
         cert = cert.display(),
@@ -928,10 +928,10 @@ async fn tls_alpn_h2_and_selfsigned() {
     let config = r#"
 [[site]]
 hosts = ["self.test"]
-tls = "selfsigned"
+tls = "self_signed"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = { body = "h2-secure\n" }
 "#;
     let (_plain, tls, _rt, sd) = start_tls_pair(config).await;
@@ -989,7 +989,7 @@ tls = {{ cert = "{cert}", key = "{key}" }}
 redirect_https = false
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = {{ body = "x\n" }}
 "#,
         cert = cert.display(),
@@ -1026,15 +1026,15 @@ hosts = ["one.test"]
 tls = {{ cert = "{cert}", key = "{key}" }}
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = {{ body = "one\n" }}
 
 [[site]]
 hosts = ["two.test"]
-tls = "selfsigned"
+tls = "self_signed"
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = {{ body = "two\n" }}
 "#,
         cert = cert.display(),
@@ -1110,7 +1110,7 @@ rate_limit = {{ key = "ip", rate = "2/s" }}
 respond = {{ body = "limited\n" }}
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = {{ body = "open\n" }}
 "#,
         argon = argon,
@@ -1204,7 +1204,7 @@ cors = { origins = ["https://app.example.com"], methods = ["GET", "POST"], heade
 respond = { body = "api\n" }
 
 [[site.route]]
-path = "/"
+prefix = "/"
 respond = { body = "root\n" }
 "#;
     let (base, _admin, _rt, sd) = start(config).await;
@@ -1356,7 +1356,7 @@ respond = { body = "plain\n" }
 prefix = "/bin"
 compress = { min_bytes = 0 }
 respond = { body = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n" }
-headers = { set = { "content-type" = "application/octet-stream" } }
+response_headers = { set = { "content-type" = "application/octet-stream" } }
 "#;
     let (base, _admin, _rt, sd) = start(config).await;
     let client = reqwest::Client::new();
@@ -1892,7 +1892,7 @@ servers = ["http://127.0.0.1:{p}"]
 default = true
 tls = "off"
 [[site.route]]
-path = "/"
+prefix = "/"
 cache = {{ store = "main", ttl = "300s" }}
 proxy = {{ upstream = "up" }}
 "#,
@@ -1967,11 +1967,11 @@ servers = ["http://127.0.0.1:{p}"]
 default = true
 tls = "off"
 [[site.route]]
-path = "/big"
+prefix = "/big"
 cache = {{ store = "main", ttl = "60s" }}
 respond = {{ body = "this body is definitely longer than four bytes" }}
 [[site.route]]
-path = "/r"
+prefix = "/r"
 cache = {{ store = "main", ttl = "60s" }}
 proxy = {{ upstream = "up" }}
 "#,

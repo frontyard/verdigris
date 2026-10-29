@@ -85,7 +85,11 @@ impl Auth {
                     let (u, h) = line.split_once(':').ok_or_else(|| {
                         format!("{} line {}: expected user:hash", file.display(), lineno + 1)
                     })?;
-                    users.insert(u.to_string(), Hash::Bcrypt(h.to_string()));
+                    users.insert(
+                        u.to_string(),
+                        classify_hash(h)
+                            .map_err(|e| format!("{} line {}: {e}", file.display(), lineno + 1))?,
+                    );
                 }
             }
             // dummy matches the table's scheme so unknown users pay the
@@ -157,9 +161,13 @@ impl Auth {
 
 fn classify_hash(h: &str) -> Result<Hash, String> {
     if h.starts_with("$argon2") {
+        PasswordHash::new(h)
+            .map_err(|_| "password value is not a valid argon2 hash".to_string())?;
         return Ok(Hash::Argon2(h.to_string()));
     }
     if h.starts_with("$2a$") || h.starts_with("$2b$") || h.starts_with("$2y$") {
+        h.parse::<bcrypt::HashParts>()
+            .map_err(|_| "password value is not a valid bcrypt hash".to_string())?;
         return Ok(Hash::Bcrypt(h.to_string()));
     }
     Err("password value is not an argon2 or bcrypt hash".into())

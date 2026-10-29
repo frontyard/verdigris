@@ -84,12 +84,7 @@ pub fn build(
         return Ok(Handler::Redirect(Redirect::build(r, site)?));
     }
     if let Some(r) = &route.static_files {
-        let prefix = route
-            .prefix
-            .as_ref()
-            .or(route.path.as_ref())
-            .cloned()
-            .unwrap_or_default();
+        let prefix = route.prefix.clone().unwrap_or_default();
         return Ok(Handler::Static(Static::build(r, &prefix, site)?));
     }
     if let Some(p) = &route.proxy {
@@ -143,13 +138,59 @@ fn compile_status(status: u16) -> Result<StatusCode, BuildError> {
         .map_err(|_| BuildError::Invalid(format!("invalid status {status}")))
 }
 
-/// Substitute `{path}`, `{host}`, `{method}`, `{scheme}` in a template.
-fn substitute(template: &str, req: &http::Request<BoxBody>, ctx: &RequestCtx) -> String {
+/// Substitute `{path}`, `{host}`, `{query}`, `{method}`, `{scheme}`,
+/// `{uri}` (path + `?query` as sent), `{args}` (query without `?`),
+/// `{remote_ip}` (client IP under the route's trust model), and
+/// `{request_id}` (extracted or generated `X-Request-Id`; empty when
+/// the pipeline didn't run, e.g. tests). `path` lets callers pass an
+/// encoded path — redirect targets must stay header-safe. `{query}`
+/// carries its leading `?` and is empty when the request has no
+/// query string.
+pub(crate) fn substitute(
+    template: &str,
+    path: &str,
+    req: &http::Request<BoxBody>,
+    ctx: &RequestCtx,
+) -> String {
+    substitute_parts(
+        template,
+        path,
+        req.uri(),
+        req.method(),
+        req.extensions()
+            .get::<crate::observe::RequestId>()
+            .map(|r| r.as_str()),
+        ctx,
+    )
+}
+
+/// `substitute` over request parts — for callers whose `Request` was
+/// already consumed (e.g. the proxy retry loop).
+pub(crate) fn substitute_parts(
+    template: &str,
+    path: &str,
+    uri: &http::Uri,
+    method: &http::Method,
+    request_id: Option<&str>,
+    ctx: &RequestCtx,
+) -> String {
+    let args = uri.query().unwrap_or_default();
+    let query = if args.is_empty() {
+        String::new()
+    } else {
+        format!("?{args}")
+    };
+    let uri = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or(path);
     template
-        .replace("{path}", &ctx.path)
+        .replace("{path}", path)
         .replace("{host}", &ctx.host)
-        .replace("{method}", req.method().as_str())
+        .replace("{query}", &query)
+        .replace("{method}", method.as_str())
         .replace("{scheme}", ctx.scheme)
+        .replace("{uri}", uri)
+        .replace("{args}", args)
+        .replace("{remote_ip}", &ctx.client_ip.to_string())
+        .replace("{request_id}", request_id.unwrap_or_default())
 }
 
 /// Convenience: build a minimal response with a text body (respecting
@@ -211,17 +252,51 @@ mod tests {
     }
 
     #[test]
+    fn substitute_covers_all_placeholders() {
+        let out = super::substitute(
+            "{path}|{host}|{query}|{method}|{scheme}|{uri}|{args}|{remote_ip}",
+            "/a b",
+            &req(Method::POST, "/x?q=1"),
+            &ctx(),
+        );
+        assert_eq!(out, "/a b|h|?q=1|POST|http|/x?q=1|q=1|10.0.0.1");
+        // no query → {query}/{args} empty, {uri} is the bare path
+        let out = super::substitute(
+            "{query}|{args}|{uri}",
+            "/p",
+            &req(Method::GET, "/x"),
+            &ctx(),
+        );
+        assert_eq!(out, "||/x");
+        // {request_id} resolves from the request extensions when the
+        // pipeline ran; absent in hand-built requests → empty
+        let mut r = req(Method::GET, "/x");
+        r.extensions_mut()
+            .insert(crate::observe::RequestId::extract(&http::HeaderMap::new()));
+        let out = super::substitute("{request_id}", "/p", &r, &ctx());
+        assert_eq!(out.len(), 36); // generated uuid
+        let out = super::substitute("{request_id}", "/p", &req(Method::GET, "/x"), &ctx());
+        assert_eq!(out, "");
+    }
+
+    #[test]
     fn redirect_targets() {
-        // To template
+        // To template — all five placeholders
         let c = cfg::RedirectHandler {
-            to: Some("https://x{path}{query}?h={host}&s={scheme}".into()),
+            to: Some("https://x{path}{query}?h={host}&m={method}&s={scheme}".into()),
             ..Default::default()
         };
         let r = redirect::Redirect::build(&c, "s").unwrap();
         let resp = r.handle(&req(Method::GET, "/p?q=1"), &ctx());
         assert_eq!(resp.status(), 308);
         let loc = resp.headers()["location"].to_str().unwrap();
-        assert!(loc.contains("h=h") && loc.contains("s=http") && loc.contains("q=1"));
+        assert!(
+            loc.contains("h=h")
+                && loc.contains("m=GET")
+                && loc.contains("s=http")
+                && loc.contains("q=1"),
+            "{loc}"
+        );
 
         // Host target
         let c = cfg::RedirectHandler {
@@ -251,6 +326,51 @@ mod tests {
                 .to_str()
                 .unwrap()
                 .starts_with("https://h/")
+        );
+
+        // scheme-relative targets refused: a decoded `/\evil.com` path
+        // (from `/%5Cevil.com`) makes `to = "{path}"` render a
+        // protocol-relative Location — WHATWG folds `/\` into `//` →
+        // open redirect. The header is dropped instead of emitted.
+        let mut evil_ctx = ctx();
+        evil_ctx.path = "/\\evil.com".into();
+        let c = cfg::RedirectHandler {
+            to: Some("{path}".into()),
+            ..Default::default()
+        };
+        let r = redirect::Redirect::build(&c, "s").unwrap();
+        let resp = r.handle(&req(Method::GET, "/%5Cevil.com"), &evil_ctx);
+        assert!(resp.headers().get("location").is_none());
+        // same for a `//` result (`to = "/{uri}"`)
+        let c = cfg::RedirectHandler {
+            to: Some("/{uri}".into()),
+            ..Default::default()
+        };
+        let r = redirect::Redirect::build(&c, "s").unwrap();
+        let resp = r.handle(&req(Method::GET, "/evil.com"), &ctx());
+        assert!(resp.headers().get("location").is_none());
+        // encoded separators in `{uri}` (the raw request target) are
+        // refused the same way — `%5C`/`%2F` at the head decode to the
+        // same scheme-relative forms the literal check rejects
+        let c = cfg::RedirectHandler {
+            to: Some("{uri}".into()),
+            ..Default::default()
+        };
+        let r = redirect::Redirect::build(&c, "s").unwrap();
+        let resp = r.handle(&req(Method::GET, "/%5C%5Cevil.com"), &ctx());
+        assert!(resp.headers().get("location").is_none());
+        let resp = r.handle(&req(Method::GET, "/%2f%2fevil.com"), &ctx());
+        assert!(resp.headers().get("location").is_none());
+        // ordinary absolute/prefixed targets still redirect fine
+        let c = cfg::RedirectHandler {
+            to: Some("https://new{uri}".into()),
+            ..Default::default()
+        };
+        let r = redirect::Redirect::build(&c, "s").unwrap();
+        let resp = r.handle(&req(Method::GET, "/p"), &ctx());
+        assert_eq!(
+            resp.headers()["location"].to_str().unwrap(),
+            "https://new/p"
         );
 
         // nothing configured → Missing
@@ -319,7 +439,7 @@ mod tests {
     fn build_dispatches_and_rejects_missing() {
         // no handler configured
         let route = cfg::RouteConfig {
-            path: Some("/x".into()),
+            prefix: Some("/x".into()),
             ..Default::default()
         };
         let empty = crate::config::model::Config::default();
@@ -331,7 +451,7 @@ mod tests {
 
         // respond arm
         let route = cfg::RouteConfig {
-            path: Some("/x".into()),
+            prefix: Some("/x".into()),
             respond: Some(cfg::RespondHandler {
                 status: 200,
                 body: "ok".into(),

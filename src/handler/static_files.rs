@@ -33,7 +33,7 @@ pub struct Static {
     try_files: Vec<String>,
     precompressed: bool,
     cache_control: Vec<(String, String)>,
-    error_pages: BTreeMap<u16, PathBuf>,
+    error_pages: cfg::ErrorPages,
     mime_overrides: BTreeMap<String, String>,
     /// Matched route prefix stripped from the request path before joining
     /// `root` — `alias` semantics à la Caddy, not nginx `root`.
@@ -78,11 +78,19 @@ impl Static {
             spa: c.spa,
             try_files: c.try_files.clone(),
             precompressed: c.precompressed,
-            cache_control: c
-                .cache_control
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
+            cache_control: {
+                // BTreeMap order is alphabetical — a `"*"` catch-all
+                // would sort first and shadow every specific entry.
+                // Rank by specificity instead: fewest wildcards, then
+                // most literal characters (exact > "*.ext" > "*").
+                let mut cc: Vec<_> = c
+                    .cache_control
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                cc.sort_by_key(|(g, _)| glob_specificity(g));
+                cc
+            },
             error_pages: c.error_pages.clone(),
             mime_overrides: c.mime_types.clone(),
             strip: route_prefix.to_string(),
@@ -414,7 +422,7 @@ impl Static {
             .to_string()
     }
 
-    /// First matching `cache_control` glob, in map order.
+    /// First matching `cache_control` glob, most specific first.
     fn cache_control(&self, path: &str) -> Option<String> {
         self.cache_control
             .iter()
@@ -424,7 +432,7 @@ impl Static {
 
     /// Serve a configured error page for `status`, else a plain response.
     async fn error_page(&self, status: StatusCode, method: &Method) -> http::Response<BoxBody> {
-        if let Some(p) = self.error_pages.get(&status.as_u16()) {
+        if let Some(p) = self.error_pages.get(status.as_u16()) {
             // error page paths are always relative to `root` — a leading
             // `/` means "from the document root", like `try_files`
             let path = self.root.join(p.to_string_lossy().trim_start_matches('/'));
@@ -722,6 +730,16 @@ pub(crate) fn glob_match(pattern: &str, path: &str) -> bool {
         first = false;
     }
     pattern.ends_with('*') || rest.is_empty()
+}
+
+/// Specificity rank for `cache_control` globs — sorts ascending so the
+/// most specific pattern wins regardless of declaration order: fewest
+/// wildcards first, then most literal characters (`"*.css"` beats
+/// `"*"`; an exact path has no wildcard and always wins).
+fn glob_specificity(pattern: &str) -> (usize, usize) {
+    let wildcards = pattern.matches('*').count();
+    let literals = pattern.chars().filter(|&c| c != '*').count();
+    (wildcards, usize::MAX - literals)
 }
 
 /// Escape HTML special chars.
@@ -1037,7 +1055,7 @@ mod handler_tests {
         std::fs::write(d.path().join("404.html"), "<h1>nope</h1>").unwrap();
         std::fs::write(d.path().join("x.css"), "a{}").unwrap();
         let mut c = cfg_with(d.path(), |c| {
-            c.error_pages.insert(404, PathBuf::from("404.html"));
+            c.error_pages.exact.insert(404, PathBuf::from("404.html"));
             c.cache_control
                 .insert("*.css".into(), "public, max-age=99".into());
         });
@@ -1051,6 +1069,24 @@ mod handler_tests {
 
         let r = s.handle(req(Method::GET, "/x.css"), &ctx("/x.css")).await;
         assert_eq!(r.headers()["cache-control"], "public, max-age=99");
+        let _ = &mut c;
+    }
+
+    #[tokio::test]
+    async fn cache_control_prefers_specific_glob() {
+        // "*" sorts first in the BTreeMap — it must not shadow "*.css"
+        let d = tmp();
+        std::fs::write(d.path().join("x.css"), "a{}").unwrap();
+        let mut c = cfg_with(d.path(), |c| {
+            c.cache_control.insert("*".into(), "no-cache".into());
+            c.cache_control
+                .insert("*.css".into(), "max-age=86400".into());
+        });
+        let s = Static::build(&c, "/", "s").unwrap();
+        let r = s.handle(req(Method::GET, "/x.css"), &ctx("/x.css")).await;
+        assert_eq!(r.headers()["cache-control"], "max-age=86400");
+        let r = s.handle(req(Method::GET, "/x.png"), &ctx("/x.png")).await;
+        assert_eq!(r.status(), 404); // file absent — glob order unaffected
         let _ = &mut c;
     }
 

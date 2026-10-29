@@ -14,9 +14,12 @@ max_object_bytes = "16MiB"
 
 [[site.route]]
 prefix = "/assets"
+proxy = "http://127.0.0.1:8080"   # cache sits in front of any handler
 cache = { store = "main", ttl = "5m",
           stale_while_revalidate = "30s", stale_if_error = "5m" }
 ```
+
+A bare `cache = "main"` enables the store with default settings.
 
 ## Semantics
 
@@ -34,8 +37,8 @@ wait and read the committed entry.
 ## Bypass and purge
 
 `cache.bypass` skips the cache by path glob, method, request header, or
-for authenticated requests (default). `x_cache = true` emits
-`X-Cache: HIT|MISS|STALE|BYPASS` on responses.
+for authenticated requests (default). `X-Cache: HIT|MISS|STALE|BYPASS`
+is emitted by default — `x_cache = false` suppresses it.
 
 ```sh
 curl -XPOST localhost:2019/purge -d '{"store":"main","prefix":"/assets"}'
