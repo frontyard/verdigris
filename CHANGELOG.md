@@ -503,13 +503,20 @@ workflow publishes the matching section as the GitHub release notes.
   pages, the first recipe validated `tls = "auto"` by accident (now
   `tls = "off"`), stale `0.2.2`/`v0.1.0` version strings, and
   book-relative links in `llms-full.txt` that resolved nowhere.
-- **Config parse and `client_ip` perf regressions** — the shorthand
-  deserializers (`route.respond`/`proxy`/`match`/`cache`, `upstream.*`
-  entries and their server lists, scalar-or-list sugar) no longer
-  buffer each value into serde's `Content` and retry per variant, and
-  the X-Forwarded-For trust walk no longer allocates a list per
-  request. Errors inside the table/list forms now also name the
-  offending key instead of the generic "must be a …" fallback.
+- **Config parse and `client_ip` perf regressions** — every shorthand
+  deserializer (route/site middleware blocks, `upstream.*` entries and
+  their server lists, `tls`/`listen`/`host_header`/`server_header`,
+  CIDR and byte-size values, scalar-or-list sugar) now dispatches on
+  the value's own type in one pass instead of buffering into serde's
+  `Content` and retrying per variant, and the X-Forwarded-For trust
+  walk no longer allocates a list per request. Errors inside the
+  table/list forms now name the offending key instead of the generic
+  "must be a …" fallback — though a few scalar shorthands lose their
+  value-specific reason (`admin.tls = "bogus"` no longer echoes the
+  rejected mode, `dns = "banana"` drops the humantime detail).
+  Undocumented positional-array forms (e.g. `respond = [200, "text"]`)
+  no longer parse — arrays only mean a field's documented list
+  shorthand, as `docs/config-grammar.md` specifies.
 
 ## [0.4.1] - 2026-10-27
 

@@ -90,6 +90,29 @@ pub mod one_or_many {
             Self::one(().into_deserializer())
         }
     }
+
+    struct List<T>(Vec<T>);
+
+    impl<'de, T: Deserialize<'de>> Deserialize<'de> for List<T> {
+        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            d.deserialize_any(OneOrMany(PhantomData)).map(List)
+        }
+    }
+
+    /// `v` or `[v, …]` or none into `Option<Vec<T>>` — same sugar for
+    /// optional list fields.
+    pub mod option {
+        use serde::{Deserialize, Deserializer};
+
+        /// Deserialize `v`, `[v, …]`, or none into `Option<Vec<T>>`.
+        pub fn deserialize<'de, D, T>(d: D) -> Result<Option<Vec<T>>, D::Error>
+        where
+            D: Deserializer<'de>,
+            T: Deserialize<'de>,
+        {
+            Option::<super::List<T>>::deserialize(d).map(|o| o.map(|l| l.0))
+        }
+    }
 }
 
 /// Serde adapter for `Vec<IpNet>`/`Option<Vec<IpNet>>` fields: the
@@ -101,8 +124,8 @@ pub mod cidr {
     use std::net::IpAddr;
 
     use ipnet::IpNet;
+    use serde::Deserializer;
     use serde::de::Error;
-    use serde::{Deserialize, Deserializer};
 
     /// Parse a CIDR or a bare IP (interpreted as a host route).
     pub fn parse(s: &str) -> Result<IpNet, String> {
@@ -120,16 +143,7 @@ pub mod cidr {
 
     /// Deserialize `v` or `[v, …]` into `Vec<IpNet>`.
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<IpNet>, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Repr {
-            Many(Vec<String>),
-            One(String),
-        }
-        let raw = match Repr::deserialize(d)? {
-            Repr::Many(v) => v,
-            Repr::One(s) => vec![s],
-        };
+        let raw: Vec<String> = super::one_or_many::deserialize(d)?;
         raw.iter()
             .map(|s| parse(s).map_err(Error::custom))
             .collect()
@@ -138,30 +152,21 @@ pub mod cidr {
     /// Same sugar for `Option<Vec<IpNet>>` fields.
     pub mod option {
         use ipnet::IpNet;
+        use serde::Deserializer;
         use serde::de::Error;
-        use serde::{Deserialize, Deserializer};
 
         /// Deserialize `v`, `[v, …]`, or none into `Option<Vec<IpNet>>`.
         pub fn deserialize<'de, D: Deserializer<'de>>(
             d: D,
         ) -> Result<Option<Vec<IpNet>>, D::Error> {
-            #[derive(Deserialize)]
-            #[serde(untagged)]
-            enum Repr {
-                Many(Vec<String>),
-                One(String),
-            }
-            Option::<Repr>::deserialize(d)?
-                .map(|r| match r {
-                    Repr::Many(v) => v,
-                    Repr::One(s) => vec![s],
-                })
-                .map(|v| {
-                    v.iter()
-                        .map(|s| super::parse(s).map_err(Error::custom))
-                        .collect::<Result<Vec<_>, _>>()
-                })
-                .transpose()
+            let raw: Option<Vec<String>> =
+                crate::config::values::one_or_many::option::deserialize(d)?;
+            raw.map(|v| {
+                v.iter()
+                    .map(|s| super::parse(s).map_err(Error::custom))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()
         }
     }
 }
@@ -305,16 +310,20 @@ impl fmt::Display for ByteSize {
 
 impl<'de> Deserialize<'de> for ByteSize {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Repr {
-            Int(u64),
-            Str(String),
-        }
-        match Repr::deserialize(d)? {
-            Repr::Int(n) => Ok(Self(n)),
-            Repr::Str(s) => Self::parse(&s).map_err(D::Error::custom),
-        }
+        super::model::shorthand(d)
+    }
+}
+
+impl<'de> super::model::Shorthand<'de> for ByteSize {
+    const EXPECTING: &'static str = "a byte count or a size string like \"10MiB\"";
+    fn from_int(n: i64) -> Option<Self> {
+        u64::try_from(n).ok().map(Self)
+    }
+    fn from_str(s: &str) -> Option<Self> {
+        Self::parse(s).ok()
+    }
+    fn from_map<A: serde::de::MapAccess<'de>>(_: A) -> Result<Self, A::Error> {
+        Err(serde::de::Error::custom(Self::EXPECTING))
     }
 }
 

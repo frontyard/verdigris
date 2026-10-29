@@ -21,7 +21,7 @@ fn default_true() -> bool {
 /// so — unlike `#[serde(untagged)]` — the value is never buffered into
 /// serde's `Content` and re-parsed per variant. Config parsing is on the
 /// startup/reload path; route-level fields hit this once per route.
-trait Shorthand<'de>: Deserialize<'de> {
+pub(crate) trait Shorthand<'de>: Deserialize<'de> {
     /// Whole-field error message, used for every rejected form.
     const EXPECTING: &'static str;
     fn from_bool(_: bool) -> Option<Self> {
@@ -33,10 +33,20 @@ trait Shorthand<'de>: Deserialize<'de> {
     fn from_str(_: &str) -> Option<Self> {
         None
     }
-    /// Arrays default to the struct's own sequence form, matching what
-    /// an untagged `Full(Self)` variant accepted.
-    fn from_seq<A: serde::de::SeqAccess<'de>>(seq: A) -> Result<Self, A::Error> {
-        Self::deserialize(serde::de::value::SeqAccessDeserializer::new(seq))
+    /// Arrays are only a field's *documented* list shorthand — impls
+    /// that accept one (`match` methods, `proxy` URL list) override
+    /// this. The default rejects: an untagged `Full(Self)` variant also
+    /// accepted the struct positionally (`respond = [200, "text"]`),
+    /// but that seq form was a buffering artifact, not a grammar form —
+    /// `docs/config-grammar.md` lists no positional-array field.
+    fn from_seq<A: serde::de::SeqAccess<'de>>(_: A) -> Result<Self, A::Error> {
+        Err(serde::de::Error::custom(Self::EXPECTING))
+    }
+    /// Table form — the struct's own map deserialization. Impls on
+    /// types with a manual `Deserialize` MUST override this: the
+    /// default would recurse through `deserialize_any` back here.
+    fn from_map<A: serde::de::MapAccess<'de>>(map: A) -> Result<Self, A::Error> {
+        Self::deserialize(serde::de::value::MapAccessDeserializer::new(map))
     }
 }
 
@@ -77,7 +87,7 @@ impl<'de, T: Shorthand<'de>> serde::de::Visitor<'de> for ShorthandVisitor<T> {
     }
 
     fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<T, A::Error> {
-        T::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        T::from_map(map)
     }
 }
 
@@ -100,6 +110,16 @@ where
     T: Shorthand<'de>,
 {
     Option::<ShorthandField<T>>::deserialize(d).map(|o| o.map(|f| f.0))
+}
+
+/// `deserialize_with` target for a required [`Shorthand`] field — the
+/// same dispatch as [`opt_shorthand`] for non-`Option` fields.
+pub(crate) fn shorthand<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Shorthand<'de>,
+{
+    ShorthandField::<T>::deserialize(d).map(|f| f.0)
 }
 
 /// `route.cache` accepts `false` (opt out of an inherited site cache),
@@ -130,78 +150,65 @@ impl<'de> Shorthand<'de> for RouteCache {
 fn opt_compress<'de, D: serde::Deserializer<'de>>(
     d: D,
 ) -> Result<Option<CompressConfig>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        On(bool),
-        Alg(String),
-        Algs(Vec<String>),
-        Full(CompressConfig),
-    }
-    let r = Option::<Repr>::deserialize(d).map_err(|_| {
-        serde::de::Error::custom("compress must be a bool, an algorithm name or list, or a table")
-    })?;
-    Ok(r.map(|r| match r {
-        Repr::On(enabled) => CompressConfig {
+    opt_shorthand(d)
+}
+
+impl<'de> Shorthand<'de> for CompressConfig {
+    const EXPECTING: &'static str =
+        "compress must be a bool, an algorithm name or list, or a table";
+    fn from_bool(enabled: bool) -> Option<Self> {
+        Some(CompressConfig {
             enabled,
             ..Default::default()
-        },
-        Repr::Alg(alg) => CompressConfig {
-            algorithms: vec![alg],
+        })
+    }
+    fn from_str(alg: &str) -> Option<Self> {
+        Some(CompressConfig {
+            algorithms: vec![alg.to_owned()],
             ..Default::default()
-        },
-        Repr::Algs(algorithms) => CompressConfig {
-            algorithms,
+        })
+    }
+    fn from_seq<A: serde::de::SeqAccess<'de>>(seq: A) -> Result<Self, A::Error> {
+        Ok(CompressConfig {
+            algorithms: Vec::deserialize(serde::de::value::SeqAccessDeserializer::new(seq))?,
             ..Default::default()
-        },
-        Repr::Full(c) => c,
-    }))
+        })
+    }
 }
 
 /// `log.access` accepts `false` (no access log) or a table.
 fn access_or_off<'de, D: serde::Deserializer<'de>>(d: D) -> Result<AccessLog, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Flag(bool),
-        Dest(String),
-        Full(AccessLog),
+    shorthand(d)
+}
+
+impl<'de> Shorthand<'de> for AccessLog {
+    const EXPECTING: &'static str = "access must be a bool, an output string, or a table";
+    fn from_bool(enabled: bool) -> Option<Self> {
+        Some(AccessLog {
+            enabled,
+            ..Default::default()
+        })
     }
-    Ok(
-        match Repr::deserialize(d).map_err(|_| {
-            serde::de::Error::custom("access must be a bool, an output string, or a table")
-        })? {
-            Repr::Flag(enabled) => AccessLog {
-                enabled,
-                ..Default::default()
-            },
-            Repr::Dest(output) => AccessLog {
-                output,
-                ..Default::default()
-            },
-            Repr::Full(a) => a,
-        },
-    )
+    fn from_str(output: &str) -> Option<Self> {
+        Some(AccessLog {
+            output: output.to_owned(),
+            ..Default::default()
+        })
+    }
 }
 
 /// `upstream.dns` accepts a grace duration (`"60s"`) or a table.
 fn dns_or_grace<'de, D: serde::Deserializer<'de>>(d: D) -> Result<UpstreamDns, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Grace(String),
-        Full(UpstreamDns),
+    shorthand(d)
+}
+
+impl<'de> Shorthand<'de> for UpstreamDns {
+    const EXPECTING: &'static str = "dns must be a duration or a table";
+    fn from_str(s: &str) -> Option<Self> {
+        Some(UpstreamDns {
+            grace: humantime::parse_duration(s).ok()?,
+        })
     }
-    Ok(
-        match Repr::deserialize(d)
-            .map_err(|_| serde::de::Error::custom("dns must be a duration or a table"))?
-        {
-            Repr::Grace(s) => UpstreamDns {
-                grace: humantime::parse_duration(&s).map_err(serde::de::Error::custom)?,
-            },
-            Repr::Full(d) => d,
-        },
-    )
 }
 
 /// `upstream.health.active` accepts a probe path (`"/healthz"`) or a table.
@@ -210,109 +217,90 @@ fn dns_or_grace<'de, D: serde::Deserializer<'de>>(d: D) -> Result<UpstreamDns, D
 fn opt_passive_health<'de, D: serde::Deserializer<'de>>(
     d: D,
 ) -> Result<Option<PassiveHealth>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Failures(u32),
-        Full(PassiveHealth),
-    }
-    let r = Option::<Repr>::deserialize(d).map_err(|_| {
-        serde::de::Error::custom("health.passive must be a failure count or a table")
-    })?;
-    Ok(r.map(|r| match r {
-        Repr::Failures(failures) => PassiveHealth {
-            failures,
+    opt_shorthand(d)
+}
+
+impl<'de> Shorthand<'de> for PassiveHealth {
+    const EXPECTING: &'static str = "health.passive must be a failure count or a table";
+    fn from_int(failures: i64) -> Option<Self> {
+        Some(PassiveHealth {
+            failures: u32::try_from(failures).ok()?,
             ..Default::default()
-        },
-        Repr::Full(p) => p,
-    }))
+        })
+    }
 }
 
 fn opt_active_health<'de, D: serde::Deserializer<'de>>(
     d: D,
 ) -> Result<Option<ActiveHealth>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Path(String),
-        Full(ActiveHealth),
-    }
-    let r = Option::<Repr>::deserialize(d)
-        .map_err(|_| serde::de::Error::custom("health.active must be a path or a table"))?;
-    Ok(r.map(|r| match r {
-        Repr::Path(path) => ActiveHealth {
-            path,
+    opt_shorthand(d)
+}
+
+impl<'de> Shorthand<'de> for ActiveHealth {
+    const EXPECTING: &'static str = "health.active must be a path or a table";
+    fn from_str(path: &str) -> Option<Self> {
+        Some(ActiveHealth {
+            path: path.to_owned(),
             ..Default::default()
-        },
-        Repr::Full(a) => a,
-    }))
+        })
+    }
 }
 
 /// `proxy.retries` accepts `false` (no retries) or a table.
 fn retries_or_off<'de, D: serde::Deserializer<'de>>(d: D) -> Result<RetryPolicy, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Flag(bool),
-        Count(u8),
-        Full(RetryPolicy),
-    }
-    Ok(
-        match Repr::deserialize(d).map_err(|_| {
-            serde::de::Error::custom("retries must be a bool, a retry count, or a table")
-        })? {
-            Repr::Flag(false) => RetryPolicy {
+    shorthand(d)
+}
+
+impl<'de> Shorthand<'de> for RetryPolicy {
+    const EXPECTING: &'static str = "retries must be a bool, a retry count, or a table";
+    fn from_bool(enabled: bool) -> Option<Self> {
+        Some(if enabled {
+            RetryPolicy::default()
+        } else {
+            RetryPolicy {
                 max_per_request: 0,
                 ..Default::default()
-            },
-            Repr::Flag(true) => RetryPolicy::default(),
-            Repr::Count(n) => RetryPolicy {
-                max_per_request: n,
-                ..Default::default()
-            },
-            Repr::Full(r) => r,
-        },
-    )
+            }
+        })
+    }
+    fn from_int(n: i64) -> Option<Self> {
+        Some(RetryPolicy {
+            max_per_request: u8::try_from(n).ok()?,
+            ..Default::default()
+        })
+    }
 }
 
 /// `route.static` accepts a root path (`static = "/srv/www"`) or a table.
 fn opt_static<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<StaticHandler>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Root(PathBuf),
-        Full(StaticHandler),
-    }
-    let r = Option::<Repr>::deserialize(d)
-        .map_err(|_| serde::de::Error::custom("static must be a root path or a table"))?;
-    Ok(r.map(|r| match r {
-        Repr::Root(root) => StaticHandler {
-            root,
+    opt_shorthand(d)
+}
+
+impl<'de> Shorthand<'de> for StaticHandler {
+    const EXPECTING: &'static str = "static must be a root path or a table";
+    fn from_str(root: &str) -> Option<Self> {
+        Some(StaticHandler {
+            root: PathBuf::from(root),
             ..Default::default()
-        },
-        Repr::Full(s) => s,
-    }))
+        })
+    }
 }
 
 /// `route.redirect` accepts a target URL (`redirect = "https://…"`) or a table.
 fn opt_redirect<'de, D: serde::Deserializer<'de>>(
     d: D,
 ) -> Result<Option<RedirectHandler>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        To(String),
-        Full(RedirectHandler),
-    }
-    let r = Option::<Repr>::deserialize(d)
-        .map_err(|_| serde::de::Error::custom("redirect must be a target URL or a table"))?;
-    Ok(r.map(|r| match r {
-        Repr::To(to) => RedirectHandler {
-            to: Some(to),
+    opt_shorthand(d)
+}
+
+impl<'de> Shorthand<'de> for RedirectHandler {
+    const EXPECTING: &'static str = "redirect must be a target URL or a table";
+    fn from_str(to: &str) -> Option<Self> {
+        Some(RedirectHandler {
+            to: Some(to.to_owned()),
             ..Default::default()
-        },
-        Repr::Full(r) => r,
-    }))
+        })
+    }
 }
 
 /// `route.respond` accepts a body string (`respond = "text"`) or a table.
@@ -341,28 +329,23 @@ impl<'de> Shorthand<'de> for RespondHandler {
 fn opt_rate_limit<'de, D: serde::Deserializer<'de>>(
     d: D,
 ) -> Result<Option<RateLimitConfig>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Off(bool),
-        Rate(String),
-        Full(RateLimitConfig),
+    opt_shorthand(d)
+}
+
+impl<'de> Shorthand<'de> for RateLimitConfig {
+    const EXPECTING: &'static str = "rate_limit must be false, a rate string, or a table";
+    fn from_bool(enabled: bool) -> Option<Self> {
+        Some(RateLimitConfig {
+            enabled,
+            ..Default::default()
+        })
     }
-    let r = Option::<Repr>::deserialize(d).map_err(|_| {
-        serde::de::Error::custom("rate_limit must be false, a rate string, or a table")
-    })?;
-    Ok(match r {
-        Some(Repr::Off(b)) => Some(RateLimitConfig {
-            enabled: b,
+    fn from_str(s: &str) -> Option<Self> {
+        Some(RateLimitConfig {
+            rate: Some(RateSpec::parse(s).ok()?),
             ..Default::default()
-        }),
-        Some(Repr::Rate(s)) => Some(RateLimitConfig {
-            rate: Some(RateSpec::parse(&s).map_err(serde::de::Error::custom)?),
-            ..Default::default()
-        }),
-        Some(Repr::Full(r)) => Some(r),
-        None => None,
-    })
+        })
+    }
 }
 
 /// `acme.directory` accepts a directory URL or a short alias —
@@ -380,19 +363,17 @@ fn directory_or_alias<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, 
 /// `security` accepts `false` (off-switch for inherited headers) or a
 /// table — the same convention as other inherited middleware blocks.
 fn opt_security<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<RouteSecurity>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Off(bool),
-        Full(RouteSecurity),
-    }
-    Ok(Option::<Repr>::deserialize(d)?.map(|r| match r {
-        Repr::Off(b) => RouteSecurity {
+    opt_shorthand(d)
+}
+
+impl<'de> Shorthand<'de> for RouteSecurity {
+    const EXPECTING: &'static str = "security must be a bool or a table";
+    fn from_bool(b: bool) -> Option<Self> {
+        Some(RouteSecurity {
             enabled: Some(b),
             ..Default::default()
-        },
-        Repr::Full(s) => s,
-    }))
+        })
+    }
 }
 
 /// Schema shape for `security` — `false` or a table.
@@ -409,19 +390,17 @@ pub enum RouteSecuritySchema {
 /// `auth` accepts `false` — opt a route out of an inherited site
 /// `auth` — or a table. Same convention as the other inherited blocks.
 fn opt_auth<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<AuthConfig>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Off(bool),
-        Full(AuthConfig),
-    }
-    Ok(Option::<Repr>::deserialize(d)?.map(|r| match r {
-        Repr::Off(b) => AuthConfig {
-            enabled: b,
+    opt_shorthand(d)
+}
+
+impl<'de> Shorthand<'de> for AuthConfig {
+    const EXPECTING: &'static str = "auth must be a bool or a table";
+    fn from_bool(enabled: bool) -> Option<Self> {
+        Some(AuthConfig {
+            enabled,
             ..Default::default()
-        },
-        Repr::Full(a) => a,
-    }))
+        })
+    }
 }
 
 /// Schema shape for `auth` — `false` or a table.
@@ -437,21 +416,17 @@ pub enum AuthConfigSchema {
 /// `auth.basic` accepts an htpasswd file path (`basic = "x.htpasswd"`)
 /// or a table — `htpasswd` is the ops-common case.
 fn opt_basic<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<BasicAuth>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Htpasswd(PathBuf),
-        Full(BasicAuth),
-    }
-    let r = Option::<Repr>::deserialize(d)
-        .map_err(|_| serde::de::Error::custom("basic must be an htpasswd path or a table"))?;
-    Ok(r.map(|r| match r {
-        Repr::Htpasswd(p) => BasicAuth {
-            htpasswd: Some(p),
+    opt_shorthand(d)
+}
+
+impl<'de> Shorthand<'de> for BasicAuth {
+    const EXPECTING: &'static str = "basic must be an htpasswd path or a table";
+    fn from_str(p: &str) -> Option<Self> {
+        Some(BasicAuth {
+            htpasswd: Some(PathBuf::from(p)),
             ..Default::default()
-        },
-        Repr::Full(b) => b,
-    }))
+        })
+    }
 }
 
 /// Schema shape for `auth.basic` — an htpasswd path or a table.
@@ -467,23 +442,21 @@ pub enum BasicAuthSchema {
 /// `auth.bearer` accepts a token (`bearer = "tok"`), a token list, or a
 /// table — `tokens` is the only field, so it dominates.
 fn opt_bearer<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<BearerAuth>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Token(String),
-        Tokens(Vec<String>),
-        Full(BearerAuth),
+    opt_shorthand(d)
+}
+
+impl<'de> Shorthand<'de> for BearerAuth {
+    const EXPECTING: &'static str = "bearer must be a token, a token list, or a table";
+    fn from_str(token: &str) -> Option<Self> {
+        Some(BearerAuth {
+            tokens: vec![token.to_owned()],
+        })
     }
-    let r = Option::<Repr>::deserialize(d).map_err(|_| {
-        serde::de::Error::custom("bearer must be a token, a token list, or a table")
-    })?;
-    Ok(r.map(|r| match r {
-        Repr::Token(token) => BearerAuth {
-            tokens: vec![token],
-        },
-        Repr::Tokens(tokens) => BearerAuth { tokens },
-        Repr::Full(b) => b,
-    }))
+    fn from_seq<A: serde::de::SeqAccess<'de>>(seq: A) -> Result<Self, A::Error> {
+        Ok(BearerAuth {
+            tokens: Vec::deserialize(serde::de::value::SeqAccessDeserializer::new(seq))?,
+        })
+    }
 }
 
 /// Schema shape for `auth.bearer` — a token or a table.
@@ -500,19 +473,17 @@ pub enum BearerAuthSchema {
 
 /// `cors` accepts `false` (opt out of inherited CORS handling) or a table.
 fn opt_cors<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<CorsConfig>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Off(bool),
-        Full(CorsConfig),
-    }
-    Ok(Option::<Repr>::deserialize(d)?.map(|r| match r {
-        Repr::Off(b) => CorsConfig {
-            enabled: b,
+    opt_shorthand(d)
+}
+
+impl<'de> Shorthand<'de> for CorsConfig {
+    const EXPECTING: &'static str = "cors must be a bool or a table";
+    fn from_bool(enabled: bool) -> Option<Self> {
+        Some(CorsConfig {
+            enabled,
             ..Default::default()
-        },
-        Repr::Full(c) => c,
-    }))
+        })
+    }
 }
 
 /// Schema shape for `cors` — `false` or a table.
@@ -528,19 +499,17 @@ pub enum CorsConfigSchema {
 /// `response_headers` accepts `false` (opt out of the inherited ops)
 /// or a table.
 fn opt_header_ops<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<HeaderOps>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Off(bool),
-        Full(HeaderOps),
-    }
-    Ok(Option::<Repr>::deserialize(d)?.map(|r| match r {
-        Repr::Off(b) => HeaderOps {
-            enabled: b,
+    opt_shorthand(d)
+}
+
+impl<'de> Shorthand<'de> for HeaderOps {
+    const EXPECTING: &'static str = "response_headers must be a bool or a table";
+    fn from_bool(enabled: bool) -> Option<Self> {
+        Some(HeaderOps {
+            enabled,
             ..Default::default()
-        },
-        Repr::Full(h) => h,
-    }))
+        })
+    }
 }
 
 /// Schema shape for `response_headers` — `false` or a table.
@@ -611,23 +580,17 @@ impl<'de> Shorthand<'de> for ProxyHandler {
 /// table — the same off-switch spelling the site/route `security` blocks
 /// use for the headers it seeds.
 fn security_or_off<'de, D: serde::Deserializer<'de>>(d: D) -> Result<SecurityConfig, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Off(bool),
-        Full(SecurityConfig),
+    shorthand(d)
+}
+
+impl<'de> Shorthand<'de> for SecurityConfig {
+    const EXPECTING: &'static str = "security must be a bool or a table";
+    fn from_bool(enabled: bool) -> Option<Self> {
+        Some(SecurityConfig {
+            enabled,
+            ..Default::default()
+        })
     }
-    Ok(
-        match Repr::deserialize(d)
-            .map_err(|_| serde::de::Error::custom("security must be a bool or a table"))?
-        {
-            Repr::Off(enabled) => SecurityConfig {
-                enabled,
-                ..Default::default()
-            },
-            Repr::Full(s) => s,
-        },
-    )
 }
 
 /// Schema shape for `server.security` — `false` or a table.
@@ -642,23 +605,17 @@ pub enum SecurityConfigSchema {
 
 /// `admin` accepts `false` (no admin API) or a table.
 fn admin_or_off<'de, D: serde::Deserializer<'de>>(d: D) -> Result<AdminConfig, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Off(bool),
-        Full(AdminConfig),
+    shorthand(d)
+}
+
+impl<'de> Shorthand<'de> for AdminConfig {
+    const EXPECTING: &'static str = "admin must be a bool or a table";
+    fn from_bool(enabled: bool) -> Option<Self> {
+        Some(AdminConfig {
+            enabled,
+            ..Default::default()
+        })
     }
-    Ok(
-        match Repr::deserialize(d)
-            .map_err(|_| serde::de::Error::custom("admin must be a bool or a table"))?
-        {
-            Repr::Off(enabled) => AdminConfig {
-                enabled,
-                ..Default::default()
-            },
-            Repr::Full(a) => a,
-        },
-    )
 }
 
 /// Schema shape for `admin` — `false` or a table.
@@ -1010,21 +967,23 @@ fn default_admin_listen() -> Vec<SocketAddr> {
 /// `server_header` accepts a header-value string or `false` — `false`
 /// omits the header, same as `""`.
 fn server_header_value<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    // `false` omits the header (same as `""`); `true` is rejected —
+    // "send the header" is meaningless without a value.
     #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Off(bool),
-        Value(String),
+    struct ServerHeader(String);
+    impl<'de2> Shorthand<'de2> for ServerHeader {
+        const EXPECTING: &'static str = "server_header must be a string or false";
+        fn from_bool(v: bool) -> Option<Self> {
+            (!v).then(|| Self(String::new()))
+        }
+        fn from_str(v: &str) -> Option<Self> {
+            Some(Self(v.to_owned()))
+        }
+        fn from_map<A: serde::de::MapAccess<'de2>>(_: A) -> Result<Self, A::Error> {
+            Err(serde::de::Error::custom(Self::EXPECTING))
+        }
     }
-    match Repr::deserialize(d)
-        .map_err(|_| serde::de::Error::custom("server_header must be a string or false"))?
-    {
-        Repr::Value(s) => Ok(s),
-        Repr::Off(false) => Ok(String::new()),
-        Repr::Off(true) => Err(serde::de::Error::custom(
-            "server_header = true is meaningless — use false, \"\", or a value string",
-        )),
-    }
+    shorthand::<D, ServerHeader>(d).map(|s| s.0)
 }
 
 /// Schema shape for `server_header` — `false` or a string.
@@ -1037,48 +996,49 @@ pub enum ServerHeaderSchema {
     Value(String),
 }
 
+/// `{ addr = "ip:port", tls = true }` listen entry table form.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListenAddrTable {
+    #[serde(default)]
+    addr: Option<String>,
+    #[serde(default)]
+    tls: bool,
+}
+
 impl<'de> Deserialize<'de> for ListenAddr {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Table {
-            #[serde(default)]
-            addr: Option<String>,
-            #[serde(default)]
-            tls: bool,
-        }
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Repr {
-            Addr(String),
-            Table(Table),
-        }
-        match Repr::deserialize(d).map_err(|_| {
-            serde::de::Error::custom(
-                "listen entries must be \"ip:port\" or \":port\" strings or { addr, tls } tables",
-            )
-        })? {
-            Repr::Addr(s) => Ok(Self {
-                addr: parse_listen_addr(&s).map_err(serde::de::Error::custom)?,
-                tls: false,
-            }),
-            Repr::Table(t) => Ok(Self {
-                // `tls = true` alone implies the HTTPS port — ending up
-                // serving TLS on :80 is never what the operator meant.
-                addr: t
-                    .addr
-                    .map(|s| parse_listen_addr(&s).map_err(serde::de::Error::custom))
-                    .transpose()?
-                    .unwrap_or_else(|| {
-                        if t.tls {
-                            SocketAddr::from(([0, 0, 0, 0], 443))
-                        } else {
-                            ListenAddr::default().addr
-                        }
-                    }),
-                tls: t.tls,
-            }),
-        }
+        shorthand(d)
+    }
+}
+
+impl<'de> Shorthand<'de> for ListenAddr {
+    const EXPECTING: &'static str =
+        "listen entries must be \"ip:port\" or \":port\" strings or { addr, tls } tables";
+    fn from_str(s: &str) -> Option<Self> {
+        Some(Self {
+            addr: parse_listen_addr(s).ok()?,
+            tls: false,
+        })
+    }
+    fn from_map<A: serde::de::MapAccess<'de>>(m: A) -> Result<Self, A::Error> {
+        let t = ListenAddrTable::deserialize(serde::de::value::MapAccessDeserializer::new(m))?;
+        Ok(Self {
+            // `tls = true` alone implies the HTTPS port — ending up
+            // serving TLS on :80 is never what the operator meant.
+            addr: t
+                .addr
+                .map(|s| parse_listen_addr(&s).map_err(serde::de::Error::custom))
+                .transpose()?
+                .unwrap_or_else(|| {
+                    if t.tls {
+                        SocketAddr::from(([0, 0, 0, 0], 443))
+                    } else {
+                        ListenAddr::default().addr
+                    }
+                }),
+            tls: t.tls,
+        })
     }
 }
 
@@ -1314,21 +1274,17 @@ pub enum AdminTls {
 
 impl<'de> Deserialize<'de> for AdminTls {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Repr {
-            Mode(String),
-            Manual(ManualTls),
-        }
-        match Repr::deserialize(d).map_err(|_| {
-            serde::de::Error::custom("admin.tls must be \"self_signed\" or a { cert, key } table")
-        })? {
-            Repr::Mode(m) if m == "self_signed" => Ok(Self::SelfSigned),
-            Repr::Mode(m) => Err(serde::de::Error::custom(format!(
-                "admin.tls mode {m:?} is not supported — use \"self_signed\" or a {{ cert, key }} table"
-            ))),
-            Repr::Manual(m) => Ok(Self::Manual(m)),
-        }
+        shorthand(d)
+    }
+}
+
+impl<'de> Shorthand<'de> for AdminTls {
+    const EXPECTING: &'static str = "admin.tls must be \"self_signed\" or a { cert, key } table";
+    fn from_str(m: &str) -> Option<Self> {
+        (m == "self_signed").then_some(Self::SelfSigned)
+    }
+    fn from_map<A: serde::de::MapAccess<'de>>(m: A) -> Result<Self, A::Error> {
+        ManualTls::deserialize(serde::de::value::MapAccessDeserializer::new(m)).map(Self::Manual)
     }
 }
 
@@ -1589,9 +1545,15 @@ impl<'de> Deserialize<'de> for UpstreamServer {
             }
             fn visit_seq<A: serde::de::SeqAccess<'de>>(
                 self,
-                s: A,
+                _: A,
             ) -> Result<Self::Value, A::Error> {
-                Full::deserialize(serde::de::value::SeqAccessDeserializer::new(s)).map(Into::into)
+                // the untagged `Full` variant accepted `[url, weight,
+                // backup]` positionally — a buffering artifact, not a
+                // grammar form (the list sits one level up, in
+                // `servers`)
+                Err(serde::de::Error::custom(
+                    "a server URL or a { url, weight, backup } table",
+                ))
             }
         }
         d.deserialize_any(V)
@@ -1724,20 +1686,17 @@ impl Default for UnavailableResponse {
 fn unavailable_or_table<'de, D: serde::Deserializer<'de>>(
     d: D,
 ) -> Result<UnavailableResponse, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Code(u16),
-        Full(UnavailableResponse),
+    shorthand(d)
+}
+
+impl<'de> Shorthand<'de> for UnavailableResponse {
+    const EXPECTING: &'static str = "unavailable must be a status code or a table";
+    fn from_int(status: i64) -> Option<Self> {
+        Some(UnavailableResponse {
+            status: u16::try_from(status).ok()?,
+            body: None,
+        })
     }
-    Ok(
-        match Repr::deserialize(d)
-            .map_err(|_| serde::de::Error::custom("unavailable must be a status code or a table"))?
-        {
-            Repr::Code(status) => UnavailableResponse { status, body: None },
-            Repr::Full(u) => u,
-        },
-    )
 }
 
 /// Schema shape for `unavailable` — a status code or a table.
@@ -1770,26 +1729,20 @@ pub enum LoadBalancing {
 /// `active` shorthand) or a table — the only parent-field shorthand, on
 /// the grounds that `active` is overwhelmingly the common case.
 fn health_or_active<'de, D: serde::Deserializer<'de>>(d: D) -> Result<HealthCheck, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Repr {
-        Path(String),
-        Full(HealthCheck),
+    shorthand(d)
+}
+
+impl<'de> Shorthand<'de> for HealthCheck {
+    const EXPECTING: &'static str = "health must be a path string or a table";
+    fn from_str(path: &str) -> Option<Self> {
+        Some(HealthCheck {
+            active: Some(ActiveHealth {
+                path: path.to_owned(),
+                ..Default::default()
+            }),
+            passive: None,
+        })
     }
-    Ok(
-        match Repr::deserialize(d)
-            .map_err(|_| serde::de::Error::custom("health must be a path string or a table"))?
-        {
-            Repr::Path(path) => HealthCheck {
-                active: Some(ActiveHealth {
-                    path,
-                    ..Default::default()
-                }),
-                passive: None,
-            },
-            Repr::Full(h) => h,
-        },
-    )
 }
 
 /// Schema shape for `health` — a probe path or a table.
@@ -2011,20 +1964,23 @@ pub enum SiteTls {
 
 impl<'de> Deserialize<'de> for SiteTls {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Repr {
-            Mode(TlsMode),
-            Manual(ManualTls),
-        }
-        match Repr::deserialize(d).map_err(|_| {
-            serde::de::Error::custom(
-                "tls must be \"auto\", \"off\", \"self_signed\", or a { cert, key } table",
-            )
-        })? {
-            Repr::Mode(m) => Ok(Self::Mode(m)),
-            Repr::Manual(m) => Ok(Self::Manual(m)),
-        }
+        shorthand(d)
+    }
+}
+
+impl<'de> Shorthand<'de> for SiteTls {
+    const EXPECTING: &'static str =
+        "tls must be \"auto\", \"off\", \"self_signed\", or a { cert, key } table";
+    fn from_str(v: &str) -> Option<Self> {
+        TlsMode::deserialize(serde::de::value::StrDeserializer::<
+            '_,
+            serde::de::value::Error,
+        >::new(v))
+        .ok()
+        .map(Self::Mode)
+    }
+    fn from_map<A: serde::de::MapAccess<'de>>(m: A) -> Result<Self, A::Error> {
+        ManualTls::deserialize(serde::de::value::MapAccessDeserializer::new(m)).map(Self::Manual)
     }
 }
 
@@ -2471,25 +2427,25 @@ struct HostHeaderTable {
 
 impl<'de> Deserialize<'de> for HostHeader {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Repr {
-            Kw(String),
-            Table(HostHeaderTable),
-        }
-        match Repr::deserialize(d).map_err(|_| {
-            serde::de::Error::custom("host_header must be a string or { value = \"…\" }")
-        })? {
-            Repr::Kw(v) => Ok(match v.as_str() {
-                "upstream" => Self::Upstream,
-                "original" => Self::Original,
-                _ => Self::Custom(v),
-            }),
-            // escape hatch: a table sends `value` verbatim, even when it
-            // spells a keyword (`{ value = "upstream" }` is a literal
-            // Host header, not the rewrite mode)
-            Repr::Table(t) => Ok(Self::Verbatim(t.value)),
-        }
+        shorthand(d)
+    }
+}
+
+impl<'de> Shorthand<'de> for HostHeader {
+    const EXPECTING: &'static str = "host_header must be a string or { value = \"…\" }";
+    fn from_str(v: &str) -> Option<Self> {
+        Some(match v {
+            "upstream" => Self::Upstream,
+            "original" => Self::Original,
+            _ => Self::Custom(v.to_owned()),
+        })
+    }
+    fn from_map<A: serde::de::MapAccess<'de>>(m: A) -> Result<Self, A::Error> {
+        // escape hatch: a table sends `value` verbatim, even when it
+        // spells a keyword (`{ value = "upstream" }` is a literal
+        // Host header, not the rewrite mode)
+        HostHeaderTable::deserialize(serde::de::value::MapAccessDeserializer::new(m))
+            .map(|t| Self::Verbatim(t.value))
     }
 }
 
