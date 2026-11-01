@@ -1,0 +1,38 @@
+name: ClusterFuzzLite continuous builds
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "fuzz/**"
+      - ".clusterfuzzlite/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+
+permissions: {}
+
+jobs:
+  build:
+    name: build (${{ matrix.sanitizer }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: ${{ github.workflow }}-${{ matrix.sanitizer }}-${{ github.ref }}
+      cancel-in-progress: true
+    # artifact upload uses the actions runtime token, not GITHUB_TOKEN
+    permissions: {contents: read}
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address] # rust fuzz targets support address only
+    steps:
+      # uploaded so PR fuzzing can tell novel crashes from pre-existing
+      # ones instead of failing on bugs already on main
+      - uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        id: build
+        with:
+          language: rust
+          sanitizer: ${{ matrix.sanitizer }}
+          upload-build: true

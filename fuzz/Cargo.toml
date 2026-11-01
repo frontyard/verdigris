@@ -1,0 +1,59 @@
+[package]
+name = "verd-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+verd = { path = ".." }
+toml = "1.1"
+http = "1"
+
+# standalone workspace: the crate root has no [workspace] table
+[workspace]
+
+[[bin]]
+name = "config_parse"
+path = "fuzz_targets/config_parse.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "path_normalize"
+path = "fuzz_targets/path_normalize.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "route_match"
+path = "fuzz_targets/route_match.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "cache_index"
+path = "fuzz_targets/cache_index.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "http_semantics"
+path = "fuzz_targets/http_semantics.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "headers_policy"
+path = "fuzz_targets/headers_policy.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "static_resolve"
+path = "fuzz_targets/static_resolve.rs"
+test = false
+doc = false

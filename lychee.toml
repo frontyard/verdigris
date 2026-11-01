@@ -1,0 +1,11 @@
+# Placeholder URLs in config/doc examples — written to be illustrative,
+# not resolvable.
+exclude = [
+    '^https?://(www|app[0-9]*)(:[0-9]+)?/?$',
+    'host:port',
+    'example\.com',
+    '%E2%80%A6', # literal "…" used to truncate example URLs
+]
+
+# Doc examples use loopback/private/link-local addresses.
+exclude_all_private = true

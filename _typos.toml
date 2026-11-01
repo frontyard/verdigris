@@ -1,0 +1,12 @@
+# Spell-check allowlist for `typos` (crate-ci/typos). Entries map a
+# flagged word to itself — i.e. "this is a real word here".
+
+[default.extend-words]
+abd = "abd" # fixture string paired with "abc" in pattern tests
+Mye = "Mye" # substring inside the fixed bcrypt hash in middleware/auth.rs
+ned = "ned" # example username in docs and llms.txt
+sie = "sie" # stale-if-error (cache semantics)
+Sie = "Sie"
+SIE = "SIE"
+wrk = "wrk" # wrk HTTP benchmarking tool
+WRK = "WRK"

@@ -1,0 +1,28 @@
+# cross (release.yml musl builds) container configuration.
+#
+# `cargo auditable` can't wrap `cross` from the outside — the rustc
+# workspace wrapper must exist *inside* the build container. Each
+# target image installs the pinned, hash-verified binary in
+# pre-build, and the job passes RUSTC_WORKSPACE_WRAPPER through so
+# cargo inside the container embeds dependency metadata (.dep-v0 ELF
+# section) into the release binaries — letting `cargo audit bin`
+# scan the shipped artifact itself, complementary to the SBOM.
+
+[target.x86_64-unknown-linux-musl]
+pre-build = [
+  "curl -sSfL -o /tmp/ca.tar.xz https://github.com/rust-secure-code/cargo-auditable/releases/download/v0.7.7/cargo-auditable-x86_64-unknown-linux-musl.tar.xz",
+  "echo '7676443367c5e33d9fb22acef63cccb5e9202de12dae1b0579995eb3e2bc7a18  /tmp/ca.tar.xz' | sha256sum -c -",
+  "tar -xJf /tmp/ca.tar.xz -C /tmp",
+  "install -m755 /tmp/cargo-auditable-x86_64-unknown-linux-musl/cargo-auditable /usr/local/bin/",
+]
+
+[target.aarch64-unknown-linux-musl]
+pre-build = [
+  "curl -sSfL -o /tmp/ca.tar.xz https://github.com/rust-secure-code/cargo-auditable/releases/download/v0.7.7/cargo-auditable-x86_64-unknown-linux-musl.tar.xz",
+  "echo '7676443367c5e33d9fb22acef63cccb5e9202de12dae1b0579995eb3e2bc7a18  /tmp/ca.tar.xz' | sha256sum -c -",
+  "tar -xJf /tmp/ca.tar.xz -C /tmp",
+  "install -m755 /tmp/cargo-auditable-x86_64-unknown-linux-musl/cargo-auditable /usr/local/bin/",
+]
+
+[build.env]
+passthrough = ["RUSTC_WORKSPACE_WRAPPER", "CARGO_AUDITABLE_ORIG_ARGS"]

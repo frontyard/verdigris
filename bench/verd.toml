@@ -1,0 +1,52 @@
+# Edge config: /raw = plain static; /m3u8 + /ts = proxy to the shared
+# origin (:8480) behind a cache. Freshness is origin-driven — no ttl
+# override, same Cache-Control semantics as every other edge.
+[server]
+server_header = "verd"
+
+[[server.listen]]
+addr = "127.0.0.1:8080"
+
+[[server.listen]]
+addr = "127.0.0.1:8443"
+tls = true
+
+[admin]
+listen = "127.0.0.1:2019"
+
+[log.access]
+enabled = false
+
+# mem cell: 100 playlists x ~1.4MB -> 256MiB is comfortable
+[cache.bench_mem]
+tier = "ram"
+policy = "lru"
+ram_bytes = "256MiB"
+max_object_bytes = "4MiB"
+
+# disk cell: 600 segments x 3MiB = 1.8GB working set -> 2GiB fits all
+[cache.bench_disk]
+tier = "disk"
+policy = "lru"
+disk_bytes = "2GiB"
+disk_path = "./bench/cache-verd"
+max_object_bytes = "8MiB"
+
+[[site]]
+default = true
+tls = "selfsigned"
+redirect_https = false
+
+[[site.route]]
+prefix = "/m3u8"
+proxy = { upstream = ["http://127.0.0.1:8480"] }
+cache = { store = "bench_mem", x_cache = true }
+
+[[site.route]]
+prefix = "/ts"
+proxy = { upstream = ["http://127.0.0.1:8480"] }
+cache = { store = "bench_disk", x_cache = true }
+
+[[site.route]]
+prefix = "/raw"
+static = { root = "./bench/www/raw" }

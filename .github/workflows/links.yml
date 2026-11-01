@@ -1,0 +1,28 @@
+name: Links
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "45 6 * * 1" # weekly, Monday 06:45 UTC
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lychee:
+    name: lychee (dead links)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions: {contents: read} # checkout
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # exclusions (doc-example hosts, private IPs) live in lychee.toml
+      - uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          args: --no-progress '**/*.md' '**/*.txt'
+          fail: true
