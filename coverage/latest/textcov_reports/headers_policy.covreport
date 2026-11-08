@@ -1,153 +1,153 @@
 _RNvYNtNtCsgMinvsjwHLp_5bytes9bytes_mut8BytesMutNtNtNtB6_3buf7buf_mut6BufMut6put_u8Cs4Leuz0euYUT_4http:
-  330|   588k|    fn put_u8(&mut self, n: u8) {
-  331|   588k|        let src = [n];
-  332|   588k|        self.put_slice(&src);
-  333|   588k|    }
+  330|   422k|    fn put_u8(&mut self, n: u8) {
+  331|   422k|        let src = [n];
+  332|   422k|        self.put_slice(&src);
+  333|   422k|    }
 
 _RNvXs2_NtCsgMinvsjwHLp_5bytes5bytesNtB5_5BytesNtNtCs6SNw0SRvItZ_4core5clone5Clone5cloneCsOmTKQdZnin_4verd:
-  676|  1.51M|    fn clone(&self) -> Bytes {
-  677|  1.51M|        unsafe { (self.vtable.clone)(&self.data, self.ptr, self.len) }
-  678|  1.51M|    }
+  676|   969k|    fn clone(&self) -> Bytes {
+  677|   969k|        unsafe { (self.vtable.clone)(&self.data, self.ptr, self.len) }
+  678|   969k|    }
 _RNvMNtCsgMinvsjwHLp_5bytes5bytesNtB2_5Bytes8as_sliceCsesI8xtRYhQD_9axum_core:
-  644|   523k|    fn as_slice(&self) -> &[u8] {
-  645|   523k|        unsafe { slice::from_raw_parts(self.ptr, self.len) }
-  646|   523k|    }
+  644|   338k|    fn as_slice(&self) -> &[u8] {
+  645|   338k|        unsafe { slice::from_raw_parts(self.ptr, self.len) }
+  646|   338k|    }
 _RNvXs5_NtCsgMinvsjwHLp_5bytes5bytesNtB5_5BytesINtNtCs6SNw0SRvItZ_4core7convert5AsRefShE6as_refCsesI8xtRYhQD_9axum_core:
-  722|   523k|    fn as_ref(&self) -> &[u8] {
-  723|   523k|        self.as_slice()
-  724|   523k|    }
+  722|   338k|    fn as_ref(&self) -> &[u8] {
+  723|   338k|        self.as_slice()
+  724|   338k|    }
 _RNvMNtCsgMinvsjwHLp_5bytes5bytesNtB2_5Bytes8as_sliceCs9X2BcFZoTlv_2h2:
-  644|  1.57M|    fn as_slice(&self) -> &[u8] {
-  645|  1.57M|        unsafe { slice::from_raw_parts(self.ptr, self.len) }
-  646|  1.57M|    }
+  644|   981k|    fn as_slice(&self) -> &[u8] {
+  645|   981k|        unsafe { slice::from_raw_parts(self.ptr, self.len) }
+  646|   981k|    }
 _RNvXs5_NtCsgMinvsjwHLp_5bytes5bytesNtB5_5BytesINtNtCs6SNw0SRvItZ_4core7convert5AsRefShE6as_refCs9X2BcFZoTlv_2h2:
-  722|  1.57M|    fn as_ref(&self) -> &[u8] {
-  723|  1.57M|        self.as_slice()
-  724|  1.57M|    }
+  722|   981k|    fn as_ref(&self) -> &[u8] {
+  723|   981k|        self.as_slice()
+  724|   981k|    }
 _RNvMNtCsgMinvsjwHLp_5bytes5bytesNtB2_5Bytes11from_staticCs4Leuz0euYUT_4http:
-  171|   867k|    pub const fn from_static(bytes: &'static [u8]) -> Self {
-  172|   867k|        Bytes {
-  173|   867k|            ptr: bytes.as_ptr(),
-  174|   867k|            len: bytes.len(),
-  175|   867k|            data: AtomicPtr::new(ptr::null_mut()),
-  176|   867k|            vtable: &STATIC_VTABLE,
-  177|   867k|        }
-  178|   867k|    }
+  171|   562k|    pub const fn from_static(bytes: &'static [u8]) -> Self {
+  172|   562k|        Bytes {
+  173|   562k|            ptr: bytes.as_ptr(),
+  174|   562k|            len: bytes.len(),
+  175|   562k|            data: AtomicPtr::new(ptr::null_mut()),
+  176|   562k|            vtable: &STATIC_VTABLE,
+  177|   562k|        }
+  178|   562k|    }
 _RNvMNtCsgMinvsjwHLp_5bytes5bytesNtB2_5Bytes3lenCs4Leuz0euYUT_4http:
-  303|  5.54k|    pub const fn len(&self) -> usize {
-  304|  5.54k|        self.len
-  305|  5.54k|    }
+  303|  3.78k|    pub const fn len(&self) -> usize {
+  304|  3.78k|        self.len
+  305|  3.78k|    }
 _RNvMNtCsgMinvsjwHLp_5bytes5bytesNtB2_5Bytes9inc_startCs4Leuz0euYUT_4http:
-  649|  5.54k|    unsafe fn inc_start(&mut self, by: usize) {
+  649|  3.78k|    unsafe fn inc_start(&mut self, by: usize) {
   650|       |        // should already be asserted, but debug assert for tests
-  651|  5.54k|        debug_assert!(self.len >= by, "internal: inc_start out of bounds");
-  652|  5.54k|        self.len -= by;
-  653|  5.54k|        self.ptr = self.ptr.add(by);
-  654|  5.54k|    }
+  651|  3.78k|        debug_assert!(self.len >= by, "internal: inc_start out of bounds");
+  652|  3.78k|        self.len -= by;
+  653|  3.78k|        self.ptr = self.ptr.add(by);
+  654|  3.78k|    }
 _RNvXs2_NtCsgMinvsjwHLp_5bytes5bytesNtB5_5BytesNtNtCs6SNw0SRvItZ_4core5clone5Clone5cloneCs4Leuz0euYUT_4http:
-  676|   421k|    fn clone(&self) -> Bytes {
-  677|   421k|        unsafe { (self.vtable.clone)(&self.data, self.ptr, self.len) }
-  678|   421k|    }
+  676|   227k|    fn clone(&self) -> Bytes {
+  677|   227k|        unsafe { (self.vtable.clone)(&self.data, self.ptr, self.len) }
+  678|   227k|    }
 _RNvXs3_NtCsgMinvsjwHLp_5bytes5bytesNtB5_5BytesNtNtNtB7_3buf8buf_impl3Buf7advanceCs4Leuz0euYUT_4http:
-  693|  5.54k|    fn advance(&mut self, cnt: usize) {
-  694|  5.54k|        assert!(
-  695|  5.54k|            cnt <= self.len(),
+  693|  3.78k|    fn advance(&mut self, cnt: usize) {
+  694|  3.78k|        assert!(
+  695|  3.78k|            cnt <= self.len(),
   696|      0|            "cannot advance past `remaining`: {:?} <= {:?}",
   697|       |            cnt,
   698|      0|            self.len(),
   699|       |        );
   700|       |
-  701|  5.54k|        unsafe {
-  702|  5.54k|            self.inc_start(cnt);
-  703|  5.54k|        }
-  704|  5.54k|    }
+  701|  3.78k|        unsafe {
+  702|  3.78k|            self.inc_start(cnt);
+  703|  3.78k|        }
+  704|  3.78k|    }
 _RINvNtCsgMinvsjwHLp_5bytes5bytes7ptr_mapNCNvB2_20promotable_even_drop0EB4_:
- 1591|  1.78M|fn ptr_map<F>(ptr: *mut u8, f: F) -> *mut u8
- 1592|  1.78M|where
- 1593|  1.78M|    F: FnOnce(usize) -> usize,
+ 1591|  1.26M|fn ptr_map<F>(ptr: *mut u8, f: F) -> *mut u8
+ 1592|  1.26M|where
+ 1593|  1.26M|    F: FnOnce(usize) -> usize,
  1594|       |{
- 1595|  1.78M|    let old_addr = ptr as usize;
- 1596|  1.78M|    let new_addr = f(old_addr);
- 1597|  1.78M|    new_addr as *mut u8
- 1598|  1.78M|}
+ 1595|  1.26M|    let old_addr = ptr as usize;
+ 1596|  1.26M|    let new_addr = f(old_addr);
+ 1597|  1.26M|    new_addr as *mut u8
+ 1598|  1.26M|}
 _RINvNtCsgMinvsjwHLp_5bytes5bytes7ptr_mapNCNvB2_21promotable_even_clone0EB4_:
- 1591|   523k|fn ptr_map<F>(ptr: *mut u8, f: F) -> *mut u8
- 1592|   523k|where
- 1593|   523k|    F: FnOnce(usize) -> usize,
+ 1591|   316k|fn ptr_map<F>(ptr: *mut u8, f: F) -> *mut u8
+ 1592|   316k|where
+ 1593|   316k|    F: FnOnce(usize) -> usize,
  1594|       |{
- 1595|   523k|    let old_addr = ptr as usize;
- 1596|   523k|    let new_addr = f(old_addr);
- 1597|   523k|    new_addr as *mut u8
- 1598|   523k|}
+ 1595|   316k|    let old_addr = ptr as usize;
+ 1596|   316k|    let new_addr = f(old_addr);
+ 1597|   316k|    new_addr as *mut u8
+ 1598|   316k|}
 _RINvNtCsgMinvsjwHLp_5bytes5bytes7ptr_mapNCNvXsF_B2_NtB2_5BytesINtNtCs6SNw0SRvItZ_4core7convert4FromINtNtCshDtJu3Ru83O_5alloc5boxed3BoxShEE4from0EB4_:
- 1591|  2.31M|fn ptr_map<F>(ptr: *mut u8, f: F) -> *mut u8
- 1592|  2.31M|where
- 1593|  2.31M|    F: FnOnce(usize) -> usize,
+ 1591|  1.57M|fn ptr_map<F>(ptr: *mut u8, f: F) -> *mut u8
+ 1592|  1.57M|where
+ 1593|  1.57M|    F: FnOnce(usize) -> usize,
  1594|       |{
- 1595|  2.31M|    let old_addr = ptr as usize;
- 1596|  2.31M|    let new_addr = f(old_addr);
- 1597|  2.31M|    new_addr as *mut u8
- 1598|  2.31M|}
+ 1595|  1.57M|    let old_addr = ptr as usize;
+ 1596|  1.57M|    let new_addr = f(old_addr);
+ 1597|  1.57M|    new_addr as *mut u8
+ 1598|  1.57M|}
 _RNCNvNtCsgMinvsjwHLp_5bytes5bytes20promotable_even_drop0B5_:
- 1269|  1.78M|        let buf = ptr_map(shared.cast(), |addr| addr & !KIND_MASK);
+ 1269|  1.26M|        let buf = ptr_map(shared.cast(), |addr| addr & !KIND_MASK);
 _RNCNvNtCsgMinvsjwHLp_5bytes5bytes21promotable_even_clone0B5_:
- 1192|   523k|        let buf = ptr_map(shared.cast(), |addr| addr & !KIND_MASK);
+ 1192|   316k|        let buf = ptr_map(shared.cast(), |addr| addr & !KIND_MASK);
 _RNCNvXsF_NtCsgMinvsjwHLp_5bytes5bytesNtB7_5BytesINtNtCs6SNw0SRvItZ_4core7convert4FromINtNtCshDtJu3Ru83O_5alloc5boxed3BoxShEE4from0B9_:
-  997|  2.31M|            let data = ptr_map(ptr, |addr| addr | KIND_VEC);
+  997|  1.57M|            let data = ptr_map(ptr, |addr| addr | KIND_VEC);
 _RNvMNtCsgMinvsjwHLp_5bytes5bytesNtB2_5Bytes11from_staticB4_:
-  171|   533k|    pub const fn from_static(bytes: &'static [u8]) -> Self {
-  172|   533k|        Bytes {
-  173|   533k|            ptr: bytes.as_ptr(),
-  174|   533k|            len: bytes.len(),
-  175|   533k|            data: AtomicPtr::new(ptr::null_mut()),
-  176|   533k|            vtable: &STATIC_VTABLE,
-  177|   533k|        }
-  178|   533k|    }
+  171|   396k|    pub const fn from_static(bytes: &'static [u8]) -> Self {
+  172|   396k|        Bytes {
+  173|   396k|            ptr: bytes.as_ptr(),
+  174|   396k|            len: bytes.len(),
+  175|   396k|            data: AtomicPtr::new(ptr::null_mut()),
+  176|   396k|            vtable: &STATIC_VTABLE,
+  177|   396k|        }
+  178|   396k|    }
 _RNvMNtCsgMinvsjwHLp_5bytes5bytesNtB2_5Bytes15copy_from_slice:
-  347|  2.47M|    pub fn copy_from_slice(data: &[u8]) -> Self {
-  348|  2.47M|        data.to_vec().into()
-  349|  2.47M|    }
+  347|  1.72M|    pub fn copy_from_slice(data: &[u8]) -> Self {
+  348|  1.72M|        data.to_vec().into()
+  349|  1.72M|    }
 _RNvMNtCsgMinvsjwHLp_5bytes5bytesNtB2_5Bytes3newB4_:
-  142|   166k|    pub const fn new() -> Self {
+  142|   147k|    pub const fn new() -> Self {
   143|       |        // Make it a named const to work around
   144|       |        // "unsizing casts are not allowed in const fn"
   145|       |        const EMPTY: &[u8] = &[];
-  146|   166k|        Bytes::from_static(EMPTY)
-  147|   166k|    }
+  146|   147k|        Bytes::from_static(EMPTY)
+  147|   147k|    }
 _RNvMNtCsgMinvsjwHLp_5bytes5bytesNtB2_5Bytes8as_sliceB4_:
-  644|  1.73M|    fn as_slice(&self) -> &[u8] {
-  645|  1.73M|        unsafe { slice::from_raw_parts(self.ptr, self.len) }
-  646|  1.73M|    }
+  644|  1.12M|    fn as_slice(&self) -> &[u8] {
+  645|  1.12M|        unsafe { slice::from_raw_parts(self.ptr, self.len) }
+  646|  1.12M|    }
 _RNvMNtCsgMinvsjwHLp_5bytes5bytesNtB2_5Bytes8data_mutB4_:
-  657|  6.23M|    fn data_mut(&mut self) -> *mut () {
-  658|  6.23M|        self.data.with_mut(|p| *p)
-  659|  6.23M|    }
+  657|  4.10M|    fn data_mut(&mut self) -> *mut () {
+  658|  4.10M|        self.data.with_mut(|p| *p)
+  659|  4.10M|    }
 _RNvMsL_NtCsgMinvsjwHLp_5bytes5bytesNtB5_6Shared11init_to_raw:
- 1333|   523k|    fn init_to_raw(b: Box<MaybeUninit<Self>>, v: Self) -> *mut Self {
- 1334|   523k|        let shared = Box::into_raw(b).cast::<Self>();
+ 1333|   316k|    fn init_to_raw(b: Box<MaybeUninit<Self>>, v: Self) -> *mut Self {
+ 1334|   316k|        let shared = Box::into_raw(b).cast::<Self>();
  1335|       |        // SAFETY: The Box has the right layout.
- 1336|   523k|        unsafe { shared.write(v) };
- 1337|   523k|        shared
- 1338|   523k|    }
+ 1336|   316k|        unsafe { shared.write(v) };
+ 1337|   316k|        shared
+ 1338|   316k|    }
 _RNvNtCsgMinvsjwHLp_5bytes5bytes11shared_drop:
- 1448|  1.57M|unsafe fn shared_drop(shared: *mut (), _ptr: *const u8, _len: usize) {
- 1449|  1.57M|    release_shared(shared.cast());
- 1450|  1.57M|}
+ 1448|   948k|unsafe fn shared_drop(shared: *mut (), _ptr: *const u8, _len: usize) {
+ 1449|   948k|    release_shared(shared.cast());
+ 1450|   948k|}
 _RNvNtCsgMinvsjwHLp_5bytes5bytes11static_drop:
- 1092|  2.35M|unsafe fn static_drop(_: *mut (), _: *const u8, _: usize) {
+ 1092|  1.57M|unsafe fn static_drop(_: *mut (), _: *const u8, _: usize) {
  1093|       |    // nothing to drop for &'static [u8]
- 1094|  2.35M|}
+ 1094|  1.57M|}
 _RNvNtCsgMinvsjwHLp_5bytes5bytes12static_clone:
- 1073|   366k|unsafe fn static_clone(_: &AtomicPtr<()>, ptr: *const u8, len: usize) -> Bytes {
- 1074|   366k|    let slice = slice::from_raw_parts(ptr, len);
- 1075|   366k|    Bytes::from_static(slice)
- 1076|   366k|}
+ 1073|   248k|unsafe fn static_clone(_: &AtomicPtr<()>, ptr: *const u8, len: usize) -> Bytes {
+ 1074|   248k|    let slice = slice::from_raw_parts(ptr, len);
+ 1075|   248k|    Bytes::from_static(slice)
+ 1076|   248k|}
 _RNvNtCsgMinvsjwHLp_5bytes5bytes14release_shared:
- 1541|  2.09M|unsafe fn release_shared(ptr: *mut Shared) {
+ 1541|  1.26M|unsafe fn release_shared(ptr: *mut Shared) {
  1542|       |    // `Shared` storage... follow the drop steps from Arc.
- 1543|  2.09M|    if (*ptr).ref_cnt.fetch_sub(1, Ordering::Release) != 1 {
- 1544|  1.57M|        return;
- 1545|   523k|    }
+ 1543|  1.26M|    if (*ptr).ref_cnt.fetch_sub(1, Ordering::Release) != 1 {
+ 1544|   948k|        return;
+ 1545|   316k|    }
  1546|       |
  1547|       |    // This fence is needed to prevent reordering of use of the data and
  1548|       |    // deletion of the data.  Because it is marked `Release`, the decreasing
@@ -169,39 +169,39 @@ _RNvNtCsgMinvsjwHLp_5bytes5bytes14release_shared:
  1564|       |    //
  1565|       |    // Thread sanitizer does not support atomic fences. Use an atomic load
  1566|       |    // instead.
- 1567|   523k|    (*ptr).ref_cnt.load(Ordering::Acquire);
+ 1567|   316k|    (*ptr).ref_cnt.load(Ordering::Acquire);
  1568|       |
  1569|       |    // Drop the data
- 1570|   523k|    drop(Box::from_raw(ptr));
- 1571|  2.09M|}
+ 1570|   316k|    drop(Box::from_raw(ptr));
+ 1571|  1.26M|}
 _RNvNtCsgMinvsjwHLp_5bytes5bytes16free_boxed_slice:
- 1318|  1.78M|unsafe fn free_boxed_slice(buf: *mut u8, offset: *const u8, len: usize) {
- 1319|  1.78M|    let cap = offset.offset_from(buf) as usize + len;
- 1320|  1.78M|    dealloc(buf, Layout::from_size_align(cap, 1).unwrap())
- 1321|  1.78M|}
+ 1318|  1.26M|unsafe fn free_boxed_slice(buf: *mut u8, offset: *const u8, len: usize) {
+ 1319|  1.26M|    let cap = offset.offset_from(buf) as usize + len;
+ 1320|  1.26M|    dealloc(buf, Layout::from_size_align(cap, 1).unwrap())
+ 1321|  1.26M|}
 _RNvNtCsgMinvsjwHLp_5bytes5bytes17shallow_clone_arc:
- 1452|  1.04M|unsafe fn shallow_clone_arc(shared: *mut Shared, ptr: *const u8, len: usize) -> Bytes {
- 1453|  1.04M|    let old_size = (*shared).ref_cnt.fetch_add(1, Ordering::Relaxed);
+ 1452|   632k|unsafe fn shallow_clone_arc(shared: *mut Shared, ptr: *const u8, len: usize) -> Bytes {
+ 1453|   632k|    let old_size = (*shared).ref_cnt.fetch_add(1, Ordering::Relaxed);
  1454|       |
- 1455|  1.04M|    if old_size > usize::MAX >> 1 {
+ 1455|   632k|    if old_size > usize::MAX >> 1 {
  1456|      0|        crate::abort();
- 1457|  1.04M|    }
+ 1457|   632k|    }
  1458|       |
- 1459|  1.04M|    Bytes {
- 1460|  1.04M|        ptr,
- 1461|  1.04M|        len,
- 1462|  1.04M|        data: AtomicPtr::new(shared as _),
- 1463|  1.04M|        vtable: &SHARED_VTABLE,
- 1464|  1.04M|    }
- 1465|  1.04M|}
+ 1459|   632k|    Bytes {
+ 1460|   632k|        ptr,
+ 1461|   632k|        len,
+ 1462|   632k|        data: AtomicPtr::new(shared as _),
+ 1463|   632k|        vtable: &SHARED_VTABLE,
+ 1464|   632k|    }
+ 1465|   632k|}
 _RNvNtCsgMinvsjwHLp_5bytes5bytes17shallow_clone_vec:
- 1468|   523k|unsafe fn shallow_clone_vec(
- 1469|   523k|    atom: &AtomicPtr<()>,
- 1470|   523k|    ptr: *const (),
- 1471|   523k|    buf: *mut u8,
- 1472|   523k|    offset: *const u8,
- 1473|   523k|    len: usize,
- 1474|   523k|) -> Bytes {
+ 1468|   316k|unsafe fn shallow_clone_vec(
+ 1469|   316k|    atom: &AtomicPtr<()>,
+ 1470|   316k|    ptr: *const (),
+ 1471|   316k|    buf: *mut u8,
+ 1472|   316k|    offset: *const u8,
+ 1473|   316k|    len: usize,
+ 1474|   316k|) -> Bytes {
  1475|       |    // If the buffer is still tracked in a `Vec<u8>`. It is time to
  1476|       |    // promote the vec to an `Arc`. This could potentially be called
  1477|       |    // concurrently, so some care must be taken.
@@ -213,22 +213,22 @@ _RNvNtCsgMinvsjwHLp_5bytes5bytes17shallow_clone_vec:
  1483|       |    // updated and since the buffer hasn't been promoted to an
  1484|       |    // `Arc`, those three fields still are the components of the
  1485|       |    // vector.
- 1486|   523k|    let shared = Box::new(MaybeUninit::<Shared>::uninit());
- 1487|   523k|    let shared = Shared::init_to_raw(
- 1488|   523k|        shared,
- 1489|   523k|        Shared {
- 1490|   523k|            buf,
- 1491|   523k|            cap: offset.offset_from(buf) as usize + len,
- 1492|   523k|            // Initialize refcount to 2. One for this reference, and one
- 1493|   523k|            // for the new clone that will be returned from
- 1494|   523k|            // `shallow_clone`.
- 1495|   523k|            ref_cnt: AtomicUsize::new(2),
- 1496|   523k|        },
+ 1486|   316k|    let shared = Box::new(MaybeUninit::<Shared>::uninit());
+ 1487|   316k|    let shared = Shared::init_to_raw(
+ 1488|   316k|        shared,
+ 1489|   316k|        Shared {
+ 1490|   316k|            buf,
+ 1491|   316k|            cap: offset.offset_from(buf) as usize + len,
+ 1492|   316k|            // Initialize refcount to 2. One for this reference, and one
+ 1493|   316k|            // for the new clone that will be returned from
+ 1494|   316k|            // `shallow_clone`.
+ 1495|   316k|            ref_cnt: AtomicUsize::new(2),
+ 1496|   316k|        },
  1497|       |    );
  1498|       |
  1499|       |    // The pointer should be aligned, so this assert should
  1500|       |    // always succeed.
- 1501|   523k|    debug_assert!(
+ 1501|   316k|    debug_assert!(
  1502|      0|        0 == (shared as usize & KIND_MASK),
  1503|      0|        "internal: Box<Shared> should have an aligned pointer",
  1504|       |    );
@@ -242,17 +242,17 @@ _RNvNtCsgMinvsjwHLp_5bytes5bytes17shallow_clone_vec:
  1512|       |    // ordering will synchronize with the `compare_exchange`
  1513|       |    // that happened in the other thread and the `Shared`
  1514|       |    // pointed to by `actual` will be visible.
- 1515|   523k|    match atom.compare_exchange(ptr as _, shared as _, Ordering::AcqRel, Ordering::Acquire) {
- 1516|   523k|        Ok(actual) => {
- 1517|   523k|            debug_assert!(core::ptr::eq(actual, ptr));
+ 1515|   316k|    match atom.compare_exchange(ptr as _, shared as _, Ordering::AcqRel, Ordering::Acquire) {
+ 1516|   316k|        Ok(actual) => {
+ 1517|   316k|            debug_assert!(core::ptr::eq(actual, ptr));
  1518|       |            // The upgrade was successful, the new handle can be
  1519|       |            // returned.
- 1520|   523k|            Bytes {
- 1521|   523k|                ptr: offset,
- 1522|   523k|                len,
- 1523|   523k|                data: AtomicPtr::new(shared as _),
- 1524|   523k|                vtable: &SHARED_VTABLE,
- 1525|   523k|            }
+ 1520|   316k|            Bytes {
+ 1521|   316k|                ptr: offset,
+ 1522|   316k|                len,
+ 1523|   316k|                data: AtomicPtr::new(shared as _),
+ 1524|   316k|                vtable: &SHARED_VTABLE,
+ 1525|   316k|            }
  1526|       |        }
  1527|      0|        Err(actual) => {
  1528|       |            // The upgrade failed, a concurrent clone happened. Release
@@ -266,42 +266,42 @@ _RNvNtCsgMinvsjwHLp_5bytes5bytes17shallow_clone_vec:
  1536|      0|            shallow_clone_arc(actual as _, offset, len)
  1537|       |        }
  1538|       |    }
- 1539|   523k|}
+ 1539|   316k|}
 _RNvNtCsgMinvsjwHLp_5bytes5bytes20promotable_even_drop:
- 1262|  2.31M|unsafe fn promotable_even_drop(shared: *mut (), ptr: *const u8, len: usize) {
- 1263|  2.31M|    let kind = shared as usize & KIND_MASK;
+ 1262|  1.57M|unsafe fn promotable_even_drop(shared: *mut (), ptr: *const u8, len: usize) {
+ 1263|  1.57M|    let kind = shared as usize & KIND_MASK;
  1264|       |
- 1265|  2.31M|    if kind == KIND_ARC {
- 1266|   523k|        release_shared(shared.cast());
- 1267|   523k|    } else {
- 1268|  1.78M|        debug_assert_eq!(kind, KIND_VEC);
- 1269|  1.78M|        let buf = ptr_map(shared.cast(), |addr| addr & !KIND_MASK);
- 1270|  1.78M|        free_boxed_slice(buf, ptr, len);
+ 1265|  1.57M|    if kind == KIND_ARC {
+ 1266|   316k|        release_shared(shared.cast());
+ 1267|   316k|    } else {
+ 1268|  1.26M|        debug_assert_eq!(kind, KIND_VEC);
+ 1269|  1.26M|        let buf = ptr_map(shared.cast(), |addr| addr & !KIND_MASK);
+ 1270|  1.26M|        free_boxed_slice(buf, ptr, len);
  1271|       |    }
- 1272|  2.31M|}
+ 1272|  1.57M|}
 _RNvNtCsgMinvsjwHLp_5bytes5bytes21promotable_even_clone:
- 1184|  1.57M|unsafe fn promotable_even_clone(data: &AtomicPtr<()>, ptr: *const u8, len: usize) -> Bytes {
- 1185|  1.57M|    let shared = data.load(Ordering::Acquire);
- 1186|  1.57M|    let kind = shared as usize & KIND_MASK;
+ 1184|   948k|unsafe fn promotable_even_clone(data: &AtomicPtr<()>, ptr: *const u8, len: usize) -> Bytes {
+ 1185|   948k|    let shared = data.load(Ordering::Acquire);
+ 1186|   948k|    let kind = shared as usize & KIND_MASK;
  1187|       |
- 1188|  1.57M|    if kind == KIND_ARC {
- 1189|  1.04M|        shallow_clone_arc(shared.cast(), ptr, len)
+ 1188|   948k|    if kind == KIND_ARC {
+ 1189|   632k|        shallow_clone_arc(shared.cast(), ptr, len)
  1190|       |    } else {
- 1191|   523k|        debug_assert_eq!(kind, KIND_VEC);
- 1192|   523k|        let buf = ptr_map(shared.cast(), |addr| addr & !KIND_MASK);
- 1193|   523k|        shallow_clone_vec(data, shared, buf, ptr, len)
+ 1191|   316k|        debug_assert_eq!(kind, KIND_VEC);
+ 1192|   316k|        let buf = ptr_map(shared.cast(), |addr| addr & !KIND_MASK);
+ 1193|   316k|        shallow_clone_vec(data, shared, buf, ptr, len)
  1194|       |    }
- 1195|  1.57M|}
+ 1195|   948k|}
 _RNvXs1_NtCsgMinvsjwHLp_5bytes5bytesNtB5_5BytesNtNtNtCs6SNw0SRvItZ_4core3ops4drop4Drop4dropB7_:
-  668|  6.23M|    fn drop(&mut self) {
-  669|  6.23M|        let data = self.data_mut();
-  670|  6.23M|        unsafe { (self.vtable.drop)(data, self.ptr, self.len) }
-  671|  6.23M|    }
+  668|  4.10M|    fn drop(&mut self) {
+  669|  4.10M|        let data = self.data_mut();
+  670|  4.10M|        unsafe { (self.vtable.drop)(data, self.ptr, self.len) }
+  671|  4.10M|    }
 _RNvXsE_NtCsgMinvsjwHLp_5bytes5bytesNtB5_5BytesINtNtCs6SNw0SRvItZ_4core7convert4FromINtNtCshDtJu3Ru83O_5alloc3vec3VechEE4from:
-  948|  2.47M|    fn from(vec: Vec<u8>) -> Bytes {
+  948|  1.72M|    fn from(vec: Vec<u8>) -> Bytes {
   949|       |        // Avoid an extra allocation if possible.
-  950|  2.47M|        if vec.len() == vec.capacity() {
-  951|  2.47M|            return Bytes::from(vec.into_boxed_slice());
+  950|  1.72M|        if vec.len() == vec.capacity() {
+  951|  1.72M|            return Bytes::from(vec.into_boxed_slice());
   952|      0|        }
   953|       |
   954|      0|        let shared = Box::new(MaybeUninit::<Shared>::uninit());
@@ -331,27 +331,27 @@ _RNvXsE_NtCsgMinvsjwHLp_5bytes5bytesNtB5_5BytesINtNtCs6SNw0SRvItZ_4core7convert4
   978|      0|            data: AtomicPtr::new(shared as _),
   979|      0|            vtable: &SHARED_VTABLE,
   980|      0|        }
-  981|  2.47M|    }
+  981|  1.72M|    }
 _RNvXsF_NtCsgMinvsjwHLp_5bytes5bytesNtB5_5BytesINtNtCs6SNw0SRvItZ_4core7convert4FromINtNtCshDtJu3Ru83O_5alloc5boxed3BoxShEE4from:
-  985|  2.47M|    fn from(slice: Box<[u8]>) -> Bytes {
+  985|  1.72M|    fn from(slice: Box<[u8]>) -> Bytes {
   986|       |        // Box<[u8]> doesn't contain a heap allocation for empty slices,
   987|       |        // so the pointer isn't aligned enough for the KIND_VEC stashing to
   988|       |        // work.
-  989|  2.47M|        if slice.is_empty() {
-  990|   166k|            return Bytes::new();
-  991|  2.31M|        }
+  989|  1.72M|        if slice.is_empty() {
+  990|   147k|            return Bytes::new();
+  991|  1.57M|        }
   992|       |
-  993|  2.31M|        let len = slice.len();
-  994|  2.31M|        let ptr = Box::into_raw(slice) as *mut u8;
+  993|  1.57M|        let len = slice.len();
+  994|  1.57M|        let ptr = Box::into_raw(slice) as *mut u8;
   995|       |
-  996|  2.31M|        if ptr as usize & 0x1 == 0 {
-  997|  2.31M|            let data = ptr_map(ptr, |addr| addr | KIND_VEC);
-  998|  2.31M|            Bytes {
-  999|  2.31M|                ptr,
- 1000|  2.31M|                len,
- 1001|  2.31M|                data: AtomicPtr::new(data.cast()),
- 1002|  2.31M|                vtable: &PROMOTABLE_EVEN_VTABLE,
- 1003|  2.31M|            }
+  996|  1.57M|        if ptr as usize & 0x1 == 0 {
+  997|  1.57M|            let data = ptr_map(ptr, |addr| addr | KIND_VEC);
+  998|  1.57M|            Bytes {
+  999|  1.57M|                ptr,
+ 1000|  1.57M|                len,
+ 1001|  1.57M|                data: AtomicPtr::new(data.cast()),
+ 1002|  1.57M|                vtable: &PROMOTABLE_EVEN_VTABLE,
+ 1003|  1.57M|            }
  1004|       |        } else {
  1005|      0|            Bytes {
  1006|      0|                ptr,
@@ -360,41 +360,41 @@ _RNvXsF_NtCsgMinvsjwHLp_5bytes5bytesNtB5_5BytesINtNtCs6SNw0SRvItZ_4core7convert4
  1009|      0|                vtable: &PROMOTABLE_ODD_VTABLE,
  1010|      0|            }
  1011|       |        }
- 1012|  2.47M|    }
+ 1012|  1.72M|    }
 _RNvXsM_NtCsgMinvsjwHLp_5bytes5bytesNtB5_6SharedNtNtNtCs6SNw0SRvItZ_4core3ops4drop4Drop4drop:
- 1342|   523k|    fn drop(&mut self) {
- 1343|   523k|        unsafe { dealloc(self.buf, Layout::from_size_align(self.cap, 1).unwrap()) }
- 1344|   523k|    }
+ 1342|   316k|    fn drop(&mut self) {
+ 1343|   316k|        unsafe { dealloc(self.buf, Layout::from_size_align(self.cap, 1).unwrap()) }
+ 1344|   316k|    }
 _RNvXsb_NtCsgMinvsjwHLp_5bytes5bytesNtB5_5BytesNtNtCs6SNw0SRvItZ_4core3cmp9PartialEq2eq:
-  769|   866k|    fn eq(&self, other: &Bytes) -> bool {
-  770|   866k|        self.as_slice() == other.as_slice()
-  771|   866k|    }
+  769|   561k|    fn eq(&self, other: &Bytes) -> bool {
+  770|   561k|        self.as_slice() == other.as_slice()
+  771|   561k|    }
 
 _RNvMs_NtCsgMinvsjwHLp_5bytes9bytes_mutNtB4_8BytesMut11get_vec_posCs4Leuz0euYUT_4http:
- 1162|  5.54k|    unsafe fn get_vec_pos(&self) -> usize {
- 1163|  5.54k|        debug_assert_eq!(self.kind(), KIND_VEC);
+ 1162|  3.78k|    unsafe fn get_vec_pos(&self) -> usize {
+ 1163|  3.78k|        debug_assert_eq!(self.kind(), KIND_VEC);
  1164|       |
- 1165|  5.54k|        self.data as usize >> VEC_POS_OFFSET
- 1166|  5.54k|    }
+ 1165|  3.78k|        self.data as usize >> VEC_POS_OFFSET
+ 1166|  3.78k|    }
 _RNvMs_NtCsgMinvsjwHLp_5bytes9bytes_mutNtB4_8BytesMut13with_capacityCs4Leuz0euYUT_4http:
-  156|  21.6k|    pub fn with_capacity(capacity: usize) -> BytesMut {
-  157|  21.6k|        BytesMut::from_vec(Vec::with_capacity(capacity))
-  158|  21.6k|    }
+  156|  11.9k|    pub fn with_capacity(capacity: usize) -> BytesMut {
+  157|  11.9k|        BytesMut::from_vec(Vec::with_capacity(capacity))
+  158|  11.9k|    }
 _RNvMs_NtCsgMinvsjwHLp_5bytes9bytes_mutNtB4_8BytesMut4kindCs4Leuz0euYUT_4http:
- 1102|  5.54k|    fn kind(&self) -> usize {
- 1103|  5.54k|        self.data as usize & KIND_MASK
- 1104|  5.54k|    }
+ 1102|  3.78k|    fn kind(&self) -> usize {
+ 1103|  3.78k|        self.data as usize & KIND_MASK
+ 1104|  3.78k|    }
 _RNvMs_NtCsgMinvsjwHLp_5bytes9bytes_mutNtB4_8BytesMut6freezeCs4Leuz0euYUT_4http:
-  254|  5.54k|    pub fn freeze(self) -> Bytes {
-  255|  5.54k|        let bytes = ManuallyDrop::new(self);
-  256|  5.54k|        if bytes.kind() == KIND_VEC {
+  254|  3.78k|    pub fn freeze(self) -> Bytes {
+  255|  3.78k|        let bytes = ManuallyDrop::new(self);
+  256|  3.78k|        if bytes.kind() == KIND_VEC {
   257|       |            // Just re-use `Bytes` internal Vec vtable
   258|       |            unsafe {
-  259|  5.54k|                let off = bytes.get_vec_pos();
-  260|  5.54k|                let vec = rebuild_vec(bytes.ptr.as_ptr(), bytes.len, bytes.cap, off);
-  261|  5.54k|                let mut b: Bytes = vec.into();
-  262|  5.54k|                b.advance(off);
-  263|  5.54k|                b
+  259|  3.78k|                let off = bytes.get_vec_pos();
+  260|  3.78k|                let vec = rebuild_vec(bytes.ptr.as_ptr(), bytes.len, bytes.cap, off);
+  261|  3.78k|                let mut b: Bytes = vec.into();
+  262|  3.78k|                b.advance(off);
+  263|  3.78k|                b
   264|       |            }
   265|       |        } else {
   266|      0|            debug_assert_eq!(bytes.kind(), KIND_ARC);
@@ -404,174 +404,174 @@ _RNvMs_NtCsgMinvsjwHLp_5bytes9bytes_mutNtB4_8BytesMut6freezeCs4Leuz0euYUT_4http:
   270|      0|            let data = AtomicPtr::new(bytes.data.cast());
   271|      0|            unsafe { Bytes::with_vtable(ptr, len, data, &SHARED_VTABLE) }
   272|       |        }
-  273|  5.54k|    }
+  273|  3.78k|    }
 _RNvMs_NtCsgMinvsjwHLp_5bytes9bytes_mutNtB4_8BytesMut8from_vecCs4Leuz0euYUT_4http:
-  984|  21.6k|    pub(crate) fn from_vec(vec: Vec<u8>) -> BytesMut {
-  985|  21.6k|        let mut vec = ManuallyDrop::new(vec);
-  986|  21.6k|        let ptr = vptr(vec.as_mut_ptr());
-  987|  21.6k|        let len = vec.len();
-  988|  21.6k|        let cap = vec.capacity();
+  984|  11.9k|    pub(crate) fn from_vec(vec: Vec<u8>) -> BytesMut {
+  985|  11.9k|        let mut vec = ManuallyDrop::new(vec);
+  986|  11.9k|        let ptr = vptr(vec.as_mut_ptr());
+  987|  11.9k|        let len = vec.len();
+  988|  11.9k|        let cap = vec.capacity();
   989|       |
-  990|  21.6k|        let original_capacity_repr = original_capacity_to_repr(cap);
-  991|  21.6k|        let data = (original_capacity_repr << ORIGINAL_CAPACITY_OFFSET) | KIND_VEC;
+  990|  11.9k|        let original_capacity_repr = original_capacity_to_repr(cap);
+  991|  11.9k|        let data = (original_capacity_repr << ORIGINAL_CAPACITY_OFFSET) | KIND_VEC;
   992|       |
-  993|  21.6k|        BytesMut {
-  994|  21.6k|            ptr,
-  995|  21.6k|            len,
-  996|  21.6k|            cap,
-  997|  21.6k|            data: invalid_ptr(data),
-  998|  21.6k|        }
-  999|  21.6k|    }
+  993|  11.9k|        BytesMut {
+  994|  11.9k|            ptr,
+  995|  11.9k|            len,
+  996|  11.9k|            cap,
+  997|  11.9k|            data: invalid_ptr(data),
+  998|  11.9k|        }
+  999|  11.9k|    }
 _RNvNtCsgMinvsjwHLp_5bytes9bytes_mut25original_capacity_to_reprCs4Leuz0euYUT_4http:
- 1592|  21.6k|fn original_capacity_to_repr(cap: usize) -> usize {
- 1593|  21.6k|    let width = PTR_WIDTH - ((cap >> MIN_ORIGINAL_CAPACITY_WIDTH).leading_zeros() as usize);
- 1594|  21.6k|    cmp::min(
- 1595|  21.6k|        width,
- 1596|  21.6k|        MAX_ORIGINAL_CAPACITY_WIDTH - MIN_ORIGINAL_CAPACITY_WIDTH,
+ 1592|  11.9k|fn original_capacity_to_repr(cap: usize) -> usize {
+ 1593|  11.9k|    let width = PTR_WIDTH - ((cap >> MIN_ORIGINAL_CAPACITY_WIDTH).leading_zeros() as usize);
+ 1594|  11.9k|    cmp::min(
+ 1595|  11.9k|        width,
+ 1596|  11.9k|        MAX_ORIGINAL_CAPACITY_WIDTH - MIN_ORIGINAL_CAPACITY_WIDTH,
  1597|       |    )
- 1598|  21.6k|}
+ 1598|  11.9k|}
 _RNvNtCsgMinvsjwHLp_5bytes9bytes_mut4vptrCs4Leuz0euYUT_4http:
- 1857|  21.6k|fn vptr(ptr: *mut u8) -> NonNull<u8> {
- 1858|  21.6k|    if cfg!(debug_assertions) {
+ 1857|  11.9k|fn vptr(ptr: *mut u8) -> NonNull<u8> {
+ 1858|  11.9k|    if cfg!(debug_assertions) {
  1859|      0|        NonNull::new(ptr).expect("Vec pointer should be non-null")
  1860|       |    } else {
- 1861|  21.6k|        unsafe { NonNull::new_unchecked(ptr) }
+ 1861|  11.9k|        unsafe { NonNull::new_unchecked(ptr) }
  1862|       |    }
- 1863|  21.6k|}
+ 1863|  11.9k|}
 _RINvNtCsgMinvsjwHLp_5bytes9bytes_mut11invalid_ptrNtB2_6SharedEB4_:
- 1871|  21.6k|fn invalid_ptr<T>(addr: usize) -> *mut T {
- 1872|  21.6k|    let ptr = core::ptr::null_mut::<u8>().wrapping_add(addr);
- 1873|  21.6k|    debug_assert_eq!(ptr as usize, addr);
- 1874|  21.6k|    ptr.cast::<T>()
- 1875|  21.6k|}
+ 1871|  11.9k|fn invalid_ptr<T>(addr: usize) -> *mut T {
+ 1872|  11.9k|    let ptr = core::ptr::null_mut::<u8>().wrapping_add(addr);
+ 1873|  11.9k|    debug_assert_eq!(ptr as usize, addr);
+ 1874|  11.9k|    ptr.cast::<T>()
+ 1875|  11.9k|}
 _RNvMs_NtCsgMinvsjwHLp_5bytes9bytes_mutNtB4_8BytesMut11get_vec_posB6_:
- 1162|  16.0k|    unsafe fn get_vec_pos(&self) -> usize {
- 1163|  16.0k|        debug_assert_eq!(self.kind(), KIND_VEC);
+ 1162|  8.17k|    unsafe fn get_vec_pos(&self) -> usize {
+ 1163|  8.17k|        debug_assert_eq!(self.kind(), KIND_VEC);
  1164|       |
- 1165|  16.0k|        self.data as usize >> VEC_POS_OFFSET
- 1166|  16.0k|    }
+ 1165|  8.17k|        self.data as usize >> VEC_POS_OFFSET
+ 1166|  8.17k|    }
 _RNvMs_NtCsgMinvsjwHLp_5bytes9bytes_mutNtB4_8BytesMut17extend_from_sliceB6_:
-  887|   588k|    pub fn extend_from_slice(&mut self, extend: &[u8]) {
-  888|   588k|        let cnt = extend.len();
-  889|   588k|        self.reserve(cnt);
+  887|   422k|    pub fn extend_from_slice(&mut self, extend: &[u8]) {
+  888|   422k|        let cnt = extend.len();
+  889|   422k|        self.reserve(cnt);
   890|       |
   891|       |        unsafe {
-  892|   588k|            let dst = self.spare_capacity_mut();
+  892|   422k|            let dst = self.spare_capacity_mut();
   893|       |            // Reserved above
-  894|   588k|            debug_assert!(dst.len() >= cnt);
+  894|   422k|            debug_assert!(dst.len() >= cnt);
   895|       |
-  896|   588k|            ptr::copy_nonoverlapping(extend.as_ptr(), dst.as_mut_ptr().cast(), cnt);
+  896|   422k|            ptr::copy_nonoverlapping(extend.as_ptr(), dst.as_mut_ptr().cast(), cnt);
   897|       |        }
   898|       |
-  899|   588k|        unsafe {
-  900|   588k|            self.advance_mut(cnt);
-  901|   588k|        }
-  902|   588k|    }
+  899|   422k|        unsafe {
+  900|   422k|            self.advance_mut(cnt);
+  901|   422k|        }
+  902|   422k|    }
 _RNvMs_NtCsgMinvsjwHLp_5bytes9bytes_mutNtB4_8BytesMut18spare_capacity_mutB6_:
- 1206|   588k|    pub fn spare_capacity_mut(&mut self) -> &mut [MaybeUninit<u8>] {
- 1207|   588k|        unsafe {
- 1208|   588k|            let ptr = self.ptr.as_ptr().add(self.len);
- 1209|   588k|            let len = self.cap - self.len;
- 1210|   588k|
- 1211|   588k|            slice::from_raw_parts_mut(ptr.cast(), len)
- 1212|   588k|        }
- 1213|   588k|    }
+ 1206|   422k|    pub fn spare_capacity_mut(&mut self) -> &mut [MaybeUninit<u8>] {
+ 1207|   422k|        unsafe {
+ 1208|   422k|            let ptr = self.ptr.as_ptr().add(self.len);
+ 1209|   422k|            let len = self.cap - self.len;
+ 1210|   422k|
+ 1211|   422k|            slice::from_raw_parts_mut(ptr.cast(), len)
+ 1212|   422k|        }
+ 1213|   422k|    }
 _RNvMs_NtCsgMinvsjwHLp_5bytes9bytes_mutNtB4_8BytesMut3lenB6_:
-  195|  1.76M|    pub fn len(&self) -> usize {
-  196|  1.76M|        self.len
-  197|  1.76M|    }
+  195|  1.26M|    pub fn len(&self) -> usize {
+  196|  1.26M|        self.len
+  197|  1.26M|    }
 _RNvMs_NtCsgMinvsjwHLp_5bytes9bytes_mutNtB4_8BytesMut4kindB6_:
- 1102|  16.0k|    fn kind(&self) -> usize {
- 1103|  16.0k|        self.data as usize & KIND_MASK
- 1104|  16.0k|    }
+ 1102|  8.17k|    fn kind(&self) -> usize {
+ 1103|  8.17k|        self.data as usize & KIND_MASK
+ 1104|  8.17k|    }
 _RNvMs_NtCsgMinvsjwHLp_5bytes9bytes_mutNtB4_8BytesMut7reserveB6_:
-  610|   588k|    pub fn reserve(&mut self, additional: usize) {
-  611|   588k|        let len = self.len();
-  612|   588k|        let rem = self.capacity() - len;
+  610|   422k|    pub fn reserve(&mut self, additional: usize) {
+  611|   422k|        let len = self.len();
+  612|   422k|        let rem = self.capacity() - len;
   613|       |
-  614|   588k|        if additional <= rem {
+  614|   422k|        if additional <= rem {
   615|       |            // The handle can already store at least `additional` more bytes, so
   616|       |            // there is no further work needed to be done.
-  617|   588k|            return;
+  617|   422k|            return;
   618|      0|        }
   619|       |
   620|       |        // will always succeed
   621|      0|        let _ = self.reserve_inner(additional, true);
-  622|   588k|    }
+  622|   422k|    }
 _RNvMs_NtCsgMinvsjwHLp_5bytes9bytes_mutNtB4_8BytesMut8capacityB6_:
-  225|   588k|    pub fn capacity(&self) -> usize {
-  226|   588k|        self.cap
-  227|   588k|    }
+  225|   422k|    pub fn capacity(&self) -> usize {
+  226|   422k|        self.cap
+  227|   422k|    }
 _RNvNtCsgMinvsjwHLp_5bytes9bytes_mut11rebuild_vec:
- 1877|  21.6k|unsafe fn rebuild_vec(ptr: *mut u8, mut len: usize, mut cap: usize, off: usize) -> Vec<u8> {
- 1878|  21.6k|    let ptr = ptr.sub(off);
- 1879|  21.6k|    len += off;
- 1880|  21.6k|    cap += off;
+ 1877|  11.9k|unsafe fn rebuild_vec(ptr: *mut u8, mut len: usize, mut cap: usize, off: usize) -> Vec<u8> {
+ 1878|  11.9k|    let ptr = ptr.sub(off);
+ 1879|  11.9k|    len += off;
+ 1880|  11.9k|    cap += off;
  1881|       |
- 1882|  21.6k|    Vec::from_raw_parts(ptr, len, cap)
- 1883|  21.6k|}
+ 1882|  11.9k|    Vec::from_raw_parts(ptr, len, cap)
+ 1883|  11.9k|}
 _RNvXs0_NtCsgMinvsjwHLp_5bytes9bytes_mutNtB5_8BytesMutNtNtNtCs6SNw0SRvItZ_4core3ops4drop4Drop4drop:
- 1217|  16.0k|    fn drop(&mut self) {
- 1218|  16.0k|        let kind = self.kind();
+ 1217|  8.17k|    fn drop(&mut self) {
+ 1218|  8.17k|        let kind = self.kind();
  1219|       |
- 1220|  16.0k|        if kind == KIND_VEC {
- 1221|  16.0k|            unsafe {
- 1222|  16.0k|                let off = self.get_vec_pos();
- 1223|  16.0k|
- 1224|  16.0k|                // Vector storage, free the vector
- 1225|  16.0k|                let _ = rebuild_vec(self.ptr.as_ptr(), self.len, self.cap, off);
- 1226|  16.0k|            }
+ 1220|  8.17k|        if kind == KIND_VEC {
+ 1221|  8.17k|            unsafe {
+ 1222|  8.17k|                let off = self.get_vec_pos();
+ 1223|  8.17k|
+ 1224|  8.17k|                // Vector storage, free the vector
+ 1225|  8.17k|                let _ = rebuild_vec(self.ptr.as_ptr(), self.len, self.cap, off);
+ 1226|  8.17k|            }
  1227|      0|        } else if kind == KIND_ARC {
  1228|      0|            unsafe { release_shared(self.data) };
  1229|      0|        }
- 1230|  16.0k|    }
+ 1230|  8.17k|    }
 _RNvXs2_NtCsgMinvsjwHLp_5bytes9bytes_mutNtB5_8BytesMutNtNtNtB7_3buf7buf_mut6BufMut11advance_mutB7_:
- 1272|   588k|    unsafe fn advance_mut(&mut self, cnt: usize) {
- 1273|   588k|        let remaining = self.cap - self.len();
- 1274|   588k|        if cnt > remaining {
+ 1272|   422k|    unsafe fn advance_mut(&mut self, cnt: usize) {
+ 1273|   422k|        let remaining = self.cap - self.len();
+ 1274|   422k|        if cnt > remaining {
  1275|      0|            super::panic_advance(&TryGetError {
  1276|      0|                requested: cnt,
  1277|      0|                available: remaining,
  1278|      0|            });
- 1279|   588k|        }
+ 1279|   422k|        }
  1280|       |        // Addition won't overflow since it is at most `self.cap`.
- 1281|   588k|        self.len = self.len() + cnt;
- 1282|   588k|    }
+ 1281|   422k|        self.len = self.len() + cnt;
+ 1282|   422k|    }
 _RNvXs2_NtCsgMinvsjwHLp_5bytes9bytes_mutNtB5_8BytesMutNtNtNtB7_3buf7buf_mut6BufMut9put_slice:
- 1323|   588k|    fn put_slice(&mut self, src: &[u8]) {
- 1324|   588k|        self.extend_from_slice(src);
- 1325|   588k|    }
+ 1323|   422k|    fn put_slice(&mut self, src: &[u8]) {
+ 1324|   422k|        self.extend_from_slice(src);
+ 1325|   422k|    }
 
 _RINvXNtNtNtCsgMinvsjwHLp_5bytes4loom4sync6atomicINtNtNtCs6SNw0SRvItZ_4core4sync6atomic9AtomicPtruEINtB3_9AtomicMutuE8with_mutNCNvMNtB9_5bytesNtB24_5Bytes8data_mut0OuEB9_:
-   16|  6.23M|            fn with_mut<F, R>(&mut self, f: F) -> R
-   17|  6.23M|            where
-   18|  6.23M|                F: FnOnce(&mut *mut T) -> R,
+   16|  4.10M|            fn with_mut<F, R>(&mut self, f: F) -> R
+   17|  4.10M|            where
+   18|  4.10M|                F: FnOnce(&mut *mut T) -> R,
    19|       |            {
-   20|  6.23M|                f(self.get_mut())
-   21|  6.23M|            }
+   20|  4.10M|                f(self.get_mut())
+   21|  4.10M|            }
 
 _RNvXs_NtCs4Leuz0euYUT_4http8byte_strNtB4_7ByteStrNtNtNtCs6SNw0SRvItZ_4core3ops5deref5Deref5derefCsesI8xtRYhQD_9axum_core:
-   60|   523k|    fn deref(&self) -> &str {
-   61|   523k|        let b: &[u8] = self.bytes.as_ref();
+   60|   338k|    fn deref(&self) -> &str {
+   61|   338k|        let b: &[u8] = self.bytes.as_ref();
    62|       |        // Safety: the invariant of `bytes` is that it contains valid UTF-8.
-   63|   523k|        unsafe { str::from_utf8_unchecked(b) }
-   64|   523k|    }
+   63|   338k|        unsafe { str::from_utf8_unchecked(b) }
+   64|   338k|    }
 _RNvXs_NtCs4Leuz0euYUT_4http8byte_strNtB4_7ByteStrNtNtNtCs6SNw0SRvItZ_4core3ops5deref5Deref5derefCs9X2BcFZoTlv_2h2:
-   60|  1.57M|    fn deref(&self) -> &str {
-   61|  1.57M|        let b: &[u8] = self.bytes.as_ref();
+   60|   981k|    fn deref(&self) -> &str {
+   61|   981k|        let b: &[u8] = self.bytes.as_ref();
    62|       |        // Safety: the invariant of `bytes` is that it contains valid UTF-8.
-   63|  1.57M|        unsafe { str::from_utf8_unchecked(b) }
-   64|  1.57M|    }
+   63|   981k|        unsafe { str::from_utf8_unchecked(b) }
+   64|   981k|    }
 _RNvMNtCs4Leuz0euYUT_4http8byte_strNtB2_7ByteStr11from_staticB4_:
-   21|   867k|    pub const fn from_static(val: &'static str) -> ByteStr {
-   22|   867k|        ByteStr {
-   23|   867k|            // Invariant: val is a str so contains valid UTF-8.
-   24|   867k|            bytes: Bytes::from_static(val.as_bytes()),
-   25|   867k|        }
-   26|   867k|    }
+   21|   562k|    pub const fn from_static(val: &'static str) -> ByteStr {
+   22|   562k|        ByteStr {
+   23|   562k|            // Invariant: val is a str so contains valid UTF-8.
+   24|   562k|            bytes: Bytes::from_static(val.as_bytes()),
+   25|   562k|        }
+   26|   562k|    }
 _RNvMNtCs4Leuz0euYUT_4http8byte_strNtB2_7ByteStr19from_utf8_uncheckedB4_:
-   35|   598k|    pub unsafe fn from_utf8_unchecked(bytes: Bytes) -> ByteStr {
-   36|   598k|        if cfg!(debug_assertions) {
+   35|   418k|    pub unsafe fn from_utf8_unchecked(bytes: Bytes) -> ByteStr {
+   36|   418k|        if cfg!(debug_assertions) {
    37|      0|            match str::from_utf8(&bytes) {
    38|      0|                Ok(_) => (),
    39|      0|                Err(err) => panic!(
@@ -579,76 +579,76 @@ _RNvMNtCs4Leuz0euYUT_4http8byte_strNtB2_7ByteStr19from_utf8_uncheckedB4_:
    41|       |                    err, bytes
    42|       |                ),
    43|       |            }
-   44|   598k|        }
+   44|   418k|        }
    45|       |        // Invariant: assumed by the safety requirements of this function.
-   46|   598k|        ByteStr { bytes }
-   47|   598k|    }
+   46|   418k|        ByteStr { bytes }
+   47|   418k|    }
 
 _RNvMNtNtCs4Leuz0euYUT_4http6header3mapNtB2_9HeaderMap3newCs8gVPDMh8Uq_14headers_policy:
-  495|  86.7k|    pub fn new() -> Self {
-  496|  86.7k|        Self::default()
-  497|  86.7k|    }
+  495|  56.2k|    pub fn new() -> Self {
+  496|  56.2k|        Self::default()
+  497|  56.2k|    }
 _RINvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_9HeaderMap12contains_keyRNtNtB8_4name10HeaderNameECs3XyZhkj4DVH_4axum:
-  905|   607k|    pub fn contains_key<K>(&self, key: K) -> bool
-  906|   607k|    where
-  907|   607k|        K: AsHeaderName,
+  905|   393k|    pub fn contains_key<K>(&self, key: K) -> bool
+  906|   393k|    where
+  907|   393k|        K: AsHeaderName,
   908|       |    {
-  909|   607k|        key.find(self).is_some()
-  910|   607k|    }
+  909|   393k|        key.find(self).is_some()
+  910|   393k|    }
 _RINvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_9HeaderMap10try_insertNtNtB8_4name10HeaderNameECsesI8xtRYhQD_9axum_core:
- 1323|   697k|    pub fn try_insert<K>(&mut self, key: K, val: T) -> Result<Option<T>, MaxSizeReached>
- 1324|   697k|    where
- 1325|   697k|        K: IntoHeaderName,
+ 1323|   450k|    pub fn try_insert<K>(&mut self, key: K, val: T) -> Result<Option<T>, MaxSizeReached>
+ 1324|   450k|    where
+ 1325|   450k|        K: IntoHeaderName,
  1326|       |    {
- 1327|   697k|        key.try_insert(self, val)
- 1328|   697k|    }
+ 1327|   450k|        key.try_insert(self, val)
+ 1328|   450k|    }
 _RINvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_9HeaderMap11try_insert2NtNtB8_4name10HeaderNameECsesI8xtRYhQD_9axum_core:
- 1331|   697k|    fn try_insert2<K>(&mut self, key: K, value: T) -> Result<Option<T>, MaxSizeReached>
- 1332|   697k|    where
- 1333|   697k|        K: Hash + Into<HeaderName>,
- 1334|   697k|        HeaderName: PartialEq<K>,
+ 1331|   450k|    fn try_insert2<K>(&mut self, key: K, value: T) -> Result<Option<T>, MaxSizeReached>
+ 1332|   450k|    where
+ 1333|   450k|        K: Hash + Into<HeaderName>,
+ 1334|   450k|        HeaderName: PartialEq<K>,
  1335|       |    {
- 1336|   697k|        self.try_reserve_one()?;
+ 1336|   450k|        self.try_reserve_one()?;
  1337|       |
- 1338|   697k|        Ok(insert_phase_one!(
+ 1338|   450k|        Ok(insert_phase_one!(
  1339|       |            self,
- 1340|    144|            key,
+ 1340|     14|            key,
  1341|       |            probe,
  1342|       |            pos,
  1343|       |            hash,
  1344|       |            danger,
  1345|       |            // Vacant
  1346|       |            {
- 1347|   650k|                let _ = danger; // Make lint happy
- 1348|   650k|                let index = self.entries.len();
- 1349|   650k|                self.try_insert_entry(hash, key.into(), value)?;
- 1350|   650k|                self.indices[probe] = Pos::new(index, hash);
- 1351|   650k|                None
+ 1347|   424k|                let _ = danger; // Make lint happy
+ 1348|   424k|                let index = self.entries.len();
+ 1349|   424k|                self.try_insert_entry(hash, key.into(), value)?;
+ 1350|   424k|                self.indices[probe] = Pos::new(index, hash);
+ 1351|   424k|                None
  1352|       |            },
  1353|       |            // Occupied
  1354|      0|            Some(self.insert_occupied(pos, value)),
  1355|       |            // Robinhood
  1356|       |            {
- 1357|  46.5k|                self.try_insert_phase_two(key.into(), value, hash, probe, danger)?;
- 1358|  46.5k|                None
+ 1357|  25.9k|                self.try_insert_phase_two(key.into(), value, hash, probe, danger)?;
+ 1358|  25.9k|                None
  1359|       |            }
  1360|       |        ))
- 1361|   697k|    }
+ 1361|   450k|    }
 _RINvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_9HeaderMap6insertNtNtB8_4name10HeaderNameECsesI8xtRYhQD_9axum_core:
- 1285|   697k|    pub fn insert<K>(&mut self, key: K, val: T) -> Option<T>
- 1286|   697k|    where
- 1287|   697k|        K: IntoHeaderName,
+ 1285|   450k|    pub fn insert<K>(&mut self, key: K, val: T) -> Option<T>
+ 1286|   450k|    where
+ 1287|   450k|        K: IntoHeaderName,
  1288|       |    {
- 1289|   697k|        self.try_insert(key, val).expect("size overflows MAX_SIZE")
- 1290|   697k|    }
+ 1289|   450k|        self.try_insert(key, val).expect("size overflows MAX_SIZE")
+ 1290|   450k|    }
 _RINvNtNtCs4Leuz0euYUT_4http6header3map15hash_elem_usingNtNtB4_4name10HeaderNameECsesI8xtRYhQD_9axum_core:
- 3725|   697k|fn hash_elem_using<K>(danger: &Danger, k: &K) -> HashValue
- 3726|   697k|where
- 3727|   697k|    K: Hash + ?Sized,
+ 3725|   450k|fn hash_elem_using<K>(danger: &Danger, k: &K) -> HashValue
+ 3726|   450k|where
+ 3727|   450k|    K: Hash + ?Sized,
  3728|       |{
  3729|       |    const MASK: u64 = (MAX_SIZE as u64) - 1;
  3730|       |
- 3731|   697k|    let hash = match *danger {
+ 3731|   450k|    let hash = match *danger {
  3732|       |        // Safe hash
  3733|      0|        Danger::Red(ref hasher) => {
  3734|      0|            let mut h = hasher.build_hasher();
@@ -657,19 +657,19 @@ _RINvNtNtCs4Leuz0euYUT_4http6header3map15hash_elem_usingNtNtB4_4name10HeaderName
  3737|       |        }
  3738|       |        // Fast hash
  3739|       |        _ => {
- 3740|   697k|            let mut h = FnvHasher::new();
- 3741|   697k|            k.hash(&mut h);
- 3742|   697k|            h.finish()
+ 3740|   450k|            let mut h = FnvHasher::new();
+ 3741|   450k|            k.hash(&mut h);
+ 3742|   450k|            h.finish()
  3743|       |        }
  3744|       |    };
  3745|       |
- 3746|   697k|    HashValue((hash & MASK) as u16)
- 3747|   697k|}
+ 3746|   450k|    HashValue((hash & MASK) as u16)
+ 3747|   450k|}
 _RNvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB5_9HeaderMap15try_reserve_oneCsesI8xtRYhQD_9axum_core:
- 1751|   697k|    fn try_reserve_one(&mut self) -> Result<(), MaxSizeReached> {
- 1752|   697k|        let len = self.entries.len();
+ 1751|   450k|    fn try_reserve_one(&mut self) -> Result<(), MaxSizeReached> {
+ 1752|   450k|        let len = self.entries.len();
  1753|       |
- 1754|   697k|        if self.danger.is_yellow() {
+ 1754|   450k|        if self.danger.is_yellow() {
  1755|       |            // Overflow is not a concern here: entries.len() is bounded by
  1756|       |            // MAX_SIZE (2^15) and LOAD_FACTOR_THRESHOLD is 5, so the product
  1757|       |            // fits comfortably within a usize.
@@ -692,242 +692,242 @@ _RNvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB5_9HeaderMap15try_reserve_oneCsesI8
  1774|       |
  1775|      0|                self.rebuild();
  1776|       |            }
- 1777|   697k|        } else if len == self.capacity() {
- 1778|   110k|            if len == 0 {
- 1779|  82.7k|                let new_raw_cap = 8;
- 1780|  82.7k|                self.mask = 8 - 1;
- 1781|  82.7k|                self.indices = vec![Pos::none(); new_raw_cap].into_boxed_slice();
- 1782|  82.7k|                self.entries = Vec::with_capacity(usable_capacity(new_raw_cap));
- 1783|  82.7k|            } else {
- 1784|  27.2k|                let raw_cap = self.indices.len();
- 1785|  27.2k|                self.try_grow(raw_cap << 1)?;
+ 1777|   450k|        } else if len == self.capacity() {
+ 1778|  75.6k|            if len == 0 {
+ 1779|  61.4k|                let new_raw_cap = 8;
+ 1780|  61.4k|                self.mask = 8 - 1;
+ 1781|  61.4k|                self.indices = vec![Pos::none(); new_raw_cap].into_boxed_slice();
+ 1782|  61.4k|                self.entries = Vec::with_capacity(usable_capacity(new_raw_cap));
+ 1783|  61.4k|            } else {
+ 1784|  14.2k|                let raw_cap = self.indices.len();
+ 1785|  14.2k|                self.try_grow(raw_cap << 1)?;
  1786|       |            }
- 1787|   587k|        }
+ 1787|   374k|        }
  1788|       |
- 1789|   697k|        Ok(())
- 1790|   697k|    }
+ 1789|   450k|        Ok(())
+ 1790|   450k|    }
 _RNvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB5_9HeaderMap16try_insert_entryCsesI8xtRYhQD_9axum_core:
- 1684|   697k|    fn try_insert_entry(
- 1685|   697k|        &mut self,
- 1686|   697k|        hash: HashValue,
- 1687|   697k|        key: HeaderName,
- 1688|   697k|        value: T,
- 1689|   697k|    ) -> Result<(), MaxSizeReached> {
- 1690|   697k|        if self.entries.len() >= MAX_SIZE {
+ 1684|   450k|    fn try_insert_entry(
+ 1685|   450k|        &mut self,
+ 1686|   450k|        hash: HashValue,
+ 1687|   450k|        key: HeaderName,
+ 1688|   450k|        value: T,
+ 1689|   450k|    ) -> Result<(), MaxSizeReached> {
+ 1690|   450k|        if self.entries.len() >= MAX_SIZE {
  1691|      0|            return Err(MaxSizeReached::new());
- 1692|   697k|        }
+ 1692|   450k|        }
  1693|       |
- 1694|   697k|        self.entries.push(Bucket {
- 1695|   697k|            hash,
- 1696|   697k|            key,
- 1697|   697k|            value,
- 1698|   697k|            links: None,
- 1699|   697k|        });
+ 1694|   450k|        self.entries.push(Bucket {
+ 1695|   450k|            hash,
+ 1696|   450k|            key,
+ 1697|   450k|            value,
+ 1698|   450k|            links: None,
+ 1699|   450k|        });
  1700|       |
- 1701|   697k|        Ok(())
- 1702|   697k|    }
+ 1701|   450k|        Ok(())
+ 1702|   450k|    }
 _RNvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB5_9HeaderMap20try_insert_phase_twoCsesI8xtRYhQD_9axum_core:
- 1543|  46.5k|    fn try_insert_phase_two(
- 1544|  46.5k|        &mut self,
- 1545|  46.5k|        key: HeaderName,
- 1546|  46.5k|        value: T,
- 1547|  46.5k|        hash: HashValue,
- 1548|  46.5k|        probe: usize,
- 1549|  46.5k|        danger: bool,
- 1550|  46.5k|    ) -> Result<usize, MaxSizeReached> {
+ 1543|  25.9k|    fn try_insert_phase_two(
+ 1544|  25.9k|        &mut self,
+ 1545|  25.9k|        key: HeaderName,
+ 1546|  25.9k|        value: T,
+ 1547|  25.9k|        hash: HashValue,
+ 1548|  25.9k|        probe: usize,
+ 1549|  25.9k|        danger: bool,
+ 1550|  25.9k|    ) -> Result<usize, MaxSizeReached> {
  1551|       |        // Push the value and get the index
- 1552|  46.5k|        let index = self.entries.len();
- 1553|  46.5k|        self.try_insert_entry(hash, key, value)?;
+ 1552|  25.9k|        let index = self.entries.len();
+ 1553|  25.9k|        self.try_insert_entry(hash, key, value)?;
  1554|       |
- 1555|  46.5k|        let num_displaced = do_insert_phase_two(&mut self.indices, probe, Pos::new(index, hash));
+ 1555|  25.9k|        let num_displaced = do_insert_phase_two(&mut self.indices, probe, Pos::new(index, hash));
  1556|       |
- 1557|  46.5k|        if danger || num_displaced >= DISPLACEMENT_THRESHOLD {
+ 1557|  25.9k|        if danger || num_displaced >= DISPLACEMENT_THRESHOLD {
  1558|      0|            // Increase danger level
  1559|      0|            self.danger.set_yellow();
- 1560|  46.5k|        }
+ 1560|  25.9k|        }
  1561|       |
- 1562|  46.5k|        Ok(index)
- 1563|  46.5k|    }
+ 1562|  25.9k|        Ok(index)
+ 1563|  25.9k|    }
 _RNvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB5_9HeaderMap23reinsert_entry_in_orderCsesI8xtRYhQD_9axum_core:
- 1736|   253k|    fn reinsert_entry_in_order(&mut self, pos: Pos) {
- 1737|   253k|        if let Some((_, entry_hash)) = pos.resolve() {
+ 1736|   132k|    fn reinsert_entry_in_order(&mut self, pos: Pos) {
+ 1737|   132k|        if let Some((_, entry_hash)) = pos.resolve() {
  1738|       |            // Find first empty bucket and insert there
- 1739|   190k|            let mut probe = desired_pos(self.mask, entry_hash);
+ 1739|  99.4k|            let mut probe = desired_pos(self.mask, entry_hash);
  1740|       |
- 1741|   269k|            probe_loop!(probe < self.indices.len(), {
- 1742|   257k|                if self.indices[probe].resolve().is_none() {
+ 1741|   135k|            probe_loop!(probe < self.indices.len(), {
+ 1742|   131k|                if self.indices[probe].resolve().is_none() {
  1743|       |                    // empty bucket, insert here
- 1744|   190k|                    self.indices[probe] = pos;
- 1745|   190k|                    return;
- 1746|  67.4k|                }
+ 1744|  99.4k|                    self.indices[probe] = pos;
+ 1745|  99.4k|                    return;
+ 1746|  32.1k|                }
  1747|       |            });
- 1748|  63.4k|        }
- 1749|   253k|    }
+ 1748|  33.1k|        }
+ 1749|   132k|    }
 _RNvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB5_9HeaderMap8capacityCsesI8xtRYhQD_9axum_core:
-  701|   724k|    pub fn capacity(&self) -> usize {
-  702|   724k|        usable_capacity(self.indices.len())
-  703|   724k|    }
+  701|   464k|    pub fn capacity(&self) -> usize {
+  702|   464k|        usable_capacity(self.indices.len())
+  703|   464k|    }
 _RNvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB5_9HeaderMap8try_growCsesI8xtRYhQD_9axum_core:
- 1793|  27.2k|    fn try_grow(&mut self, new_raw_cap: usize) -> Result<(), MaxSizeReached> {
- 1794|  27.2k|        if new_raw_cap > MAX_SIZE {
+ 1793|  14.2k|    fn try_grow(&mut self, new_raw_cap: usize) -> Result<(), MaxSizeReached> {
+ 1794|  14.2k|        if new_raw_cap > MAX_SIZE {
  1795|      0|            return Err(MaxSizeReached::new());
- 1796|  27.2k|        }
+ 1796|  14.2k|        }
  1797|       |
  1798|       |        // find first ideally placed element -- start of cluster
- 1799|  27.2k|        let mut first_ideal = 0;
+ 1799|  14.2k|        let mut first_ideal = 0;
  1800|       |
- 1801|  86.4k|        for (i, pos) in self.indices.iter().enumerate() {
- 1802|  86.4k|            if let Some((_, entry_hash)) = pos.resolve() {
- 1803|  65.4k|                if 0 == probe_distance(self.mask, entry_hash, i) {
- 1804|  27.2k|                    first_ideal = i;
- 1805|  27.2k|                    break;
- 1806|  38.2k|                }
- 1807|  20.9k|            }
+ 1801|  41.4k|        for (i, pos) in self.indices.iter().enumerate() {
+ 1802|  41.4k|            if let Some((_, entry_hash)) = pos.resolve() {
+ 1803|  29.0k|                if 0 == probe_distance(self.mask, entry_hash, i) {
+ 1804|  14.2k|                    first_ideal = i;
+ 1805|  14.2k|                    break;
+ 1806|  14.8k|                }
+ 1807|  12.3k|            }
  1808|       |        }
  1809|       |
  1810|       |        // visit the entries in an order where we can simply reinsert them
  1811|       |        // into self.indices without any bucket stealing.
- 1812|  27.2k|        let old_indices = mem::replace(
- 1813|  27.2k|            &mut self.indices,
- 1814|  27.2k|            vec![Pos::none(); new_raw_cap].into_boxed_slice(),
+ 1812|  14.2k|        let old_indices = mem::replace(
+ 1813|  14.2k|            &mut self.indices,
+ 1814|  14.2k|            vec![Pos::none(); new_raw_cap].into_boxed_slice(),
  1815|       |        );
- 1816|  27.2k|        self.mask = new_raw_cap.wrapping_sub(1) as Size;
+ 1816|  14.2k|        self.mask = new_raw_cap.wrapping_sub(1) as Size;
  1817|       |
- 1818|   194k|        for &pos in &old_indices[first_ideal..] {
- 1819|   194k|            self.reinsert_entry_in_order(pos);
- 1820|   194k|        }
+ 1818|   105k|        for &pos in &old_indices[first_ideal..] {
+ 1819|   105k|            self.reinsert_entry_in_order(pos);
+ 1820|   105k|        }
  1821|       |
- 1822|  59.1k|        for &pos in &old_indices[..first_ideal] {
- 1823|  59.1k|            self.reinsert_entry_in_order(pos);
- 1824|  59.1k|        }
+ 1822|  27.2k|        for &pos in &old_indices[..first_ideal] {
+ 1823|  27.2k|            self.reinsert_entry_in_order(pos);
+ 1824|  27.2k|        }
  1825|       |
  1826|       |        // Reserve additional entry slots
- 1827|  27.2k|        let more = self.capacity() - self.entries.len();
- 1828|  27.2k|        self.entries.reserve_exact(more);
- 1829|  27.2k|        Ok(())
- 1830|  27.2k|    }
+ 1827|  14.2k|        let more = self.capacity() - self.entries.len();
+ 1828|  14.2k|        self.entries.reserve_exact(more);
+ 1829|  14.2k|        Ok(())
+ 1830|  14.2k|    }
 _RNvMs11_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_3Pos3newCsesI8xtRYhQD_9axum_core:
- 3615|   697k|    fn new(index: usize, hash: HashValue) -> Self {
- 3616|   697k|        debug_assert!(index < MAX_SIZE);
- 3617|   697k|        Pos {
- 3618|   697k|            index: index as Size,
- 3619|   697k|            hash,
- 3620|   697k|        }
- 3621|   697k|    }
+ 3615|   450k|    fn new(index: usize, hash: HashValue) -> Self {
+ 3616|   450k|        debug_assert!(index < MAX_SIZE);
+ 3617|   450k|        Pos {
+ 3618|   450k|            index: index as Size,
+ 3619|   450k|            hash,
+ 3620|   450k|        }
+ 3621|   450k|    }
 _RNvMs11_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_3Pos4noneCsesI8xtRYhQD_9axum_core:
- 3624|   110k|    fn none() -> Self {
- 3625|   110k|        Pos {
- 3626|   110k|            index: !0,
- 3627|   110k|            hash: HashValue(0),
- 3628|   110k|        }
- 3629|   110k|    }
+ 3624|  75.6k|    fn none() -> Self {
+ 3625|  75.6k|        Pos {
+ 3626|  75.6k|            index: !0,
+ 3627|  75.6k|            hash: HashValue(0),
+ 3628|  75.6k|        }
+ 3629|  75.6k|    }
 _RNvMs11_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_3Pos7is_noneCsesI8xtRYhQD_9axum_core:
- 3637|  1.56M|    fn is_none(&self) -> bool {
- 3638|  1.56M|        self.index == !0
- 3639|  1.56M|    }
+ 3637|   894k|    fn is_none(&self) -> bool {
+ 3638|   894k|        self.index == !0
+ 3639|   894k|    }
 _RNvMs11_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_3Pos7is_someCsesI8xtRYhQD_9axum_core:
- 3632|  1.42M|    fn is_some(&self) -> bool {
- 3633|  1.42M|        !self.is_none()
- 3634|  1.42M|    }
+ 3632|   822k|    fn is_some(&self) -> bool {
+ 3633|   822k|        !self.is_none()
+ 3634|   822k|    }
 _RNvMs11_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_3Pos7resolveCsesI8xtRYhQD_9axum_core:
- 3642|  1.42M|    fn resolve(&self) -> Option<(usize, HashValue)> {
- 3643|  1.42M|        if self.is_some() {
- 3644|   503k|            Some((self.index as usize, self.hash))
+ 3642|   822k|    fn resolve(&self) -> Option<(usize, HashValue)> {
+ 3643|   822k|        if self.is_some() {
+ 3644|   252k|            Some((self.index as usize, self.hash))
  3645|       |        } else {
- 3646|   925k|            None
+ 3646|   569k|            None
  3647|       |        }
- 3648|  1.42M|    }
+ 3648|   822k|    }
 _RNvMs17_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_9FnvHasher3newCsesI8xtRYhQD_9axum_core:
- 3753|   697k|    fn new() -> Self {
- 3754|   697k|        FnvHasher(0xcbf29ce484222325)
- 3755|   697k|    }
+ 3753|   450k|    fn new() -> Self {
+ 3754|   450k|        FnvHasher(0xcbf29ce484222325)
+ 3755|   450k|    }
 _RNvNtNtCs4Leuz0euYUT_4http6header3map11desired_posCsesI8xtRYhQD_9axum_core:
- 3714|  1.13M|fn desired_pos(mask: Size, hash: HashValue) -> usize {
- 3715|  1.13M|    (hash.0 & mask) as usize
- 3716|  1.13M|}
+ 3714|   671k|fn desired_pos(mask: Size, hash: HashValue) -> usize {
+ 3715|   671k|    (hash.0 & mask) as usize
+ 3716|   671k|}
 _RNvNtNtCs4Leuz0euYUT_4http6header3map14probe_distanceCsesI8xtRYhQD_9axum_core:
- 3720|   245k|fn probe_distance(mask: Size, hash: HashValue, current: usize) -> usize {
- 3721|   245k|    current.wrapping_sub(desired_pos(mask, hash)) & mask as usize
- 3722|   245k|}
+ 3720|   121k|fn probe_distance(mask: Size, hash: HashValue, current: usize) -> usize {
+ 3721|   121k|    current.wrapping_sub(desired_pos(mask, hash)) & mask as usize
+ 3722|   121k|}
 _RNvNtNtCs4Leuz0euYUT_4http6header3map15usable_capacityCsesI8xtRYhQD_9axum_core:
- 3704|   807k|fn usable_capacity(cap: usize) -> usize {
- 3705|   807k|    cap - cap / 4
- 3706|   807k|}
+ 3704|   526k|fn usable_capacity(cap: usize) -> usize {
+ 3705|   526k|    cap - cap / 4
+ 3706|   526k|}
 _RNvNtNtCs4Leuz0euYUT_4http6header3map19do_insert_phase_twoCsesI8xtRYhQD_9axum_core:
- 2267|  46.5k|fn do_insert_phase_two(indices: &mut [Pos], mut probe: usize, mut old_pos: Pos) -> usize {
- 2268|  46.5k|    let mut num_displaced = 0;
+ 2267|  25.9k|fn do_insert_phase_two(indices: &mut [Pos], mut probe: usize, mut old_pos: Pos) -> usize {
+ 2268|  25.9k|    let mut num_displaced = 0;
  2269|       |
- 2270|   139k|    probe_loop!(probe < indices.len(), {
- 2271|   136k|        let pos = &mut indices[probe];
+ 2270|  73.2k|    probe_loop!(probe < indices.len(), {
+ 2271|  72.3k|        let pos = &mut indices[probe];
  2272|       |
- 2273|   136k|        if pos.is_none() {
- 2274|  46.5k|            *pos = old_pos;
- 2275|  46.5k|            break;
- 2276|  90.0k|        } else {
- 2277|  90.0k|            num_displaced += 1;
- 2278|  90.0k|            old_pos = mem::replace(pos, old_pos);
- 2279|  90.0k|        }
+ 2273|  72.3k|        if pos.is_none() {
+ 2274|  25.9k|            *pos = old_pos;
+ 2275|  25.9k|            break;
+ 2276|  46.4k|        } else {
+ 2277|  46.4k|            num_displaced += 1;
+ 2278|  46.4k|            old_pos = mem::replace(pos, old_pos);
+ 2279|  46.4k|        }
  2280|       |    });
  2281|       |
- 2282|  46.5k|    num_displaced
- 2283|  46.5k|}
+ 2282|  25.9k|    num_displaced
+ 2283|  25.9k|}
 _RNvXs18_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_9FnvHasherNtNtCs6SNw0SRvItZ_4core4hash6Hasher5writeCsesI8xtRYhQD_9axum_core:
- 3765|  1.39M|    fn write(&mut self, bytes: &[u8]) {
- 3766|  1.39M|        let mut hash = self.0;
- 3767|  15.5M|        for &b in bytes {
- 3768|  14.1M|            hash ^= b as u64;
- 3769|  14.1M|            hash = hash.wrapping_mul(0x100000001b3);
- 3770|  14.1M|        }
- 3771|  1.39M|        self.0 = hash;
- 3772|  1.39M|    }
+ 3765|   900k|    fn write(&mut self, bytes: &[u8]) {
+ 3766|   900k|        let mut hash = self.0;
+ 3767|  10.0M|        for &b in bytes {
+ 3768|  9.12M|            hash ^= b as u64;
+ 3769|  9.12M|            hash = hash.wrapping_mul(0x100000001b3);
+ 3770|  9.12M|        }
+ 3771|   900k|        self.0 = hash;
+ 3772|   900k|    }
 _RNvXs18_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_9FnvHasherNtNtCs6SNw0SRvItZ_4core4hash6Hasher6finishCsesI8xtRYhQD_9axum_core:
- 3760|   697k|    fn finish(&self) -> u64 {
- 3761|   697k|        self.0
- 3762|   697k|    }
+ 3760|   450k|    fn finish(&self) -> u64 {
+ 3761|   450k|        self.0
+ 3762|   450k|    }
 _RINvXNtNtNtCs4Leuz0euYUT_4http6header3map16into_header_nameNtNtB7_4name10HeaderNameNtB3_6Sealed10try_insertNtNtB7_5value11HeaderValueECsesI8xtRYhQD_9axum_core:
- 3812|   697k|        fn try_insert<T>(
- 3813|   697k|            self,
- 3814|   697k|            map: &mut HeaderMap<T>,
- 3815|   697k|            val: T,
- 3816|   697k|        ) -> Result<Option<T>, MaxSizeReached> {
- 3817|   697k|            map.try_insert2(self, val)
- 3818|   697k|        }
+ 3812|   450k|        fn try_insert<T>(
+ 3813|   450k|            self,
+ 3814|   450k|            map: &mut HeaderMap<T>,
+ 3815|   450k|            val: T,
+ 3816|   450k|        ) -> Result<Option<T>, MaxSizeReached> {
+ 3817|   450k|            map.try_insert2(self, val)
+ 3818|   450k|        }
 _RINvXs2_NtNtNtCs4Leuz0euYUT_4http6header3map14as_header_nameRNtNtBa_4name10HeaderNameNtB6_6Sealed4findNtNtBa_5value11HeaderValueECsgqDbtxx8JzC_5hyper:
- 3950|  1.64M|        fn find<T>(&self, map: &HeaderMap<T>) -> Option<(usize, usize)> {
- 3951|  1.64M|            map.find(*self)
- 3952|  1.64M|        }
+ 3950|  1.06M|        fn find<T>(&self, map: &HeaderMap<T>) -> Option<(usize, usize)> {
+ 3951|  1.06M|            map.find(*self)
+ 3952|  1.06M|        }
 _RINvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_9HeaderMap6appendNtNtB8_4name10HeaderNameECsgqDbtxx8JzC_5hyper:
- 1428|   505k|    pub fn append<K>(&mut self, key: K, value: T) -> bool
- 1429|   505k|    where
- 1430|   505k|        K: IntoHeaderName,
+ 1428|   323k|    pub fn append<K>(&mut self, key: K, value: T) -> bool
+ 1429|   323k|    where
+ 1430|   323k|        K: IntoHeaderName,
  1431|       |    {
- 1432|   505k|        self.try_append(key, value)
- 1433|   505k|            .expect("size overflows MAX_SIZE")
- 1434|   505k|    }
+ 1432|   323k|        self.try_append(key, value)
+ 1433|   323k|            .expect("size overflows MAX_SIZE")
+ 1434|   323k|    }
 _RINvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_9HeaderMap6removeNtNtB8_4name10HeaderNameECsgqDbtxx8JzC_5hyper:
- 1585|   780k|    pub fn remove<K>(&mut self, key: K) -> Option<T>
- 1586|   780k|    where
- 1587|   780k|        K: AsHeaderName,
+ 1585|   506k|    pub fn remove<K>(&mut self, key: K) -> Option<T>
+ 1586|   506k|    where
+ 1587|   506k|        K: AsHeaderName,
  1588|       |    {
- 1589|   780k|        match key.find(self) {
- 1590|  2.08k|            Some((probe, idx)) => {
- 1591|  2.08k|                if let Some(links) = self.entries[idx].links {
- 1592|  1.25k|                    self.remove_all_extra_values(links.next);
- 1593|  1.25k|                }
+ 1589|   506k|        match key.find(self) {
+ 1590|  1.70k|            Some((probe, idx)) => {
+ 1591|  1.70k|                if let Some(links) = self.entries[idx].links {
+ 1592|  1.21k|                    self.remove_all_extra_values(links.next);
+ 1593|  1.21k|                }
  1594|       |
- 1595|  2.08k|                let entry = self.remove_found(probe, idx);
+ 1595|  1.70k|                let entry = self.remove_found(probe, idx);
  1596|       |
- 1597|  2.08k|                Some(entry.value)
+ 1597|  1.70k|                Some(entry.value)
  1598|       |            }
- 1599|   778k|            None => None,
+ 1599|   504k|            None => None,
  1600|       |        }
- 1601|   780k|    }
+ 1601|   506k|    }
 _RINvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_9HeaderMap6removeRNtNtB8_4name10HeaderNameECsgqDbtxx8JzC_5hyper:
- 1585|   170k|    pub fn remove<K>(&mut self, key: K) -> Option<T>
- 1586|   170k|    where
- 1587|   170k|        K: AsHeaderName,
+ 1585|   111k|    pub fn remove<K>(&mut self, key: K) -> Option<T>
+ 1586|   111k|    where
+ 1587|   111k|        K: AsHeaderName,
  1588|       |    {
- 1589|   170k|        match key.find(self) {
+ 1589|   111k|        match key.find(self) {
  1590|      0|            Some((probe, idx)) => {
  1591|      0|                if let Some(links) = self.entries[idx].links {
  1592|      0|                    self.remove_all_extra_values(links.next);
@@ -937,49 +937,49 @@ _RINvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_9HeaderMap6removeRNtNtB8_4name10
  1596|       |
  1597|      0|                Some(entry.value)
  1598|       |            }
- 1599|   170k|            None => None,
+ 1599|   111k|            None => None,
  1600|       |        }
- 1601|   170k|    }
+ 1601|   111k|    }
 _RINvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_9HeaderMap7get_allRNtNtB8_4name10HeaderNameECsgqDbtxx8JzC_5hyper:
-  882|   867k|    pub fn get_all<K>(&self, key: K) -> GetAll<'_, T>
-  883|   867k|    where
-  884|   867k|        K: AsHeaderName,
+  882|   562k|    pub fn get_all<K>(&self, key: K) -> GetAll<'_, T>
+  883|   562k|    where
+  884|   562k|        K: AsHeaderName,
   885|       |    {
   886|       |        GetAll {
-  887|   867k|            map: self,
-  888|   867k|            index: key.find(self).map(|(_, i)| i),
+  887|   562k|            map: self,
+  888|   562k|            index: key.find(self).map(|(_, i)| i),
   889|       |        }
-  890|   867k|    }
+  890|   562k|    }
 _RINvNtNtCs4Leuz0euYUT_4http6header3map18remove_extra_valueNtNtB4_5value11HeaderValueECsgqDbtxx8JzC_5hyper:
- 1840|  17.3k|fn remove_extra_value<T>(
- 1841|  17.3k|    mut raw_links: RawLinks<T>,
- 1842|  17.3k|    extra_values: &mut Vec<ExtraValue<T>>,
- 1843|  17.3k|    idx: usize,
- 1844|  17.3k|) -> ExtraValue<T> {
+ 1840|  12.9k|fn remove_extra_value<T>(
+ 1841|  12.9k|    mut raw_links: RawLinks<T>,
+ 1842|  12.9k|    extra_values: &mut Vec<ExtraValue<T>>,
+ 1843|  12.9k|    idx: usize,
+ 1844|  12.9k|) -> ExtraValue<T> {
  1845|       |    let prev;
  1846|       |    let next;
  1847|       |
  1848|       |    {
- 1849|  17.3k|        debug_assert!(extra_values.len() > idx);
- 1850|  17.3k|        let extra = &extra_values[idx];
- 1851|  17.3k|        prev = extra.prev;
- 1852|  17.3k|        next = extra.next;
+ 1849|  12.9k|        debug_assert!(extra_values.len() > idx);
+ 1850|  12.9k|        let extra = &extra_values[idx];
+ 1851|  12.9k|        prev = extra.prev;
+ 1852|  12.9k|        next = extra.next;
  1853|       |    }
  1854|       |
  1855|       |    // First unlink the extra value
- 1856|  17.3k|    match (prev, next) {
- 1857|  1.25k|        (Link::Entry(prev), Link::Entry(next)) => {
- 1858|  1.25k|            debug_assert_eq!(prev, next);
+ 1856|  12.9k|    match (prev, next) {
+ 1857|  1.21k|        (Link::Entry(prev), Link::Entry(next)) => {
+ 1858|  1.21k|            debug_assert_eq!(prev, next);
  1859|       |
- 1860|  1.25k|            raw_links[prev] = None;
+ 1860|  1.21k|            raw_links[prev] = None;
  1861|       |        }
- 1862|  16.0k|        (Link::Entry(prev), Link::Extra(next)) => {
- 1863|  16.0k|            debug_assert!(raw_links[prev].is_some());
+ 1862|  11.7k|        (Link::Entry(prev), Link::Extra(next)) => {
+ 1863|  11.7k|            debug_assert!(raw_links[prev].is_some());
  1864|       |
- 1865|  16.0k|            raw_links[prev].as_mut().unwrap().next = next;
+ 1865|  11.7k|            raw_links[prev].as_mut().unwrap().next = next;
  1866|       |
- 1867|  16.0k|            debug_assert!(extra_values.len() > next);
- 1868|  16.0k|            extra_values[next].prev = Link::Entry(prev);
+ 1867|  11.7k|            debug_assert!(extra_values.len() > next);
+ 1868|  11.7k|            extra_values[next].prev = Link::Entry(prev);
  1869|       |        }
  1870|      0|        (Link::Extra(prev), Link::Entry(next)) => {
  1871|      0|            debug_assert!(raw_links[next].is_some());
@@ -999,65 +999,65 @@ _RINvNtNtCs4Leuz0euYUT_4http6header3map18remove_extra_valueNtNtB4_5value11Header
  1885|       |    }
  1886|       |
  1887|       |    // Remove the extra value
- 1888|  17.3k|    let mut extra = extra_values.swap_remove(idx);
+ 1888|  12.9k|    let mut extra = extra_values.swap_remove(idx);
  1889|       |
  1890|       |    // This is the index of the value that was moved (possibly `extra`)
- 1891|  17.3k|    let old_idx = extra_values.len();
+ 1891|  12.9k|    let old_idx = extra_values.len();
  1892|       |
  1893|       |    // Update the links
- 1894|  17.3k|    if extra.prev == Link::Extra(old_idx) {
+ 1894|  12.9k|    if extra.prev == Link::Extra(old_idx) {
  1895|      0|        extra.prev = Link::Extra(idx);
- 1896|  17.3k|    }
+ 1896|  12.9k|    }
  1897|       |
- 1898|  17.3k|    if extra.next == Link::Extra(old_idx) {
- 1899|    363|        extra.next = Link::Extra(idx);
- 1900|  16.9k|    }
+ 1898|  12.9k|    if extra.next == Link::Extra(old_idx) {
+ 1899|    402|        extra.next = Link::Extra(idx);
+ 1900|  12.5k|    }
  1901|       |
  1902|       |    // Check if another entry was displaced. If it was, then the links
  1903|       |    // need to be fixed.
- 1904|  17.3k|    if idx != old_idx {
+ 1904|  12.9k|    if idx != old_idx {
  1905|       |        let next;
  1906|       |        let prev;
  1907|       |
  1908|       |        {
- 1909|  15.3k|            debug_assert!(extra_values.len() > idx);
- 1910|  15.3k|            let moved = &extra_values[idx];
- 1911|  15.3k|            next = moved.next;
- 1912|  15.3k|            prev = moved.prev;
+ 1909|  10.8k|            debug_assert!(extra_values.len() > idx);
+ 1910|  10.8k|            let moved = &extra_values[idx];
+ 1911|  10.8k|            next = moved.next;
+ 1912|  10.8k|            prev = moved.prev;
  1913|       |        }
  1914|       |
  1915|       |        // An entry was moved, we have to the links
- 1916|  15.3k|        match prev {
- 1917|  2.83k|            Link::Entry(entry_idx) => {
+ 1916|  10.8k|        match prev {
+ 1917|  1.98k|            Link::Entry(entry_idx) => {
  1918|       |                // It is critical that we do not attempt to read the
  1919|       |                // header name or value as that memory may have been
  1920|       |                // "released" already.
- 1921|  2.83k|                debug_assert!(raw_links[entry_idx].is_some());
+ 1921|  1.98k|                debug_assert!(raw_links[entry_idx].is_some());
  1922|       |
- 1923|  2.83k|                let links = raw_links[entry_idx].as_mut().unwrap();
- 1924|  2.83k|                links.next = idx;
+ 1923|  1.98k|                let links = raw_links[entry_idx].as_mut().unwrap();
+ 1924|  1.98k|                links.next = idx;
  1925|       |            }
- 1926|  12.5k|            Link::Extra(extra_idx) => {
- 1927|  12.5k|                debug_assert!(extra_values.len() > extra_idx);
- 1928|  12.5k|                extra_values[extra_idx].next = Link::Extra(idx);
+ 1926|  8.82k|            Link::Extra(extra_idx) => {
+ 1927|  8.82k|                debug_assert!(extra_values.len() > extra_idx);
+ 1928|  8.82k|                extra_values[extra_idx].next = Link::Extra(idx);
  1929|       |            }
  1930|       |        }
  1931|       |
- 1932|  15.3k|        match next {
- 1933|  4.34k|            Link::Entry(entry_idx) => {
- 1934|  4.34k|                debug_assert!(raw_links[entry_idx].is_some());
+ 1932|  10.8k|        match next {
+ 1933|  2.96k|            Link::Entry(entry_idx) => {
+ 1934|  2.96k|                debug_assert!(raw_links[entry_idx].is_some());
  1935|       |
- 1936|  4.34k|                let links = raw_links[entry_idx].as_mut().unwrap();
- 1937|  4.34k|                links.tail = idx;
+ 1936|  2.96k|                let links = raw_links[entry_idx].as_mut().unwrap();
+ 1937|  2.96k|                links.tail = idx;
  1938|       |            }
- 1939|  11.0k|            Link::Extra(extra_idx) => {
- 1940|  11.0k|                debug_assert!(extra_values.len() > extra_idx);
- 1941|  11.0k|                extra_values[extra_idx].prev = Link::Extra(idx);
+ 1939|  7.85k|            Link::Extra(extra_idx) => {
+ 1940|  7.85k|                debug_assert!(extra_values.len() > extra_idx);
+ 1941|  7.85k|                extra_values[extra_idx].prev = Link::Extra(idx);
  1942|       |            }
  1943|       |        }
- 1944|  1.99k|    }
+ 1944|  2.12k|    }
  1945|       |
- 1946|  17.3k|    debug_assert!({
+ 1946|  12.9k|    debug_assert!({
  1947|      0|        for v in &*extra_values {
  1948|      0|            assert!(v.next != Link::Extra(old_idx));
  1949|      0|            assert!(v.prev != Link::Extra(old_idx));
@@ -1066,290 +1066,290 @@ _RINvNtNtCs4Leuz0euYUT_4http6header3map18remove_extra_valueNtNtB4_5value11Header
  1952|      0|        true
  1953|       |    });
  1954|       |
- 1955|  17.3k|    extra
- 1956|  17.3k|}
+ 1955|  12.9k|    extra
+ 1956|  12.9k|}
 _RNvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB5_9HeaderMap12remove_foundCsgqDbtxx8JzC_5hyper:
- 1609|  2.08k|    fn remove_found(&mut self, probe: usize, found: usize) -> Bucket<T> {
+ 1609|  1.70k|    fn remove_found(&mut self, probe: usize, found: usize) -> Bucket<T> {
  1610|       |        // index `probe` and entry `found` is to be removed
  1611|       |        // use swap_remove, but then we need to update the index that points
  1612|       |        // to the other entry that has to move
- 1613|  2.08k|        self.indices[probe] = Pos::none();
- 1614|  2.08k|        let entry = self.entries.swap_remove(found);
+ 1613|  1.70k|        self.indices[probe] = Pos::none();
+ 1614|  1.70k|        let entry = self.entries.swap_remove(found);
  1615|       |
  1616|       |        // correct index that points to the entry that had to swap places
- 1617|  2.08k|        if let Some(entry) = self.entries.get(found) {
+ 1617|  1.70k|        if let Some(entry) = self.entries.get(found) {
  1618|       |            // was not last element
  1619|       |            // examine new element in `found` and find it in indices
- 1620|  1.84k|            let mut probe = desired_pos(self.mask, entry.hash);
+ 1620|  1.21k|            let mut probe = desired_pos(self.mask, entry.hash);
  1621|       |
- 1622|  4.98k|            probe_loop!(probe < self.indices.len(), {
- 1623|  4.15k|                if let Some((i, _)) = self.indices[probe].resolve() {
- 1624|  3.78k|                    if i >= self.entries.len() {
+ 1622|  2.84k|            probe_loop!(probe < self.indices.len(), {
+ 1623|  2.55k|                if let Some((i, _)) = self.indices[probe].resolve() {
+ 1624|  2.37k|                    if i >= self.entries.len() {
  1625|       |                        // found it
- 1626|  1.84k|                        self.indices[probe] = Pos::new(found, entry.hash);
- 1627|  1.84k|                        break;
- 1628|  1.93k|                    }
- 1629|    375|                }
+ 1626|  1.21k|                        self.indices[probe] = Pos::new(found, entry.hash);
+ 1627|  1.21k|                        break;
+ 1628|  1.16k|                    }
+ 1629|    181|                }
  1630|       |            });
  1631|       |
  1632|       |            // Update links
- 1633|  1.84k|            if let Some(links) = entry.links {
- 1634|    480|                self.extra_values[links.next].prev = Link::Entry(found);
- 1635|    480|                self.extra_values[links.tail].next = Link::Entry(found);
- 1636|  1.36k|            }
- 1637|    243|        }
+ 1633|  1.21k|            if let Some(links) = entry.links {
+ 1634|    438|                self.extra_values[links.next].prev = Link::Entry(found);
+ 1635|    438|                self.extra_values[links.tail].next = Link::Entry(found);
+ 1636|    777|            }
+ 1637|    492|        }
  1638|       |
  1639|       |        // backward shift deletion in self.indices
  1640|       |        // after probe, shift all non-ideally placed indices backward
- 1641|  2.08k|        if !self.entries.is_empty() {
- 1642|  1.88k|            let mut last_probe = probe;
- 1643|  1.88k|            let mut probe = probe + 1;
+ 1641|  1.70k|        if !self.entries.is_empty() {
+ 1642|  1.39k|            let mut last_probe = probe;
+ 1643|  1.39k|            let mut probe = probe + 1;
  1644|       |
- 1645|  6.37k|            probe_loop!(probe < self.indices.len(), {
- 1646|  5.38k|                if let Some((_, entry_hash)) = self.indices[probe].resolve() {
- 1647|  3.86k|                    if probe_distance(self.mask, entry_hash, probe) > 0 {
- 1648|  3.49k|                        self.indices[last_probe] = self.indices[probe];
- 1649|  3.49k|                        self.indices[probe] = Pos::none();
- 1650|  3.49k|                    } else {
- 1651|    369|                        break;
+ 1645|  3.20k|            probe_loop!(probe < self.indices.len(), {
+ 1646|  2.76k|                if let Some((_, entry_hash)) = self.indices[probe].resolve() {
+ 1647|  1.60k|                    if probe_distance(self.mask, entry_hash, probe) > 0 {
+ 1648|  1.37k|                        self.indices[last_probe] = self.indices[probe];
+ 1649|  1.37k|                        self.indices[probe] = Pos::none();
+ 1650|  1.37k|                    } else {
+ 1651|    237|                        break;
  1652|       |                    }
  1653|       |                } else {
- 1654|  1.51k|                    break;
+ 1654|  1.16k|                    break;
  1655|       |                }
  1656|       |
- 1657|  3.49k|                last_probe = probe;
+ 1657|  1.37k|                last_probe = probe;
  1658|       |            });
- 1659|    200|        }
+ 1659|    309|        }
  1660|       |
- 1661|  2.08k|        entry
- 1662|  2.08k|    }
+ 1661|  1.70k|        entry
+ 1662|  1.70k|    }
 _RNvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB5_9HeaderMap18remove_extra_valueCsgqDbtxx8JzC_5hyper:
- 1666|  17.3k|    fn remove_extra_value(&mut self, idx: usize) -> ExtraValue<T> {
- 1667|  17.3k|        let raw_links = self.raw_links();
- 1668|  17.3k|        remove_extra_value(raw_links, &mut self.extra_values, idx)
- 1669|  17.3k|    }
+ 1666|  12.9k|    fn remove_extra_value(&mut self, idx: usize) -> ExtraValue<T> {
+ 1667|  12.9k|        let raw_links = self.raw_links();
+ 1668|  12.9k|        remove_extra_value(raw_links, &mut self.extra_values, idx)
+ 1669|  12.9k|    }
 _RNvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB5_9HeaderMap23remove_all_extra_valuesCsgqDbtxx8JzC_5hyper:
- 1671|  1.25k|    fn remove_all_extra_values(&mut self, mut head: usize) {
+ 1671|  1.21k|    fn remove_all_extra_values(&mut self, mut head: usize) {
  1672|       |        loop {
- 1673|  17.3k|            let extra = self.remove_extra_value(head);
+ 1673|  12.9k|            let extra = self.remove_extra_value(head);
  1674|       |
- 1675|  17.3k|            if let Link::Extra(idx) = extra.next {
- 1676|  16.0k|                head = idx;
- 1677|  16.0k|            } else {
- 1678|  1.25k|                break;
+ 1675|  12.9k|            if let Link::Extra(idx) = extra.next {
+ 1676|  11.7k|                head = idx;
+ 1677|  11.7k|            } else {
+ 1678|  1.21k|                break;
  1679|       |            }
  1680|       |        }
- 1681|  1.25k|    }
+ 1681|  1.21k|    }
 _RNvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB5_9HeaderMap9raw_linksCsgqDbtxx8JzC_5hyper:
- 1833|  17.3k|    fn raw_links(&mut self) -> RawLinks<T> {
- 1834|  17.3k|        RawLinks(&mut self.entries[..] as *mut _)
- 1835|  17.3k|    }
+ 1833|  12.9k|    fn raw_links(&mut self) -> RawLinks<T> {
+ 1834|  12.9k|        RawLinks(&mut self.entries[..] as *mut _)
+ 1835|  12.9k|    }
 _RNvMs11_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_3Pos3newCsgqDbtxx8JzC_5hyper:
- 3615|  1.84k|    fn new(index: usize, hash: HashValue) -> Self {
- 3616|  1.84k|        debug_assert!(index < MAX_SIZE);
- 3617|  1.84k|        Pos {
- 3618|  1.84k|            index: index as Size,
- 3619|  1.84k|            hash,
- 3620|  1.84k|        }
- 3621|  1.84k|    }
+ 3615|  1.21k|    fn new(index: usize, hash: HashValue) -> Self {
+ 3616|  1.21k|        debug_assert!(index < MAX_SIZE);
+ 3617|  1.21k|        Pos {
+ 3618|  1.21k|            index: index as Size,
+ 3619|  1.21k|            hash,
+ 3620|  1.21k|        }
+ 3621|  1.21k|    }
 _RNvMs11_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_3Pos4noneCsgqDbtxx8JzC_5hyper:
- 3624|  5.58k|    fn none() -> Self {
- 3625|  5.58k|        Pos {
- 3626|  5.58k|            index: !0,
- 3627|  5.58k|            hash: HashValue(0),
- 3628|  5.58k|        }
- 3629|  5.58k|    }
+ 3624|  3.07k|    fn none() -> Self {
+ 3625|  3.07k|        Pos {
+ 3626|  3.07k|            index: !0,
+ 3627|  3.07k|            hash: HashValue(0),
+ 3628|  3.07k|        }
+ 3629|  3.07k|    }
 _RNvMs11_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_3Pos7is_noneCsgqDbtxx8JzC_5hyper:
- 3637|  9.53k|    fn is_none(&self) -> bool {
- 3638|  9.53k|        self.index == !0
- 3639|  9.53k|    }
+ 3637|  5.32k|    fn is_none(&self) -> bool {
+ 3638|  5.32k|        self.index == !0
+ 3639|  5.32k|    }
 _RNvMs11_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_3Pos7is_someCsgqDbtxx8JzC_5hyper:
- 3632|  9.53k|    fn is_some(&self) -> bool {
- 3633|  9.53k|        !self.is_none()
- 3634|  9.53k|    }
+ 3632|  5.32k|    fn is_some(&self) -> bool {
+ 3633|  5.32k|        !self.is_none()
+ 3634|  5.32k|    }
 _RNvMs11_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_3Pos7resolveCsgqDbtxx8JzC_5hyper:
- 3642|  9.53k|    fn resolve(&self) -> Option<(usize, HashValue)> {
- 3643|  9.53k|        if self.is_some() {
- 3644|  7.64k|            Some((self.index as usize, self.hash))
+ 3642|  5.32k|    fn resolve(&self) -> Option<(usize, HashValue)> {
+ 3643|  5.32k|        if self.is_some() {
+ 3644|  3.98k|            Some((self.index as usize, self.hash))
  3645|       |        } else {
- 3646|  1.89k|            None
+ 3646|  1.34k|            None
  3647|       |        }
- 3648|  9.53k|    }
+ 3648|  5.32k|    }
 _RNvMsz_NtNtCs4Leuz0euYUT_4http6header3mapINtB5_6GetAllNtNtB7_5value11HeaderValueE4iterCsgqDbtxx8JzC_5hyper:
- 2929|  1.04M|    pub fn iter(&self) -> ValueIter<'a, T> {
+ 2929|   674k|    pub fn iter(&self) -> ValueIter<'a, T> {
  2930|       |        // This creates a new GetAll struct so that the lifetime
  2931|       |        // isn't bound to &self.
- 2932|  1.04M|        GetAll {
- 2933|  1.04M|            map: self.map,
- 2934|  1.04M|            index: self.index,
- 2935|  1.04M|        }
- 2936|  1.04M|        .into_iter()
- 2937|  1.04M|    }
+ 2932|   674k|        GetAll {
+ 2933|   674k|            map: self.map,
+ 2934|   674k|            index: self.index,
+ 2935|   674k|        }
+ 2936|   674k|        .into_iter()
+ 2937|   674k|    }
 _RNvNtNtCs4Leuz0euYUT_4http6header3map11desired_posCsgqDbtxx8JzC_5hyper:
- 3714|  5.70k|fn desired_pos(mask: Size, hash: HashValue) -> usize {
- 3715|  5.70k|    (hash.0 & mask) as usize
- 3716|  5.70k|}
+ 3714|  2.82k|fn desired_pos(mask: Size, hash: HashValue) -> usize {
+ 3715|  2.82k|    (hash.0 & mask) as usize
+ 3716|  2.82k|}
 _RNvNtNtCs4Leuz0euYUT_4http6header3map14probe_distanceCsgqDbtxx8JzC_5hyper:
- 3720|  3.86k|fn probe_distance(mask: Size, hash: HashValue, current: usize) -> usize {
- 3721|  3.86k|    current.wrapping_sub(desired_pos(mask, hash)) & mask as usize
- 3722|  3.86k|}
+ 3720|  1.60k|fn probe_distance(mask: Size, hash: HashValue, current: usize) -> usize {
+ 3721|  1.60k|    current.wrapping_sub(desired_pos(mask, hash)) & mask as usize
+ 3722|  1.60k|}
 _RNvXs10_NtNtCs4Leuz0euYUT_4http6header3mapINtB6_8RawLinksNtNtB8_5value11HeaderValueEINtNtNtCs6SNw0SRvItZ_4core3ops5index8IndexMutjE9index_mutCsgqDbtxx8JzC_5hyper:
- 3606|  24.5k|    fn index_mut(&mut self, idx: usize) -> &mut Self::Output {
- 3607|  24.5k|        unsafe { &mut (*self.0)[idx].links }
- 3608|  24.5k|    }
+ 3606|  17.8k|    fn index_mut(&mut self, idx: usize) -> &mut Self::Output {
+ 3607|  17.8k|        unsafe { &mut (*self.0)[idx].links }
+ 3608|  17.8k|    }
 _RINvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_9HeaderMap10try_appendNtNtB8_4name10HeaderNameECs9X2BcFZoTlv_2h2:
- 1466|   505k|    pub fn try_append<K>(&mut self, key: K, value: T) -> Result<bool, MaxSizeReached>
- 1467|   505k|    where
- 1468|   505k|        K: IntoHeaderName,
+ 1466|   323k|    pub fn try_append<K>(&mut self, key: K, value: T) -> Result<bool, MaxSizeReached>
+ 1467|   323k|    where
+ 1468|   323k|        K: IntoHeaderName,
  1469|       |    {
- 1470|   505k|        key.try_append(self, value)
- 1471|   505k|    }
+ 1470|   323k|        key.try_append(self, value)
+ 1471|   323k|    }
 _RINvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_9HeaderMap11try_append2NtNtB8_4name10HeaderNameECs9X2BcFZoTlv_2h2:
- 1474|   505k|    fn try_append2<K>(&mut self, key: K, value: T) -> Result<bool, MaxSizeReached>
- 1475|   505k|    where
- 1476|   505k|        K: Hash + Into<HeaderName>,
- 1477|   505k|        HeaderName: PartialEq<K>,
+ 1474|   323k|    fn try_append2<K>(&mut self, key: K, value: T) -> Result<bool, MaxSizeReached>
+ 1475|   323k|    where
+ 1476|   323k|        K: Hash + Into<HeaderName>,
+ 1477|   323k|        HeaderName: PartialEq<K>,
  1478|       |    {
- 1479|   505k|        self.try_reserve_one()?;
+ 1479|   323k|        self.try_reserve_one()?;
  1480|       |
- 1481|   505k|        Ok(insert_phase_one!(
+ 1481|   323k|        Ok(insert_phase_one!(
  1482|       |            self,
- 1483|   367k|            key,
+ 1483|   250k|            key,
  1484|       |            probe,
  1485|       |            pos,
  1486|       |            hash,
  1487|       |            danger,
  1488|       |            // Vacant
  1489|       |            {
- 1490|   129k|                let _ = danger;
- 1491|   129k|                let index = self.entries.len();
- 1492|   129k|                self.try_insert_entry(hash, key.into(), value)?;
- 1493|   129k|                self.indices[probe] = Pos::new(index, hash);
- 1494|   129k|                false
+ 1490|  71.1k|                let _ = danger;
+ 1491|  71.1k|                let index = self.entries.len();
+ 1492|  71.1k|                self.try_insert_entry(hash, key.into(), value)?;
+ 1493|  71.1k|                self.indices[probe] = Pos::new(index, hash);
+ 1494|  71.1k|                false
  1495|       |            },
  1496|       |            // Occupied
  1497|       |            {
- 1498|   361k|                append_value(pos, &mut self.entries[pos], &mut self.extra_values, value);
- 1499|   361k|                true
+ 1498|   243k|                append_value(pos, &mut self.entries[pos], &mut self.extra_values, value);
+ 1499|   243k|                true
  1500|       |            },
  1501|       |            // Robinhood
  1502|       |            {
- 1503|  14.3k|                self.try_insert_phase_two(key.into(), value, hash, probe, danger)?;
+ 1503|  8.72k|                self.try_insert_phase_two(key.into(), value, hash, probe, danger)?;
  1504|       |
- 1505|  14.3k|                false
+ 1505|  8.72k|                false
  1506|       |            }
  1507|       |        ))
- 1508|   505k|    }
+ 1508|   323k|    }
 _RINvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_9HeaderMap12contains_keyNtNtB8_4name10HeaderNameECs9X2BcFZoTlv_2h2:
-  905|   260k|    pub fn contains_key<K>(&self, key: K) -> bool
-  906|   260k|    where
-  907|   260k|        K: AsHeaderName,
+  905|   168k|    pub fn contains_key<K>(&self, key: K) -> bool
+  906|   168k|    where
+  907|   168k|        K: AsHeaderName,
   908|       |    {
-  909|   260k|        key.find(self).is_some()
-  910|   260k|    }
+  909|   168k|        key.find(self).is_some()
+  910|   168k|    }
 _RINvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_9HeaderMap3getNtNtB8_4name10HeaderNameECs9X2BcFZoTlv_2h2:
-  807|  86.7k|    pub fn get<K>(&self, key: K) -> Option<&T>
-  808|  86.7k|    where
-  809|  86.7k|        K: AsHeaderName,
+  807|  56.2k|    pub fn get<K>(&self, key: K) -> Option<&T>
+  808|  56.2k|    where
+  809|  56.2k|        K: AsHeaderName,
   810|       |    {
-  811|  86.7k|        self.get2(&key)
-  812|  86.7k|    }
+  811|  56.2k|        self.get2(&key)
+  812|  56.2k|    }
 _RINvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_9HeaderMap4findNtNtB8_4name10HeaderNameECs9X2BcFZoTlv_2h2:
- 1511|  2.94M|    fn find<K>(&self, key: &K) -> Option<(usize, usize)>
- 1512|  2.94M|    where
- 1513|  2.94M|        K: Hash + Into<HeaderName> + ?Sized,
- 1514|  2.94M|        HeaderName: PartialEq<K>,
+ 1511|  1.91M|    fn find<K>(&self, key: &K) -> Option<(usize, usize)>
+ 1512|  1.91M|    where
+ 1513|  1.91M|        K: Hash + Into<HeaderName> + ?Sized,
+ 1514|  1.91M|        HeaderName: PartialEq<K>,
  1515|       |    {
- 1516|  2.94M|        if self.entries.is_empty() {
- 1517|   871k|            return None;
- 1518|  2.07M|        }
+ 1516|  1.91M|        if self.entries.is_empty() {
+ 1517|   648k|            return None;
+ 1518|  1.26M|        }
  1519|       |
- 1520|  2.07M|        let hash = hash_elem_using(&self.danger, key);
- 1521|  2.07M|        let mask = self.mask;
- 1522|  2.07M|        let mut probe = desired_pos(mask, hash);
- 1523|  2.07M|        let mut dist = 0;
+ 1520|  1.26M|        let hash = hash_elem_using(&self.danger, key);
+ 1521|  1.26M|        let mask = self.mask;
+ 1522|  1.26M|        let mut probe = desired_pos(mask, hash);
+ 1523|  1.26M|        let mut dist = 0;
  1524|       |
- 1525|  2.81M|        probe_loop!(probe < self.indices.len(), {
- 1526|  2.73M|            if let Some((i, entry_hash)) = self.indices[probe].resolve() {
- 1527|  1.45M|                if dist > probe_distance(mask, entry_hash, probe) {
+ 1525|  1.62M|        probe_loop!(probe < self.indices.len(), {
+ 1526|  1.58M|            if let Some((i, entry_hash)) = self.indices[probe].resolve() {
+ 1527|   837k|                if dist > probe_distance(mask, entry_hash, probe) {
  1528|       |                    // give up when probe distance is too long
- 1529|   106k|                    return None;
- 1530|  1.35M|                } else if entry_hash == hash && self.entries[i].key == *key {
- 1531|   696k|                    return Some((probe, i));
- 1532|   656k|                }
+ 1529|  58.8k|                    return None;
+ 1530|   778k|                } else if entry_hash == hash && self.entries[i].key == *key {
+ 1531|   451k|                    return Some((probe, i));
+ 1532|   327k|                }
  1533|       |            } else {
- 1534|  1.27M|                return None;
+ 1534|   751k|                return None;
  1535|       |            }
  1536|       |
- 1537|   656k|            dist += 1;
+ 1537|   327k|            dist += 1;
  1538|       |        });
- 1539|  2.94M|    }
+ 1539|  1.91M|    }
 _RINvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_9HeaderMap4get2NtNtB8_4name10HeaderNameECs9X2BcFZoTlv_2h2:
-  814|  86.7k|    fn get2<K>(&self, key: &K) -> Option<&T>
-  815|  86.7k|    where
-  816|  86.7k|        K: AsHeaderName,
+  814|  56.2k|    fn get2<K>(&self, key: &K) -> Option<&T>
+  815|  56.2k|    where
+  816|  56.2k|        K: AsHeaderName,
   817|       |    {
-  818|  86.7k|        match key.find(self) {
+  818|  56.2k|        match key.find(self) {
   819|      0|            Some((_, found)) => {
   820|      0|                let entry = &self.entries[found];
   821|      0|                Some(&entry.value)
   822|       |            }
-  823|  86.7k|            None => None,
+  823|  56.2k|            None => None,
   824|       |        }
-  825|  86.7k|    }
+  825|  56.2k|    }
 _RINvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_9HeaderMap7get_allNtNtB8_4name10HeaderNameECs9X2BcFZoTlv_2h2:
-  882|   173k|    pub fn get_all<K>(&self, key: K) -> GetAll<'_, T>
-  883|   173k|    where
-  884|   173k|        K: AsHeaderName,
+  882|   112k|    pub fn get_all<K>(&self, key: K) -> GetAll<'_, T>
+  883|   112k|    where
+  884|   112k|        K: AsHeaderName,
   885|       |    {
   886|       |        GetAll {
-  887|   173k|            map: self,
-  888|   173k|            index: key.find(self).map(|(_, i)| i),
+  887|   112k|            map: self,
+  888|   112k|            index: key.find(self).map(|(_, i)| i),
   889|       |        }
-  890|   173k|    }
+  890|   112k|    }
 _RINvNtNtCs4Leuz0euYUT_4http6header3map12append_valueNtNtB4_5value11HeaderValueECs9X2BcFZoTlv_2h2:
- 2286|   361k|fn append_value<T>(
- 2287|   361k|    entry_idx: usize,
- 2288|   361k|    entry: &mut Bucket<T>,
- 2289|   361k|    extra: &mut Vec<ExtraValue<T>>,
- 2290|   361k|    value: T,
- 2291|   361k|) {
- 2292|   361k|    match entry.links {
- 2293|   301k|        Some(links) => {
- 2294|   301k|            let idx = extra.len();
- 2295|   301k|            extra.push(ExtraValue {
- 2296|   301k|                value,
- 2297|   301k|                prev: Link::Extra(links.tail),
- 2298|   301k|                next: Link::Entry(entry_idx),
- 2299|   301k|            });
- 2300|   301k|
- 2301|   301k|            extra[links.tail].next = Link::Extra(idx);
- 2302|   301k|
- 2303|   301k|            entry.links = Some(Links { tail: idx, ..links });
- 2304|   301k|        }
- 2305|  60.0k|        None => {
- 2306|  60.0k|            let idx = extra.len();
- 2307|  60.0k|            extra.push(ExtraValue {
- 2308|  60.0k|                value,
- 2309|  60.0k|                prev: Link::Entry(entry_idx),
- 2310|  60.0k|                next: Link::Entry(entry_idx),
- 2311|  60.0k|            });
- 2312|  60.0k|
- 2313|  60.0k|            entry.links = Some(Links {
- 2314|  60.0k|                next: idx,
- 2315|  60.0k|                tail: idx,
- 2316|  60.0k|            });
- 2317|  60.0k|        }
+ 2286|   243k|fn append_value<T>(
+ 2287|   243k|    entry_idx: usize,
+ 2288|   243k|    entry: &mut Bucket<T>,
+ 2289|   243k|    extra: &mut Vec<ExtraValue<T>>,
+ 2290|   243k|    value: T,
+ 2291|   243k|) {
+ 2292|   243k|    match entry.links {
+ 2293|   207k|        Some(links) => {
+ 2294|   207k|            let idx = extra.len();
+ 2295|   207k|            extra.push(ExtraValue {
+ 2296|   207k|                value,
+ 2297|   207k|                prev: Link::Extra(links.tail),
+ 2298|   207k|                next: Link::Entry(entry_idx),
+ 2299|   207k|            });
+ 2300|   207k|
+ 2301|   207k|            extra[links.tail].next = Link::Extra(idx);
+ 2302|   207k|
+ 2303|   207k|            entry.links = Some(Links { tail: idx, ..links });
+ 2304|   207k|        }
+ 2305|  35.6k|        None => {
+ 2306|  35.6k|            let idx = extra.len();
+ 2307|  35.6k|            extra.push(ExtraValue {
+ 2308|  35.6k|                value,
+ 2309|  35.6k|                prev: Link::Entry(entry_idx),
+ 2310|  35.6k|                next: Link::Entry(entry_idx),
+ 2311|  35.6k|            });
+ 2312|  35.6k|
+ 2313|  35.6k|            entry.links = Some(Links {
+ 2314|  35.6k|                next: idx,
+ 2315|  35.6k|                tail: idx,
+ 2316|  35.6k|            });
+ 2317|  35.6k|        }
  2318|       |    }
- 2319|   361k|}
+ 2319|   243k|}
 _RINvNtNtCs4Leuz0euYUT_4http6header3map15hash_elem_usingNtNtB4_4name10HeaderNameECs9X2BcFZoTlv_2h2:
- 3725|  2.58M|fn hash_elem_using<K>(danger: &Danger, k: &K) -> HashValue
- 3726|  2.58M|where
- 3727|  2.58M|    K: Hash + ?Sized,
+ 3725|  1.58M|fn hash_elem_using<K>(danger: &Danger, k: &K) -> HashValue
+ 3726|  1.58M|where
+ 3727|  1.58M|    K: Hash + ?Sized,
  3728|       |{
  3729|       |    const MASK: u64 = (MAX_SIZE as u64) - 1;
  3730|       |
- 3731|  2.58M|    let hash = match *danger {
+ 3731|  1.58M|    let hash = match *danger {
  3732|       |        // Safe hash
  3733|      0|        Danger::Red(ref hasher) => {
  3734|      0|            let mut h = hasher.build_hasher();
@@ -1358,45 +1358,45 @@ _RINvNtNtCs4Leuz0euYUT_4http6header3map15hash_elem_usingNtNtB4_4name10HeaderName
  3737|       |        }
  3738|       |        // Fast hash
  3739|       |        _ => {
- 3740|  2.58M|            let mut h = FnvHasher::new();
- 3741|  2.58M|            k.hash(&mut h);
- 3742|  2.58M|            h.finish()
+ 3740|  1.58M|            let mut h = FnvHasher::new();
+ 3741|  1.58M|            k.hash(&mut h);
+ 3742|  1.58M|            h.finish()
  3743|       |        }
  3744|       |    };
  3745|       |
- 3746|  2.58M|    HashValue((hash & MASK) as u16)
- 3747|  2.58M|}
+ 3746|  1.58M|    HashValue((hash & MASK) as u16)
+ 3747|  1.58M|}
 _RNvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB5_9HeaderMap10value_iterCs9X2BcFZoTlv_2h2:
- 1108|  1.04M|    fn value_iter(&self, idx: Option<usize>) -> ValueIter<'_, T> {
+ 1108|   674k|    fn value_iter(&self, idx: Option<usize>) -> ValueIter<'_, T> {
  1109|       |        use self::Cursor::*;
  1110|       |
- 1111|  1.04M|        if let Some(idx) = idx {
- 1112|   694k|            let back = {
- 1113|   694k|                let entry = &self.entries[idx];
+ 1111|   674k|        if let Some(idx) = idx {
+ 1112|   449k|            let back = {
+ 1113|   449k|                let entry = &self.entries[idx];
  1114|       |
- 1115|   694k|                entry.links.map(|l| Values(l.tail)).unwrap_or(Head)
+ 1115|   449k|                entry.links.map(|l| Values(l.tail)).unwrap_or(Head)
  1116|       |            };
  1117|       |
- 1118|   694k|            ValueIter {
- 1119|   694k|                map: self,
- 1120|   694k|                index: idx,
- 1121|   694k|                front: Some(Head),
- 1122|   694k|                back: Some(back),
- 1123|   694k|            }
+ 1118|   449k|            ValueIter {
+ 1119|   449k|                map: self,
+ 1120|   449k|                index: idx,
+ 1121|   449k|                front: Some(Head),
+ 1122|   449k|                back: Some(back),
+ 1123|   449k|            }
  1124|       |        } else {
- 1125|   347k|            ValueIter {
- 1126|   347k|                map: self,
- 1127|   347k|                index: usize::MAX,
- 1128|   347k|                front: None,
- 1129|   347k|                back: None,
- 1130|   347k|            }
+ 1125|   224k|            ValueIter {
+ 1126|   224k|                map: self,
+ 1127|   224k|                index: usize::MAX,
+ 1128|   224k|                front: None,
+ 1129|   224k|                back: None,
+ 1130|   224k|            }
  1131|       |        }
- 1132|  1.04M|    }
+ 1132|   674k|    }
 _RNvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB5_9HeaderMap15try_reserve_oneCs9X2BcFZoTlv_2h2:
- 1751|   505k|    fn try_reserve_one(&mut self) -> Result<(), MaxSizeReached> {
- 1752|   505k|        let len = self.entries.len();
+ 1751|   323k|    fn try_reserve_one(&mut self) -> Result<(), MaxSizeReached> {
+ 1752|   323k|        let len = self.entries.len();
  1753|       |
- 1754|   505k|        if self.danger.is_yellow() {
+ 1754|   323k|        if self.danger.is_yellow() {
  1755|       |            // Overflow is not a concern here: entries.len() is bounded by
  1756|       |            // MAX_SIZE (2^15) and LOAD_FACTOR_THRESHOLD is 5, so the product
  1757|       |            // fits comfortably within a usize.
@@ -1419,214 +1419,214 @@ _RNvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB5_9HeaderMap15try_reserve_oneCs9X2B
  1774|       |
  1775|      0|                self.rebuild();
  1776|       |            }
- 1777|   505k|        } else if len == self.capacity() {
- 1778|  53.0k|            if len == 0 {
- 1779|  45.3k|                let new_raw_cap = 8;
- 1780|  45.3k|                self.mask = 8 - 1;
- 1781|  45.3k|                self.indices = vec![Pos::none(); new_raw_cap].into_boxed_slice();
- 1782|  45.3k|                self.entries = Vec::with_capacity(usable_capacity(new_raw_cap));
- 1783|  45.3k|            } else {
- 1784|  7.71k|                let raw_cap = self.indices.len();
- 1785|  7.71k|                self.try_grow(raw_cap << 1)?;
+ 1777|   323k|        } else if len == self.capacity() {
+ 1778|  29.7k|            if len == 0 {
+ 1779|  25.5k|                let new_raw_cap = 8;
+ 1780|  25.5k|                self.mask = 8 - 1;
+ 1781|  25.5k|                self.indices = vec![Pos::none(); new_raw_cap].into_boxed_slice();
+ 1782|  25.5k|                self.entries = Vec::with_capacity(usable_capacity(new_raw_cap));
+ 1783|  25.5k|            } else {
+ 1784|  4.27k|                let raw_cap = self.indices.len();
+ 1785|  4.27k|                self.try_grow(raw_cap << 1)?;
  1786|       |            }
- 1787|   452k|        }
+ 1787|   293k|        }
  1788|       |
- 1789|   505k|        Ok(())
- 1790|   505k|    }
+ 1789|   323k|        Ok(())
+ 1790|   323k|    }
 _RNvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB5_9HeaderMap16try_insert_entryCs9X2BcFZoTlv_2h2:
- 1684|   143k|    fn try_insert_entry(
- 1685|   143k|        &mut self,
- 1686|   143k|        hash: HashValue,
- 1687|   143k|        key: HeaderName,
- 1688|   143k|        value: T,
- 1689|   143k|    ) -> Result<(), MaxSizeReached> {
- 1690|   143k|        if self.entries.len() >= MAX_SIZE {
+ 1684|  79.8k|    fn try_insert_entry(
+ 1685|  79.8k|        &mut self,
+ 1686|  79.8k|        hash: HashValue,
+ 1687|  79.8k|        key: HeaderName,
+ 1688|  79.8k|        value: T,
+ 1689|  79.8k|    ) -> Result<(), MaxSizeReached> {
+ 1690|  79.8k|        if self.entries.len() >= MAX_SIZE {
  1691|      0|            return Err(MaxSizeReached::new());
- 1692|   143k|        }
+ 1692|  79.8k|        }
  1693|       |
- 1694|   143k|        self.entries.push(Bucket {
- 1695|   143k|            hash,
- 1696|   143k|            key,
- 1697|   143k|            value,
- 1698|   143k|            links: None,
- 1699|   143k|        });
+ 1694|  79.8k|        self.entries.push(Bucket {
+ 1695|  79.8k|            hash,
+ 1696|  79.8k|            key,
+ 1697|  79.8k|            value,
+ 1698|  79.8k|            links: None,
+ 1699|  79.8k|        });
  1700|       |
- 1701|   143k|        Ok(())
- 1702|   143k|    }
+ 1701|  79.8k|        Ok(())
+ 1702|  79.8k|    }
 _RNvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB5_9HeaderMap20try_insert_phase_twoCs9X2BcFZoTlv_2h2:
- 1543|  14.3k|    fn try_insert_phase_two(
- 1544|  14.3k|        &mut self,
- 1545|  14.3k|        key: HeaderName,
- 1546|  14.3k|        value: T,
- 1547|  14.3k|        hash: HashValue,
- 1548|  14.3k|        probe: usize,
- 1549|  14.3k|        danger: bool,
- 1550|  14.3k|    ) -> Result<usize, MaxSizeReached> {
+ 1543|  8.72k|    fn try_insert_phase_two(
+ 1544|  8.72k|        &mut self,
+ 1545|  8.72k|        key: HeaderName,
+ 1546|  8.72k|        value: T,
+ 1547|  8.72k|        hash: HashValue,
+ 1548|  8.72k|        probe: usize,
+ 1549|  8.72k|        danger: bool,
+ 1550|  8.72k|    ) -> Result<usize, MaxSizeReached> {
  1551|       |        // Push the value and get the index
- 1552|  14.3k|        let index = self.entries.len();
- 1553|  14.3k|        self.try_insert_entry(hash, key, value)?;
+ 1552|  8.72k|        let index = self.entries.len();
+ 1553|  8.72k|        self.try_insert_entry(hash, key, value)?;
  1554|       |
- 1555|  14.3k|        let num_displaced = do_insert_phase_two(&mut self.indices, probe, Pos::new(index, hash));
+ 1555|  8.72k|        let num_displaced = do_insert_phase_two(&mut self.indices, probe, Pos::new(index, hash));
  1556|       |
- 1557|  14.3k|        if danger || num_displaced >= DISPLACEMENT_THRESHOLD {
+ 1557|  8.72k|        if danger || num_displaced >= DISPLACEMENT_THRESHOLD {
  1558|      0|            // Increase danger level
  1559|      0|            self.danger.set_yellow();
- 1560|  14.3k|        }
+ 1560|  8.72k|        }
  1561|       |
- 1562|  14.3k|        Ok(index)
- 1563|  14.3k|    }
+ 1562|  8.72k|        Ok(index)
+ 1563|  8.72k|    }
 _RNvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB5_9HeaderMap23reinsert_entry_in_orderCs9X2BcFZoTlv_2h2:
- 1736|  77.8k|    fn reinsert_entry_in_order(&mut self, pos: Pos) {
- 1737|  77.8k|        if let Some((_, entry_hash)) = pos.resolve() {
+ 1736|  46.2k|    fn reinsert_entry_in_order(&mut self, pos: Pos) {
+ 1737|  46.2k|        if let Some((_, entry_hash)) = pos.resolve() {
  1738|       |            // Find first empty bucket and insert there
- 1739|  58.3k|            let mut probe = desired_pos(self.mask, entry_hash);
+ 1739|  34.6k|            let mut probe = desired_pos(self.mask, entry_hash);
  1740|       |
- 1741|  89.5k|            probe_loop!(probe < self.indices.len(), {
- 1742|  86.0k|                if self.indices[probe].resolve().is_none() {
+ 1741|  53.0k|            probe_loop!(probe < self.indices.len(), {
+ 1742|  51.3k|                if self.indices[probe].resolve().is_none() {
  1743|       |                    // empty bucket, insert here
- 1744|  58.3k|                    self.indices[probe] = pos;
- 1745|  58.3k|                    return;
- 1746|  27.6k|                }
+ 1744|  34.6k|                    self.indices[probe] = pos;
+ 1745|  34.6k|                    return;
+ 1746|  16.6k|                }
  1747|       |            });
- 1748|  19.4k|        }
- 1749|  77.8k|    }
+ 1748|  11.5k|        }
+ 1749|  46.2k|    }
 _RNvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB5_9HeaderMap8capacityCs9X2BcFZoTlv_2h2:
-  701|   512k|    pub fn capacity(&self) -> usize {
-  702|   512k|        usable_capacity(self.indices.len())
-  703|   512k|    }
+  701|   327k|    pub fn capacity(&self) -> usize {
+  702|   327k|        usable_capacity(self.indices.len())
+  703|   327k|    }
 _RNvMs0_NtNtCs4Leuz0euYUT_4http6header3mapNtB5_9HeaderMap8try_growCs9X2BcFZoTlv_2h2:
- 1793|  7.71k|    fn try_grow(&mut self, new_raw_cap: usize) -> Result<(), MaxSizeReached> {
- 1794|  7.71k|        if new_raw_cap > MAX_SIZE {
+ 1793|  4.27k|    fn try_grow(&mut self, new_raw_cap: usize) -> Result<(), MaxSizeReached> {
+ 1794|  4.27k|        if new_raw_cap > MAX_SIZE {
  1795|      0|            return Err(MaxSizeReached::new());
- 1796|  7.71k|        }
+ 1796|  4.27k|        }
  1797|       |
  1798|       |        // find first ideally placed element -- start of cluster
- 1799|  7.71k|        let mut first_ideal = 0;
+ 1799|  4.27k|        let mut first_ideal = 0;
  1800|       |
- 1801|  31.1k|        for (i, pos) in self.indices.iter().enumerate() {
- 1802|  31.1k|            if let Some((_, entry_hash)) = pos.resolve() {
- 1803|  24.4k|                if 0 == probe_distance(self.mask, entry_hash, i) {
- 1804|  7.71k|                    first_ideal = i;
- 1805|  7.71k|                    break;
- 1806|  16.7k|                }
- 1807|  6.73k|            }
+ 1801|  16.7k|        for (i, pos) in self.indices.iter().enumerate() {
+ 1802|  16.7k|            if let Some((_, entry_hash)) = pos.resolve() {
+ 1803|  12.7k|                if 0 == probe_distance(self.mask, entry_hash, i) {
+ 1804|  4.27k|                    first_ideal = i;
+ 1805|  4.27k|                    break;
+ 1806|  8.45k|                }
+ 1807|  4.00k|            }
  1808|       |        }
  1809|       |
  1810|       |        // visit the entries in an order where we can simply reinsert them
  1811|       |        // into self.indices without any bucket stealing.
- 1812|  7.71k|        let old_indices = mem::replace(
- 1813|  7.71k|            &mut self.indices,
- 1814|  7.71k|            vec![Pos::none(); new_raw_cap].into_boxed_slice(),
+ 1812|  4.27k|        let old_indices = mem::replace(
+ 1813|  4.27k|            &mut self.indices,
+ 1814|  4.27k|            vec![Pos::none(); new_raw_cap].into_boxed_slice(),
  1815|       |        );
- 1816|  7.71k|        self.mask = new_raw_cap.wrapping_sub(1) as Size;
+ 1816|  4.27k|        self.mask = new_raw_cap.wrapping_sub(1) as Size;
  1817|       |
- 1818|  54.4k|        for &pos in &old_indices[first_ideal..] {
- 1819|  54.4k|            self.reinsert_entry_in_order(pos);
- 1820|  54.4k|        }
+ 1818|  33.7k|        for &pos in &old_indices[first_ideal..] {
+ 1819|  33.7k|            self.reinsert_entry_in_order(pos);
+ 1820|  33.7k|        }
  1821|       |
- 1822|  23.4k|        for &pos in &old_indices[..first_ideal] {
- 1823|  23.4k|            self.reinsert_entry_in_order(pos);
- 1824|  23.4k|        }
+ 1822|  12.4k|        for &pos in &old_indices[..first_ideal] {
+ 1823|  12.4k|            self.reinsert_entry_in_order(pos);
+ 1824|  12.4k|        }
  1825|       |
  1826|       |        // Reserve additional entry slots
- 1827|  7.71k|        let more = self.capacity() - self.entries.len();
- 1828|  7.71k|        self.entries.reserve_exact(more);
- 1829|  7.71k|        Ok(())
- 1830|  7.71k|    }
+ 1827|  4.27k|        let more = self.capacity() - self.entries.len();
+ 1828|  4.27k|        self.entries.reserve_exact(more);
+ 1829|  4.27k|        Ok(())
+ 1830|  4.27k|    }
 _RNvMs11_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_3Pos3newCs9X2BcFZoTlv_2h2:
- 3615|   143k|    fn new(index: usize, hash: HashValue) -> Self {
- 3616|   143k|        debug_assert!(index < MAX_SIZE);
- 3617|   143k|        Pos {
- 3618|   143k|            index: index as Size,
- 3619|   143k|            hash,
- 3620|   143k|        }
- 3621|   143k|    }
+ 3615|  79.8k|    fn new(index: usize, hash: HashValue) -> Self {
+ 3616|  79.8k|        debug_assert!(index < MAX_SIZE);
+ 3617|  79.8k|        Pos {
+ 3618|  79.8k|            index: index as Size,
+ 3619|  79.8k|            hash,
+ 3620|  79.8k|        }
+ 3621|  79.8k|    }
 _RNvMs11_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_3Pos4noneCs9X2BcFZoTlv_2h2:
- 3624|  53.0k|    fn none() -> Self {
- 3625|  53.0k|        Pos {
- 3626|  53.0k|            index: !0,
- 3627|  53.0k|            hash: HashValue(0),
- 3628|  53.0k|        }
- 3629|  53.0k|    }
+ 3624|  29.7k|    fn none() -> Self {
+ 3625|  29.7k|        Pos {
+ 3626|  29.7k|            index: !0,
+ 3627|  29.7k|            hash: HashValue(0),
+ 3628|  29.7k|        }
+ 3629|  29.7k|    }
 _RNvMs11_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_3Pos7is_noneCs9X2BcFZoTlv_2h2:
- 3637|  3.71M|    fn is_none(&self) -> bool {
- 3638|  3.71M|        self.index == !0
- 3639|  3.71M|    }
+ 3637|  2.19M|    fn is_none(&self) -> bool {
+ 3638|  2.19M|        self.index == !0
+ 3639|  2.19M|    }
 _RNvMs11_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_3Pos7is_someCs9X2BcFZoTlv_2h2:
- 3632|  3.66M|    fn is_some(&self) -> bool {
- 3633|  3.66M|        !self.is_none()
- 3634|  3.66M|    }
+ 3632|  2.16M|    fn is_some(&self) -> bool {
+ 3633|  2.16M|        !self.is_none()
+ 3634|  2.16M|    }
 _RNvMs11_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_3Pos7resolveCs9X2BcFZoTlv_2h2:
- 3642|  3.66M|    fn resolve(&self) -> Option<(usize, HashValue)> {
- 3643|  3.66M|        if self.is_some() {
- 3644|  2.18M|            Some((self.index as usize, self.hash))
+ 3642|  2.16M|    fn resolve(&self) -> Option<(usize, HashValue)> {
+ 3643|  2.16M|        if self.is_some() {
+ 3644|  1.29M|            Some((self.index as usize, self.hash))
  3645|       |        } else {
- 3646|  1.48M|            None
+ 3646|   873k|            None
  3647|       |        }
- 3648|  3.66M|    }
+ 3648|  2.16M|    }
 _RNvMs17_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_9FnvHasher3newCs9X2BcFZoTlv_2h2:
- 3753|  2.58M|    fn new() -> Self {
- 3754|  2.58M|        FnvHasher(0xcbf29ce484222325)
- 3755|  2.58M|    }
+ 3753|  1.58M|    fn new() -> Self {
+ 3754|  1.58M|        FnvHasher(0xcbf29ce484222325)
+ 3755|  1.58M|    }
 _RNvNtNtCs4Leuz0euYUT_4http6header3map11desired_posCs9X2BcFZoTlv_2h2:
- 3714|  4.73M|fn desired_pos(mask: Size, hash: HashValue) -> usize {
- 3715|  4.73M|    (hash.0 & mask) as usize
- 3716|  4.73M|}
+ 3714|  2.85M|fn desired_pos(mask: Size, hash: HashValue) -> usize {
+ 3715|  2.85M|    (hash.0 & mask) as usize
+ 3716|  2.85M|}
 _RNvNtNtCs4Leuz0euYUT_4http6header3map14probe_distanceCs9X2BcFZoTlv_2h2:
- 3720|  2.09M|fn probe_distance(mask: Size, hash: HashValue, current: usize) -> usize {
- 3721|  2.09M|    current.wrapping_sub(desired_pos(mask, hash)) & mask as usize
- 3722|  2.09M|}
+ 3720|  1.23M|fn probe_distance(mask: Size, hash: HashValue, current: usize) -> usize {
+ 3721|  1.23M|    current.wrapping_sub(desired_pos(mask, hash)) & mask as usize
+ 3722|  1.23M|}
 _RNvNtNtCs4Leuz0euYUT_4http6header3map15usable_capacityCs9X2BcFZoTlv_2h2:
- 3704|   558k|fn usable_capacity(cap: usize) -> usize {
- 3705|   558k|    cap - cap / 4
- 3706|   558k|}
+ 3704|   353k|fn usable_capacity(cap: usize) -> usize {
+ 3705|   353k|    cap - cap / 4
+ 3706|   353k|}
 _RNvNtNtCs4Leuz0euYUT_4http6header3map19do_insert_phase_twoCs9X2BcFZoTlv_2h2:
- 2267|  14.3k|fn do_insert_phase_two(indices: &mut [Pos], mut probe: usize, mut old_pos: Pos) -> usize {
- 2268|  14.3k|    let mut num_displaced = 0;
+ 2267|  8.72k|fn do_insert_phase_two(indices: &mut [Pos], mut probe: usize, mut old_pos: Pos) -> usize {
+ 2268|  8.72k|    let mut num_displaced = 0;
  2269|       |
- 2270|  47.6k|    probe_loop!(probe < indices.len(), {
- 2271|  45.3k|        let pos = &mut indices[probe];
+ 2270|  33.9k|    probe_loop!(probe < indices.len(), {
+ 2271|  32.4k|        let pos = &mut indices[probe];
  2272|       |
- 2273|  45.3k|        if pos.is_none() {
- 2274|  14.3k|            *pos = old_pos;
- 2275|  14.3k|            break;
- 2276|  31.0k|        } else {
- 2277|  31.0k|            num_displaced += 1;
- 2278|  31.0k|            old_pos = mem::replace(pos, old_pos);
- 2279|  31.0k|        }
+ 2273|  32.4k|        if pos.is_none() {
+ 2274|  8.72k|            *pos = old_pos;
+ 2275|  8.72k|            break;
+ 2276|  23.7k|        } else {
+ 2277|  23.7k|            num_displaced += 1;
+ 2278|  23.7k|            old_pos = mem::replace(pos, old_pos);
+ 2279|  23.7k|        }
  2280|       |    });
  2281|       |
- 2282|  14.3k|    num_displaced
- 2283|  14.3k|}
+ 2282|  8.72k|    num_displaced
+ 2283|  8.72k|}
 _RNvXs18_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_9FnvHasherNtNtCs6SNw0SRvItZ_4core4hash6Hasher5writeCs9X2BcFZoTlv_2h2:
- 3765|  5.16M|    fn write(&mut self, bytes: &[u8]) {
- 3766|  5.16M|        let mut hash = self.0;
- 3767|  52.8M|        for &b in bytes {
- 3768|  47.6M|            hash ^= b as u64;
- 3769|  47.6M|            hash = hash.wrapping_mul(0x100000001b3);
- 3770|  47.6M|        }
- 3771|  5.16M|        self.0 = hash;
- 3772|  5.16M|    }
+ 3765|  3.17M|    fn write(&mut self, bytes: &[u8]) {
+ 3766|  3.17M|        let mut hash = self.0;
+ 3767|  32.4M|        for &b in bytes {
+ 3768|  29.3M|            hash ^= b as u64;
+ 3769|  29.3M|            hash = hash.wrapping_mul(0x100000001b3);
+ 3770|  29.3M|        }
+ 3771|  3.17M|        self.0 = hash;
+ 3772|  3.17M|    }
 _RNvXs18_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_9FnvHasherNtNtCs6SNw0SRvItZ_4core4hash6Hasher6finishCs9X2BcFZoTlv_2h2:
- 3760|  2.58M|    fn finish(&self) -> u64 {
- 3761|  2.58M|        self.0
- 3762|  2.58M|    }
+ 3760|  1.58M|    fn finish(&self) -> u64 {
+ 3761|  1.58M|        self.0
+ 3762|  1.58M|    }
 _RNvXsB_NtNtCs4Leuz0euYUT_4http6header3mapINtB5_6GetAllNtNtB7_5value11HeaderValueENtNtNtNtCs6SNw0SRvItZ_4core4iter6traits7collect12IntoIterator9into_iterCs9X2BcFZoTlv_2h2:
- 2950|  1.04M|    fn into_iter(self) -> ValueIter<'a, T> {
- 2951|  1.04M|        self.map.value_iter(self.index)
- 2952|  1.04M|    }
+ 2950|   674k|    fn into_iter(self) -> ValueIter<'a, T> {
+ 2951|   674k|        self.map.value_iter(self.index)
+ 2952|   674k|    }
 _RNvXsD_NtNtCs4Leuz0euYUT_4http6header3mapINtB5_9ValueIterNtNtB7_5value11HeaderValueENtNtNtNtCs6SNw0SRvItZ_4core4iter6traits8iterator8Iterator4nextCs9X2BcFZoTlv_2h2:
- 2969|  1.73M|    fn next(&mut self) -> Option<Self::Item> {
+ 2969|  1.12M|    fn next(&mut self) -> Option<Self::Item> {
  2970|       |        use self::Cursor::*;
  2971|       |
- 2972|   694k|        match self.front {
+ 2972|   449k|        match self.front {
  2973|       |            Some(Head) => {
- 2974|   694k|                let entry = &self.map.entries[self.index];
+ 2974|   449k|                let entry = &self.map.entries[self.index];
  2975|       |
- 2976|   694k|                if self.back == Some(Head) {
- 2977|   694k|                    self.front = None;
- 2978|   694k|                    self.back = None;
- 2979|   694k|                } else {
+ 2976|   449k|                if self.back == Some(Head) {
+ 2977|   449k|                    self.front = None;
+ 2978|   449k|                    self.back = None;
+ 2979|   449k|                } else {
  2980|       |                    // Update the iterator state
  2981|      0|                    match entry.links {
  2982|      0|                        Some(links) => {
@@ -1636,7 +1636,7 @@ _RNvXsD_NtNtCs4Leuz0euYUT_4http6header3mapINtB5_9ValueIterNtNtB7_5value11HeaderV
  2986|       |                    }
  2987|       |                }
  2988|       |
- 2989|   694k|                Some(&entry.value)
+ 2989|   449k|                Some(&entry.value)
  2990|       |            }
  2991|      0|            Some(Values(idx)) => {
  2992|      0|                let extra = &self.map.extra_values[idx];
@@ -1653,240 +1653,240 @@ _RNvXsD_NtNtCs4Leuz0euYUT_4http6header3mapINtB5_9ValueIterNtNtB7_5value11HeaderV
  3003|       |
  3004|      0|                Some(&extra.value)
  3005|       |            }
- 3006|  1.04M|            None => None,
+ 3006|   674k|            None => None,
  3007|       |        }
- 3008|  1.73M|    }
+ 3008|  1.12M|    }
 _RINvXNtNtNtCs4Leuz0euYUT_4http6header3map16into_header_nameNtNtB7_4name10HeaderNameNtB3_6Sealed10try_appendNtNtB7_5value11HeaderValueECs9X2BcFZoTlv_2h2:
- 3821|   505k|        fn try_append<T>(self, map: &mut HeaderMap<T>, val: T) -> Result<bool, MaxSizeReached> {
- 3822|   505k|            map.try_append2(self, val)
- 3823|   505k|        }
+ 3821|   323k|        fn try_append<T>(self, map: &mut HeaderMap<T>, val: T) -> Result<bool, MaxSizeReached> {
+ 3822|   323k|            map.try_append2(self, val)
+ 3823|   323k|        }
 _RINvXs0_NtNtNtCs4Leuz0euYUT_4http6header3map14as_header_nameNtNtBa_4name10HeaderNameNtB6_6Sealed4findNtNtBa_5value11HeaderValueECs9X2BcFZoTlv_2h2:
- 3932|  1.30M|        fn find<T>(&self, map: &HeaderMap<T>) -> Option<(usize, usize)> {
- 3933|  1.30M|            map.find(self)
- 3934|  1.30M|        }
+ 3932|   843k|        fn find<T>(&self, map: &HeaderMap<T>) -> Option<(usize, usize)> {
+ 3933|   843k|            map.find(self)
+ 3934|   843k|        }
 _RNvMs12_NtNtCs4Leuz0euYUT_4http6header3mapNtB6_6Danger9is_yellow:
- 3661|  1.20M|    fn is_yellow(&self) -> bool {
- 3662|  1.20M|        matches!(*self, Danger::Yellow)
- 3663|  1.20M|    }
+ 3661|   773k|    fn is_yellow(&self) -> bool {
+ 3662|   773k|        matches!(*self, Danger::Yellow)
+ 3663|   773k|    }
 _RNvXs_NtNtCs4Leuz0euYUT_4http6header3mapNtB4_9HeaderMapNtNtCs6SNw0SRvItZ_4core7default7Default7defaultB8_:
-  501|  86.7k|    fn default() -> Self {
-  502|  86.7k|        HeaderMap {
-  503|  86.7k|            mask: 0,
-  504|  86.7k|            indices: Box::new([]), // as a ZST, this doesn't actually allocate anything
-  505|  86.7k|            entries: Vec::new(),
-  506|  86.7k|            extra_values: Vec::new(),
-  507|  86.7k|            danger: Danger::Green,
-  508|  86.7k|        }
-  509|  86.7k|    }
+  501|  56.2k|    fn default() -> Self {
+  502|  56.2k|        HeaderMap {
+  503|  56.2k|            mask: 0,
+  504|  56.2k|            indices: Box::new([]), // as a ZST, this doesn't actually allocate anything
+  505|  56.2k|            entries: Vec::new(),
+  506|  56.2k|            extra_values: Vec::new(),
+  507|  56.2k|            danger: Danger::Green,
+  508|  56.2k|        }
+  509|  56.2k|    }
 
 _RINvXst_NtNtCs4Leuz0euYUT_4http6header4nameNtB6_6CustomNtNtCs6SNw0SRvItZ_4core4hash4Hash4hashNtNtB8_3map9FnvHasherECsesI8xtRYhQD_9axum_core:
- 1594|   523k|    fn hash<H: Hasher>(&self, hasher: &mut H) {
- 1595|   523k|        hasher.write(self.0.as_bytes())
- 1596|   523k|    }
+ 1594|   338k|    fn hash<H: Hasher>(&self, hasher: &mut H) {
+ 1595|   338k|        hasher.write(self.0.as_bytes())
+ 1596|   338k|    }
 _RINvXst_NtNtCs4Leuz0euYUT_4http6header4nameNtB6_6CustomNtNtCs6SNw0SRvItZ_4core4hash4Hash4hashNtNtB8_3map9FnvHasherECs9X2BcFZoTlv_2h2:
- 1594|  1.57M|    fn hash<H: Hasher>(&self, hasher: &mut H) {
- 1595|  1.57M|        hasher.write(self.0.as_bytes())
- 1596|  1.57M|    }
+ 1594|   981k|    fn hash<H: Hasher>(&self, hasher: &mut H) {
+ 1595|   981k|        hasher.write(self.0.as_bytes())
+ 1596|   981k|    }
 _RINvNtNtCs4Leuz0euYUT_4http6header4name17slice_assume_inithEB6_:
- 1643|  1.68M|unsafe fn slice_assume_init<T>(slice: &[MaybeUninit<T>]) -> &[T] {
- 1644|  1.68M|    &*(slice as *const [MaybeUninit<T>] as *const [T])
- 1645|  1.68M|}
+ 1643|  1.41M|unsafe fn slice_assume_init<T>(slice: &[MaybeUninit<T>]) -> &[T] {
+ 1644|  1.41M|    &*(slice as *const [MaybeUninit<T>] as *const [T])
+ 1645|  1.41M|}
 _RNCNvNtNtCs4Leuz0euYUT_4http6header4name9parse_hdr0B7_:
- 1084|  19.0M|                .for_each(|(index, out)| *out = MaybeUninit::new(table[*index as usize]));
+ 1084|  16.1M|                .for_each(|(index, out)| *out = MaybeUninit::new(table[*index as usize]));
 _RNvMs6_NtNtCs4Leuz0euYUT_4http6header4nameNtB5_17InvalidHeaderName3new:
- 1317|  1.23M|    pub(super) fn new() -> InvalidHeaderName {
- 1318|  1.23M|        InvalidHeaderName { _priv: () }
- 1319|  1.23M|    }
+ 1317|  1.03M|    pub(super) fn new() -> InvalidHeaderName {
+ 1318|  1.03M|        InvalidHeaderName { _priv: () }
+ 1319|  1.03M|    }
 _RNvMsP_NtNtCs4Leuz0euYUT_4http6header4nameNtB5_14StandardHeader10from_bytes:
-   97|  2.72M|            const fn from_bytes(name_bytes: &[u8]) -> Option<StandardHeader> {
-   98|  2.72M|                match name_bytes {
+   97|  2.08M|            const fn from_bytes(name_bytes: &[u8]) -> Option<StandardHeader> {
+   98|  2.08M|                match name_bytes {
    99|       |                    $(
-  100|  20.8k|                        $name_bytes => Some(StandardHeader::$konst),
+  100|  15.5k|                        $name_bytes => Some(StandardHeader::$konst),
   101|       |                    )+
-  102|  2.51M|                    _ => None,
+  102|  1.92M|                    _ => None,
   103|       |                }
-  104|  2.72M|            }
+  104|  2.08M|            }
 _RNvMs_NtNtCs4Leuz0euYUT_4http6header4nameNtB4_10HeaderName10from_bytes:
- 1115|  1.86M|    pub fn from_bytes(src: &[u8]) -> Result<HeaderName, InvalidHeaderName> {
- 1116|  1.86M|        let mut buf = uninit_u8_array();
+ 1115|  1.50M|    pub fn from_bytes(src: &[u8]) -> Result<HeaderName, InvalidHeaderName> {
+ 1116|  1.50M|        let mut buf = uninit_u8_array();
  1117|       |        // Precondition: HEADER_CHARS is a valid table for parse_hdr().
- 1118|  1.86M|        match parse_hdr(src, &mut buf, &HEADER_CHARS)?.inner {
- 1119|  32.6k|            Repr::Standard(std) => Ok(std.into()),
- 1120|   593k|            Repr::Custom(MaybeLower { buf, lower: true }) => {
- 1121|   593k|                let buf = Bytes::copy_from_slice(buf);
+ 1118|  1.50M|        match parse_hdr(src, &mut buf, &HEADER_CHARS)?.inner {
+ 1119|  47.4k|            Repr::Standard(std) => Ok(std.into()),
+ 1120|   414k|            Repr::Custom(MaybeLower { buf, lower: true }) => {
+ 1121|   414k|                let buf = Bytes::copy_from_slice(buf);
  1122|       |                // Safety: the invariant on MaybeLower ensures buf is valid UTF-8.
- 1123|   593k|                let val = unsafe { ByteStr::from_utf8_unchecked(buf) };
- 1124|   593k|                Ok(Custom(val).into())
+ 1123|   414k|                let val = unsafe { ByteStr::from_utf8_unchecked(buf) };
+ 1124|   414k|                Ok(Custom(val).into())
  1125|       |            }
- 1126|  21.6k|            Repr::Custom(MaybeLower { buf, lower: false }) => {
+ 1126|  11.9k|            Repr::Custom(MaybeLower { buf, lower: false }) => {
  1127|       |                use bytes::BufMut;
- 1128|  21.6k|                let mut dst = BytesMut::with_capacity(buf.len());
+ 1128|  11.9k|                let mut dst = BytesMut::with_capacity(buf.len());
  1129|       |
- 1130|   604k|                for b in buf.iter() {
+ 1130|   431k|                for b in buf.iter() {
  1131|       |                    // HEADER_CHARS maps all bytes to valid single-byte UTF-8
- 1132|   604k|                    let b = HEADER_CHARS[*b as usize];
+ 1132|   431k|                    let b = HEADER_CHARS[*b as usize];
  1133|       |
- 1134|   604k|                    if b == 0 {
- 1135|  16.0k|                        return Err(InvalidHeaderName::new());
- 1136|   588k|                    }
+ 1134|   431k|                    if b == 0 {
+ 1135|  8.17k|                        return Err(InvalidHeaderName::new());
+ 1136|   422k|                    }
  1137|       |
- 1138|   588k|                    dst.put_u8(b);
+ 1138|   422k|                    dst.put_u8(b);
  1139|       |                }
  1140|       |
  1141|       |                // Safety: the loop above maps all bytes in buf to valid single byte
  1142|       |                // UTF-8 before copying them into dst. This means that dst (and hence
  1143|       |                // dst.freeze()) is valid UTF-8.
- 1144|  5.54k|                let val = unsafe { ByteStr::from_utf8_unchecked(dst.freeze()) };
+ 1144|  3.78k|                let val = unsafe { ByteStr::from_utf8_unchecked(dst.freeze()) };
  1145|       |
- 1146|  5.54k|                Ok(Custom(val).into())
+ 1146|  3.78k|                Ok(Custom(val).into())
  1147|       |            }
  1148|       |        }
- 1149|  1.86M|    }
+ 1149|  1.50M|    }
 _RNvMs_NtNtCs4Leuz0euYUT_4http6header4nameNtB4_10HeaderName11from_static:
- 1234|  1.04M|    pub const fn from_static(src: &'static str) -> HeaderName {
- 1235|  1.04M|        let name_bytes = src.as_bytes();
- 1236|  1.04M|        if let Some(standard) = StandardHeader::from_bytes(name_bytes) {
- 1237|   173k|            return HeaderName {
- 1238|   173k|                inner: Repr::Standard(standard),
- 1239|   173k|            };
- 1240|   867k|        }
+ 1234|   674k|    pub const fn from_static(src: &'static str) -> HeaderName {
+ 1235|   674k|        let name_bytes = src.as_bytes();
+ 1236|   674k|        if let Some(standard) = StandardHeader::from_bytes(name_bytes) {
+ 1237|   112k|            return HeaderName {
+ 1238|   112k|                inner: Repr::Standard(standard),
+ 1239|   112k|            };
+ 1240|   562k|        }
  1241|       |
- 1242|   867k|        if name_bytes.is_empty() || name_bytes.len() > super::MAX_HEADER_NAME_LEN || {
- 1243|   867k|            let mut i = 0;
+ 1242|   562k|        if name_bytes.is_empty() || name_bytes.len() > super::MAX_HEADER_NAME_LEN || {
+ 1243|   562k|            let mut i = 0;
  1244|       |            loop {
- 1245|  12.4M|                if i >= name_bytes.len() {
- 1246|   867k|                    break false;
- 1247|  11.6M|                } else if HEADER_CHARS_H2[name_bytes[i] as usize] == 0 {
+ 1245|  8.09M|                if i >= name_bytes.len() {
+ 1246|   562k|                    break false;
+ 1247|  7.53M|                } else if HEADER_CHARS_H2[name_bytes[i] as usize] == 0 {
  1248|      0|                    break true;
- 1249|  11.6M|                }
- 1250|  11.6M|                i += 1;
+ 1249|  7.53M|                }
+ 1250|  7.53M|                i += 1;
  1251|       |            }
  1252|       |        } {
  1253|       |            // Invalid header name
  1254|      0|            panic!("HeaderName::from_static with invalid bytes")
- 1255|   867k|        }
+ 1255|   562k|        }
  1256|       |
- 1257|   867k|        HeaderName {
- 1258|   867k|            inner: Repr::Custom(Custom(ByteStr::from_static(src))),
- 1259|   867k|        }
- 1260|  1.04M|    }
+ 1257|   562k|        HeaderName {
+ 1258|   562k|            inner: Repr::Custom(Custom(ByteStr::from_static(src))),
+ 1259|   562k|        }
+ 1260|   674k|    }
 _RNvMsq_NtNtCs4Leuz0euYUT_4http6header4nameNtB5_7HdrName6custom:
- 1498|   614k|    fn custom(buf: &'a [u8], lower: bool) -> HdrName<'a> {
- 1499|   614k|        HdrName {
- 1500|   614k|            // Invariant (on MaybeLower): follows from the precondition
- 1501|   614k|            inner: Repr::Custom(MaybeLower { buf, lower }),
- 1502|   614k|        }
- 1503|   614k|    }
+ 1498|   426k|    fn custom(buf: &'a [u8], lower: bool) -> HdrName<'a> {
+ 1499|   426k|        HdrName {
+ 1500|   426k|            // Invariant (on MaybeLower): follows from the precondition
+ 1501|   426k|            inner: Repr::Custom(MaybeLower { buf, lower }),
+ 1502|   426k|        }
+ 1503|   426k|    }
 _RNvNtNtCs4Leuz0euYUT_4http6header4name15uninit_u8_array:
- 1632|  1.86M|fn uninit_u8_array() -> [MaybeUninit<u8>; SCRATCH_BUF_SIZE] {
- 1633|  1.86M|    let arr = MaybeUninit::<[MaybeUninit<u8>; SCRATCH_BUF_SIZE]>::uninit();
+ 1632|  1.50M|fn uninit_u8_array() -> [MaybeUninit<u8>; SCRATCH_BUF_SIZE] {
+ 1633|  1.50M|    let arr = MaybeUninit::<[MaybeUninit<u8>; SCRATCH_BUF_SIZE]>::uninit();
  1634|       |    // Safety: assume_init() is claiming that an array of MaybeUninit<>
  1635|       |    // has been initialized, but MaybeUninit<>'s do not require initialization.
- 1636|  1.86M|    unsafe { arr.assume_init() }
- 1637|  1.86M|}
+ 1636|  1.50M|    unsafe { arr.assume_init() }
+ 1637|  1.50M|}
 _RNvNtNtCs4Leuz0euYUT_4http6header4name9parse_hdr:
- 1073|  1.86M|fn parse_hdr<'a>(
- 1074|  1.86M|    data: &'a [u8],
- 1075|  1.86M|    b: &'a mut [MaybeUninit<u8>; SCRATCH_BUF_SIZE],
- 1076|  1.86M|    table: &[u8; 256],
- 1077|  1.86M|) -> Result<HdrName<'a>, InvalidHeaderName> {
- 1078|  1.86M|    match data.len() {
- 1079|   165k|        0 => Err(InvalidHeaderName::new()),
- 1080|  1.70M|        len @ 1..=SCRATCH_BUF_SIZE => {
+ 1073|  1.50M|fn parse_hdr<'a>(
+ 1074|  1.50M|    data: &'a [u8],
+ 1075|  1.50M|    b: &'a mut [MaybeUninit<u8>; SCRATCH_BUF_SIZE],
+ 1076|  1.50M|    table: &[u8; 256],
+ 1077|  1.50M|) -> Result<HdrName<'a>, InvalidHeaderName> {
+ 1078|  1.50M|    match data.len() {
+ 1079|  79.2k|        0 => Err(InvalidHeaderName::new()),
+ 1080|  1.42M|        len @ 1..=SCRATCH_BUF_SIZE => {
  1081|       |            // Read from data into the buffer - transforming using `table` as we go
- 1082|  1.68M|            data.iter()
- 1083|  1.68M|                .zip(b.iter_mut())
- 1084|  1.68M|                .for_each(|(index, out)| *out = MaybeUninit::new(table[*index as usize]));
+ 1082|  1.41M|            data.iter()
+ 1083|  1.41M|                .zip(b.iter_mut())
+ 1084|  1.41M|                .for_each(|(index, out)| *out = MaybeUninit::new(table[*index as usize]));
  1085|       |            // Safety: len bytes of b were just initialized.
- 1086|  1.68M|            let name: &'a [u8] = unsafe { slice_assume_init(&b[0..len]) };
- 1087|  1.68M|            match StandardHeader::from_bytes(name) {
- 1088|  32.6k|                Some(sh) => Ok(sh.into()),
+ 1086|  1.41M|            let name: &'a [u8] = unsafe { slice_assume_init(&b[0..len]) };
+ 1087|  1.41M|            match StandardHeader::from_bytes(name) {
+ 1088|  47.4k|                Some(sh) => Ok(sh.into()),
  1089|       |                None => {
- 1090|  1.64M|                    if name.contains(&0) {
- 1091|  1.05M|                        Err(InvalidHeaderName::new())
+ 1090|  1.36M|                    if name.contains(&0) {
+ 1091|   950k|                        Err(InvalidHeaderName::new())
  1092|       |                    } else {
- 1093|   593k|                        Ok(HdrName::custom(name, true))
+ 1093|   414k|                        Ok(HdrName::custom(name, true))
  1094|       |                    }
  1095|       |                }
  1096|       |            }
  1097|       |        }
- 1098|  21.6k|        SCRATCH_BUF_OVERFLOW..=super::MAX_HEADER_NAME_LEN => Ok(HdrName::custom(data, false)),
+ 1098|  11.9k|        SCRATCH_BUF_OVERFLOW..=super::MAX_HEADER_NAME_LEN => Ok(HdrName::custom(data, false)),
  1099|      0|        _ => Err(InvalidHeaderName::new()),
  1100|       |    }
- 1101|  1.86M|}
+ 1101|  1.50M|}
 _RNvXNtNtCs4Leuz0euYUT_4http6header4nameNtB2_7HdrNameINtNtCs6SNw0SRvItZ_4core7convert4FromNtB2_14StandardHeaderE4from:
- 1104|  32.6k|    fn from(hdr: StandardHeader) -> HdrName<'a> {
- 1105|  32.6k|        HdrName {
- 1106|  32.6k|            inner: Repr::Standard(hdr),
- 1107|  32.6k|        }
- 1108|  32.6k|    }
+ 1104|  47.4k|    fn from(hdr: StandardHeader) -> HdrName<'a> {
+ 1105|  47.4k|        HdrName {
+ 1106|  47.4k|            inner: Repr::Standard(hdr),
+ 1107|  47.4k|        }
+ 1108|  47.4k|    }
 _RNvXsf_NtNtCs4Leuz0euYUT_4http6header4nameNtB5_10HeaderNameINtNtCs6SNw0SRvItZ_4core7convert4FromNtB5_14StandardHeaderE4from:
- 1392|  32.6k|    fn from(src: StandardHeader) -> HeaderName {
- 1393|  32.6k|        HeaderName {
- 1394|  32.6k|            inner: Repr::Standard(src),
- 1395|  32.6k|        }
- 1396|  32.6k|    }
+ 1392|  47.4k|    fn from(src: StandardHeader) -> HeaderName {
+ 1393|  47.4k|        HeaderName {
+ 1394|  47.4k|            inner: Repr::Standard(src),
+ 1395|  47.4k|        }
+ 1396|  47.4k|    }
 _RNvXsg_NtNtCs4Leuz0euYUT_4http6header4nameNtB5_10HeaderNameINtNtCs6SNw0SRvItZ_4core7convert4FromNtB5_6CustomE4from:
- 1401|   598k|    fn from(src: Custom) -> HeaderName {
- 1402|   598k|        HeaderName {
- 1403|   598k|            inner: Repr::Custom(src),
- 1404|   598k|        }
- 1405|   598k|    }
+ 1401|   418k|    fn from(src: Custom) -> HeaderName {
+ 1402|   418k|        HeaderName {
+ 1403|   418k|            inner: Repr::Custom(src),
+ 1404|   418k|        }
+ 1405|   418k|    }
 
 _RNvMNtNtCs4Leuz0euYUT_4http6header5valueNtB2_11HeaderValue10from_bytesCs8gVPDMh8Uq_14headers_policy:
-  151|  1.86M|    pub fn from_bytes(src: &[u8]) -> Result<HeaderValue, InvalidHeaderValue> {
-  152|  1.86M|        HeaderValue::try_from_generic(src, Bytes::copy_from_slice)
-  153|  1.86M|    }
+  151|  1.50M|    pub fn from_bytes(src: &[u8]) -> Result<HeaderValue, InvalidHeaderValue> {
+  152|  1.50M|        HeaderValue::try_from_generic(src, Bytes::copy_from_slice)
+  153|  1.50M|    }
 _RNvMNtNtCs4Leuz0euYUT_4http6header5valueNtB2_11HeaderValue8from_strCsOmTKQdZnin_4verd:
-  105|   697k|    pub fn from_str(src: &str) -> Result<HeaderValue, InvalidHeaderValue> {
-  106|   697k|        HeaderValue::try_from_generic(src, |s| Bytes::copy_from_slice(s.as_bytes()))
-  107|   697k|    }
+  105|   450k|    pub fn from_str(src: &str) -> Result<HeaderValue, InvalidHeaderValue> {
+  106|   450k|        HeaderValue::try_from_generic(src, |s| Bytes::copy_from_slice(s.as_bytes()))
+  107|   450k|    }
 _RINvMNtNtCs4Leuz0euYUT_4http6header5valueNtB3_11HeaderValue16try_from_genericReNCNvB2_8from_str0ECs3oZnU9d4uJg_27metrics_exporter_prometheus:
-  212|   697k|    fn try_from_generic<T: AsRef<[u8]>, F: FnOnce(T) -> Bytes>(
-  213|   697k|        src: T,
-  214|   697k|        into: F,
-  215|   697k|    ) -> Result<HeaderValue, InvalidHeaderValue> {
+  212|   450k|    fn try_from_generic<T: AsRef<[u8]>, F: FnOnce(T) -> Bytes>(
+  213|   450k|        src: T,
+  214|   450k|        into: F,
+  215|   450k|    ) -> Result<HeaderValue, InvalidHeaderValue> {
   216|       |        // Avoid an early return so the loop vectorizes.
-  217|   697k|        let mut bad = false;
-  218|  21.4M|        for &b in src.as_ref() {
-  219|  21.4M|            bad |= !is_valid(b);
-  220|  21.4M|        }
-  221|   697k|        if bad {
+  217|   450k|        let mut bad = false;
+  218|  13.5M|        for &b in src.as_ref() {
+  219|  13.5M|            bad |= !is_valid(b);
+  220|  13.5M|        }
+  221|   450k|        if bad {
   222|      0|            return Err(InvalidHeaderValue { _priv: () });
-  223|   697k|        }
-  224|   697k|        Ok(HeaderValue {
-  225|   697k|            inner: into(src),
-  226|   697k|            is_sensitive: false,
-  227|   697k|        })
-  228|   697k|    }
+  223|   450k|        }
+  224|   450k|        Ok(HeaderValue {
+  225|   450k|            inner: into(src),
+  226|   450k|            is_sensitive: false,
+  227|   450k|        })
+  228|   450k|    }
 _RNCNvMNtNtCs4Leuz0euYUT_4http6header5valueNtB4_11HeaderValue8from_str0Cs3oZnU9d4uJg_27metrics_exporter_prometheus:
-  106|   697k|        HeaderValue::try_from_generic(src, |s| Bytes::copy_from_slice(s.as_bytes()))
+  106|   450k|        HeaderValue::try_from_generic(src, |s| Bytes::copy_from_slice(s.as_bytes()))
 _RNvNtNtCs4Leuz0euYUT_4http6header5value8is_validCs3oZnU9d4uJg_27metrics_exporter_prometheus:
-  563|  21.4M|fn is_valid(b: u8) -> bool {
-  564|  21.4M|    b >= 32 && b != 127 || b == b'\t'
-  565|  21.4M|}
+  563|  13.5M|fn is_valid(b: u8) -> bool {
+  564|  13.5M|    b >= 32 && b != 127 || b == b'\t'
+  565|  13.5M|}
 _RINvMNtNtCs4Leuz0euYUT_4http6header5valueNtB3_11HeaderValue16try_from_genericRShNvMNtCsgMinvsjwHLp_5bytes5bytesNtB1j_5Bytes15copy_from_sliceECs9X2BcFZoTlv_2h2:
-  212|  1.86M|    fn try_from_generic<T: AsRef<[u8]>, F: FnOnce(T) -> Bytes>(
-  213|  1.86M|        src: T,
-  214|  1.86M|        into: F,
-  215|  1.86M|    ) -> Result<HeaderValue, InvalidHeaderValue> {
+  212|  1.50M|    fn try_from_generic<T: AsRef<[u8]>, F: FnOnce(T) -> Bytes>(
+  213|  1.50M|        src: T,
+  214|  1.50M|        into: F,
+  215|  1.50M|    ) -> Result<HeaderValue, InvalidHeaderValue> {
   216|       |        // Avoid an early return so the loop vectorizes.
-  217|  1.86M|        let mut bad = false;
-  218|  39.9M|        for &b in src.as_ref() {
-  219|  39.9M|            bad |= !is_valid(b);
-  220|  39.9M|        }
-  221|  1.86M|        if bad {
-  222|   684k|            return Err(InvalidHeaderValue { _priv: () });
-  223|  1.18M|        }
-  224|  1.18M|        Ok(HeaderValue {
-  225|  1.18M|            inner: into(src),
-  226|  1.18M|            is_sensitive: false,
-  227|  1.18M|        })
-  228|  1.86M|    }
+  217|  1.50M|        let mut bad = false;
+  218|  22.3M|        for &b in src.as_ref() {
+  219|  22.3M|            bad |= !is_valid(b);
+  220|  22.3M|        }
+  221|  1.50M|        if bad {
+  222|   647k|            return Err(InvalidHeaderValue { _priv: () });
+  223|   857k|        }
+  224|   857k|        Ok(HeaderValue {
+  225|   857k|            inner: into(src),
+  226|   857k|            is_sensitive: false,
+  227|   857k|        })
+  228|  1.50M|    }
 _RNvNtNtCs4Leuz0euYUT_4http6header5value8is_validCs9X2BcFZoTlv_2h2:
-  563|  39.9M|fn is_valid(b: u8) -> bool {
-  564|  39.9M|    b >= 32 && b != 127 || b == b'\t'
-  565|  39.9M|}
+  563|  22.3M|fn is_valid(b: u8) -> bool {
+  564|  22.3M|    b >= 32 && b != 127 || b == b'\t'
+  565|  22.3M|}
 
 LLVMFuzzerInitialize:
   252|      2|            pub extern "C" fn LLVMFuzzerInitialize(_argc: *const isize, _argv: *const *const *const u8) -> isize {
@@ -1897,49 +1897,49 @@ LLVMFuzzerInitialize:
   257|      2|                0
   258|      2|            }
 _RNvNvCs8gVPDMh8Uq_14headers_policy1__19___libfuzzer_sys_run:
-  293|  86.7k|            fn __libfuzzer_sys_run($bytes: &[u8]) -> $rty {
+  293|  56.2k|            fn __libfuzzer_sys_run($bytes: &[u8]) -> $rty {
   294|       |                $body
-  295|  86.7k|            }
+  295|  56.2k|            }
 rust_fuzzer_test_input:
-  261|  86.7k|            pub extern "C" fn rust_fuzzer_test_input(bytes: &[u8]) -> i32 {
+  261|  56.2k|            pub extern "C" fn rust_fuzzer_test_input(bytes: &[u8]) -> i32 {
   262|       |                // When `RUST_LIBFUZZER_DEBUG_PATH` is set, write the debug
   263|       |                // formatting of the input to that file. This is only intended for
   264|       |                // `cargo fuzz`'s use!
   265|       |
   266|       |                // `RUST_LIBFUZZER_DEBUG_PATH` is set in initialization.
-  267|  86.7k|                if let Some(path) = $crate::rust_libfuzzer_debug_path() {
+  267|  56.2k|                if let Some(path) = $crate::rust_libfuzzer_debug_path() {
   268|       |                    use std::io::Write;
   269|      0|                    let mut file = std::fs::File::create(path)
   270|      0|                        .expect("failed to create `RUST_LIBFUZZER_DEBUG_PATH` file");
   271|      0|                    writeln!(&mut file, "{:?}", bytes)
   272|      0|                        .expect("failed to write to `RUST_LIBFUZZER_DEBUG_PATH` file");
   273|      0|                    return 0;
-  274|  86.7k|                }
+  274|  56.2k|                }
   275|       |
-  276|  86.7k|                let result = ::libfuzzer_sys::Corpus::from(__libfuzzer_sys_run(bytes));
-  277|  86.7k|                result.to_libfuzzer_code()
-  278|  86.7k|            }
+  276|  56.2k|                let result = ::libfuzzer_sys::Corpus::from(__libfuzzer_sys_run(bytes));
+  277|  56.2k|                result.to_libfuzzer_code()
+  278|  56.2k|            }
 LLVMFuzzerTestOneInput:
-   59|  86.7k|pub unsafe fn test_input_wrap(data: *const u8, size: usize) -> i32 {
-   60|  86.7k|    let test_input = ::std::panic::catch_unwind(|| {
+   59|  56.2k|pub unsafe fn test_input_wrap(data: *const u8, size: usize) -> i32 {
+   60|  56.2k|    let test_input = ::std::panic::catch_unwind(|| {
    61|       |        let data_slice = ::std::slice::from_raw_parts(data, size);
    62|       |        rust_fuzzer_test_input(data_slice)
    63|       |    });
    64|       |
-   65|  86.7k|    match test_input {
-   66|  86.7k|        Ok(i) => i,
+   65|  56.2k|    match test_input {
+   66|  56.2k|        Ok(i) => i,
    67|       |        Err(_) => {
    68|       |            // hopefully the custom panic hook will be called before and abort the
    69|       |            // process before the stack frames are unwinded.
    70|      0|            ::std::process::abort();
    71|       |        }
    72|       |    }
-   73|  86.7k|}
+   73|  56.2k|}
 _RNCNvCsg9b96z6GT7D_13libfuzzer_sys15test_input_wrap0B3_:
-   60|  86.7k|    let test_input = ::std::panic::catch_unwind(|| {
-   61|  86.7k|        let data_slice = ::std::slice::from_raw_parts(data, size);
-   62|  86.7k|        rust_fuzzer_test_input(data_slice)
-   63|  86.7k|    });
+   60|  56.2k|    let test_input = ::std::panic::catch_unwind(|| {
+   61|  56.2k|        let data_slice = ::std::slice::from_raw_parts(data, size);
+   62|  56.2k|        rust_fuzzer_test_input(data_slice)
+   63|  56.2k|    });
 _RNCNvCsg9b96z6GT7D_13libfuzzer_sys25rust_libfuzzer_debug_path0B3_:
    78|      1|    RUST_LIBFUZZER_DEBUG_PATH.get_or_init(|| std::env::var("RUST_LIBFUZZER_DEBUG_PATH").ok())
 _RNvCsg9b96z6GT7D_13libfuzzer_sys10initialize:
@@ -1960,46 +1960,46 @@ _RNvCsg9b96z6GT7D_13libfuzzer_sys10initialize:
    96|      2|    0
    97|      2|}
 _RNvCsg9b96z6GT7D_13libfuzzer_sys25rust_libfuzzer_debug_path:
-   76|  86.7k|pub fn rust_libfuzzer_debug_path() -> &'static Option<String> {
+   76|  56.2k|pub fn rust_libfuzzer_debug_path() -> &'static Option<String> {
    77|       |    static RUST_LIBFUZZER_DEBUG_PATH: OnceLock<Option<String>> = OnceLock::new();
-   78|  86.7k|    RUST_LIBFUZZER_DEBUG_PATH.get_or_init(|| std::env::var("RUST_LIBFUZZER_DEBUG_PATH").ok())
-   79|  86.7k|}
+   78|  56.2k|    RUST_LIBFUZZER_DEBUG_PATH.get_or_init(|| std::env::var("RUST_LIBFUZZER_DEBUG_PATH").ok())
+   79|  56.2k|}
 _RNvMs_Csg9b96z6GT7D_13libfuzzer_sysNtB4_6Corpus17to_libfuzzer_code:
-   40|  86.7k|    pub fn to_libfuzzer_code(self) -> i32 {
-   41|  86.7k|        match self {
-   42|  86.7k|            Corpus::Keep => 0,
+   40|  56.2k|    pub fn to_libfuzzer_code(self) -> i32 {
+   41|  56.2k|        match self {
+   42|  56.2k|            Corpus::Keep => 0,
    43|      0|            Corpus::Reject => -1,
    44|       |        }
-   45|  86.7k|    }
+   45|  56.2k|    }
 _RNvXCsg9b96z6GT7D_13libfuzzer_sysNtB2_6CorpusINtNtCs6SNw0SRvItZ_4core7convert4FromuE4from:
-   30|  86.7k|    fn from(_: ()) -> Self {
-   31|  86.7k|        Self::Keep
-   32|  86.7k|    }
+   30|  56.2k|    fn from(_: ()) -> Self {
+   31|  56.2k|        Self::Keep
+   32|  56.2k|    }
 
 _RNvMNtCsaQ98foBM0gP_16percent_encoding9ascii_setNtB2_8AsciiSet21should_percent_encode:
-   52|  44.1M|    pub(crate) fn should_percent_encode(&self, byte: u8) -> bool {
-   53|  44.1M|        !byte.is_ascii() || self.contains(byte)
-   54|  44.1M|    }
+   52|  22.8M|    pub(crate) fn should_percent_encode(&self, byte: u8) -> bool {
+   53|  22.8M|        !byte.is_ascii() || self.contains(byte)
+   54|  22.8M|    }
 _RNvMNtCsaQ98foBM0gP_16percent_encoding9ascii_setNtB2_8AsciiSet8contains:
-   46|  22.6M|    pub(crate) const fn contains(&self, byte: u8) -> bool {
-   47|  22.6M|        let chunk = self.mask[byte as usize / BITS_PER_CHUNK];
-   48|  22.6M|        let mask = 1 << (byte as usize % BITS_PER_CHUNK);
-   49|  22.6M|        (chunk & mask) != 0
-   50|  22.6M|    }
+   46|  12.6M|    pub(crate) const fn contains(&self, byte: u8) -> bool {
+   47|  12.6M|        let chunk = self.mask[byte as usize / BITS_PER_CHUNK];
+   48|  12.6M|        let mask = 1 << (byte as usize % BITS_PER_CHUNK);
+   49|  12.6M|        (chunk & mask) != 0
+   50|  12.6M|    }
 
 _RNvCsaQ98foBM0gP_16percent_encoding14percent_encodeCsOmTKQdZnin_4verd:
-  117|  1.01M|pub fn percent_encode<'a>(input: &'a [u8], ascii_set: &'static AsciiSet) -> PercentEncode<'a> {
-  118|  1.01M|    PercentEncode {
-  119|  1.01M|        bytes: input,
-  120|  1.01M|        ascii_set,
-  121|  1.01M|    }
-  122|  1.01M|}
+  117|   686k|pub fn percent_encode<'a>(input: &'a [u8], ascii_set: &'static AsciiSet) -> PercentEncode<'a> {
+  118|   686k|    PercentEncode {
+  119|   686k|        bytes: input,
+  120|   686k|        ascii_set,
+  121|   686k|    }
+  122|   686k|}
 _RNvCsaQ98foBM0gP_16percent_encoding19utf8_percent_encodeCsOmTKQdZnin_4verd:
-  136|  1.01M|pub fn utf8_percent_encode<'a>(input: &'a str, ascii_set: &'static AsciiSet) -> PercentEncode<'a> {
-  137|  1.01M|    percent_encode(input.as_bytes(), ascii_set)
-  138|  1.01M|}
+  136|   686k|pub fn utf8_percent_encode<'a>(input: &'a str, ascii_set: &'static AsciiSet) -> PercentEncode<'a> {
+  137|   686k|    percent_encode(input.as_bytes(), ascii_set)
+  138|   686k|}
 _RNvCsaQ98foBM0gP_16percent_encoding19percent_encode_byteB1_:
-   73|  26.8M|pub fn percent_encode_byte(byte: u8) -> &'static str {
+   73|  13.2M|pub fn percent_encode_byte(byte: u8) -> &'static str {
    74|       |    static ENC_TABLE: &[u8; 768] = b"\
    75|       |      %00%01%02%03%04%05%06%07%08%09%0A%0B%0C%0D%0E%0F\
    76|       |      %10%11%12%13%14%15%16%17%18%19%1A%1B%1C%1D%1E%1F\
@@ -2019,89 +2019,89 @@ _RNvCsaQ98foBM0gP_16percent_encoding19percent_encode_byteB1_:
    90|       |      %F0%F1%F2%F3%F4%F5%F6%F7%F8%F9%FA%FB%FC%FD%FE%FF\
    91|       |      ";
    92|       |
-   93|  26.8M|    let index = usize::from(byte) * 3;
+   93|  13.2M|    let index = usize::from(byte) * 3;
    94|       |    // SAFETY: ENC_TABLE is ascii-only, so any subset of it should be
    95|       |    // ascii-only too, which is valid utf8.
-   96|  26.8M|    unsafe { str::from_utf8_unchecked(&ENC_TABLE[index..index + 3]) }
-   97|  26.8M|}
+   96|  13.2M|    unsafe { str::from_utf8_unchecked(&ENC_TABLE[index..index + 3]) }
+   97|  13.2M|}
 _RNvXCsaQ98foBM0gP_16percent_encodingNtB2_13PercentEncodeNtNtNtNtCs6SNw0SRvItZ_4core4iter6traits8iterator8Iterator4next:
-  150|  30.1M|    fn next(&mut self) -> Option<&'a str> {
-  151|  30.1M|        if let Some((&first_byte, remaining)) = self.bytes.split_first() {
-  152|  29.1M|            if self.ascii_set.should_percent_encode(first_byte) {
-  153|  26.8M|                self.bytes = remaining;
-  154|  26.8M|                Some(percent_encode_byte(first_byte))
+  150|  15.7M|    fn next(&mut self) -> Option<&'a str> {
+  151|  15.7M|        if let Some((&first_byte, remaining)) = self.bytes.split_first() {
+  152|  15.0M|            if self.ascii_set.should_percent_encode(first_byte) {
+  153|  13.2M|                self.bytes = remaining;
+  154|  13.2M|                Some(percent_encode_byte(first_byte))
   155|       |            } else {
   156|       |                // The unsafe blocks here are appropriate because the bytes are
   157|       |                // confirmed as a subset of UTF-8 in should_percent_encode.
-  158|  14.9M|                for (i, &byte) in remaining.iter().enumerate() {
-  159|  14.9M|                    if self.ascii_set.should_percent_encode(byte) {
+  158|  7.81M|                for (i, &byte) in remaining.iter().enumerate() {
+  159|  7.81M|                    if self.ascii_set.should_percent_encode(byte) {
   160|       |                        // 1 for first_byte + i for previous iterations of this loop
-  161|  1.72M|                        let (unchanged_slice, remaining) = self.bytes.split_at(1 + i);
-  162|  1.72M|                        self.bytes = remaining;
-  163|  1.72M|                        return Some(unsafe { str::from_utf8_unchecked(unchanged_slice) });
-  164|  13.2M|                    }
+  161|  1.32M|                        let (unchanged_slice, remaining) = self.bytes.split_at(1 + i);
+  162|  1.32M|                        self.bytes = remaining;
+  163|  1.32M|                        return Some(unsafe { str::from_utf8_unchecked(unchanged_slice) });
+  164|  6.49M|                    }
   165|       |                }
-  166|   639k|                let unchanged_slice = self.bytes;
-  167|   639k|                self.bytes = &[][..];
-  168|   639k|                Some(unsafe { str::from_utf8_unchecked(unchanged_slice) })
+  166|   451k|                let unchanged_slice = self.bytes;
+  167|   451k|                self.bytes = &[][..];
+  168|   451k|                Some(unsafe { str::from_utf8_unchecked(unchanged_slice) })
   169|       |            }
   170|       |        } else {
-  171|  1.01M|            None
+  171|   686k|            None
   172|       |        }
-  173|  30.1M|    }
+  173|  15.7M|    }
 _RNvXs_CsaQ98foBM0gP_16percent_encodingNtB4_13PercentEncodeNtNtCs6SNw0SRvItZ_4core3fmt7Display3fmt:
-  185|  1.01M|    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-  186|  29.1M|        for c in (*self).clone() {
-  187|  29.1M|            formatter.write_str(c)?
+  185|   686k|    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+  186|  15.0M|        for c in (*self).clone() {
+  187|  15.0M|            formatter.write_str(c)?
   188|       |        }
-  189|  1.01M|        Ok(())
-  190|  1.01M|    }
+  189|   686k|        Ok(())
+  190|   686k|    }
 
 _RNCNvCs8gVPDMh8Uq_14headers_policy13parse_headers0B3_:
-   11|  78.8M|    for line in data.split(|b| *b == b'\n') {
+   11|  51.5M|    for line in data.split(|b| *b == b'\n') {
 _RNCNvCs8gVPDMh8Uq_14headers_policy13parse_headerss_0B3_:
-   13|  34.8M|        let Some(colon) = line.iter().position(|b| *b == b':') else {
+   13|  26.2M|        let Some(colon) = line.iter().position(|b| *b == b':') else {
 _RNCNvNvCs8gVPDMh8Uq_14headers_policy1__19___libfuzzer_sys_runs0_0B5_:
-  105|  96.0M|        assert!(enc.bytes().all(|b| b.is_ascii_graphic() || b == b'%'));
+  105|  48.0M|        assert!(enc.bytes().all(|b| b.is_ascii_graphic() || b == b'%'));
 _RNCNvNvCs8gVPDMh8Uq_14headers_policy1__19___libfuzzer_sys_runs_0B5_:
-   74|  86.7k|        .unwrap_or_else(|| String::from_utf8_lossy(&data[..data.len().min(128)]).into_owned());
+   74|  56.2k|        .unwrap_or_else(|| String::from_utf8_lossy(&data[..data.len().min(128)]).into_owned());
 _RNvCs8gVPDMh8Uq_14headers_policy13parse_headers:
-    9|  86.7k|fn parse_headers(data: &[u8]) -> HeaderMap {
-   10|  86.7k|    let mut headers = HeaderMap::new();
-   11|  4.13M|    for line in data.split(|b| *b == b'\n') {
-   12|  4.13M|        let line = line.strip_suffix(b"\r").unwrap_or(line);
-   13|  4.13M|        let Some(colon) = line.iter().position(|b| *b == b':') else {
-   14|  2.26M|            continue;
+    9|  56.2k|fn parse_headers(data: &[u8]) -> HeaderMap {
+   10|  56.2k|    let mut headers = HeaderMap::new();
+   11|  2.99M|    for line in data.split(|b| *b == b'\n') {
+   12|  2.99M|        let line = line.strip_suffix(b"\r").unwrap_or(line);
+   13|  2.99M|        let Some(colon) = line.iter().position(|b| *b == b':') else {
+   14|  1.49M|            continue;
    15|       |        };
-   16|   505k|        let (Ok(name), Ok(value)) = (
-   17|  1.86M|            HeaderName::from_bytes(&line[..colon]),
-   18|  1.86M|            HeaderValue::from_bytes(&line[colon + 1..]),
+   16|   323k|        let (Ok(name), Ok(value)) = (
+   17|  1.50M|            HeaderName::from_bytes(&line[..colon]),
+   18|  1.50M|            HeaderValue::from_bytes(&line[colon + 1..]),
    19|       |        ) else {
-   20|  1.36M|            continue;
+   20|  1.18M|            continue;
    21|       |        };
-   22|   505k|        headers.append(name, value);
+   22|   323k|        headers.append(name, value);
    23|       |    }
-   24|  86.7k|    headers
-   25|  86.7k|}
+   24|  56.2k|    headers
+   25|  56.2k|}
 _RNvCs8gVPDMh8Uq_14headers_policy17connection_tokens:
-   28|  86.7k|fn connection_tokens(h: &HeaderMap) -> Vec<HeaderName> {
-   29|  86.7k|    h.get_all(http::header::CONNECTION)
-   30|  86.7k|        .iter()
-   31|  86.7k|        .filter_map(|v| v.to_str().ok())
-   32|  86.7k|        .flat_map(|v| v.split(','))
-   33|  86.7k|        .filter_map(|t| HeaderName::from_bytes(t.trim().as_bytes()).ok())
-   34|  86.7k|        .collect()
-   35|  86.7k|}
+   28|  56.2k|fn connection_tokens(h: &HeaderMap) -> Vec<HeaderName> {
+   29|  56.2k|    h.get_all(http::header::CONNECTION)
+   30|  56.2k|        .iter()
+   31|  56.2k|        .filter_map(|v| v.to_str().ok())
+   32|  56.2k|        .flat_map(|v| v.split(','))
+   33|  56.2k|        .filter_map(|t| HeaderName::from_bytes(t.trim().as_bytes()).ok())
+   34|  56.2k|        .collect()
+   35|  56.2k|}
 
 _RNvNtNtCsOmTKQdZnin_4verd5proxy7headers10host_clean:
-   89|   347k|fn host_clean(host: &str) -> bool {
-   90|   347k|    !host.is_empty()
-   91|   347k|        && host
-   92|   347k|            .chars()
-   93|   347k|            .all(|c| c.is_ascii_graphic() && !matches!(c, ',' | ';' | '"'))
-   94|   347k|}
+   89|   224k|fn host_clean(host: &str) -> bool {
+   90|   224k|    !host.is_empty()
+   91|   224k|        && host
+   92|   224k|            .chars()
+   93|   224k|            .all(|c| c.is_ascii_graphic() && !matches!(c, ',' | ';' | '"'))
+   94|   224k|}
 _RNvNtNtCsOmTKQdZnin_4verd5proxy7headers11encode_path:
-  205|  1.01M|pub fn encode_path(path: &str) -> String {
+  205|   686k|pub fn encode_path(path: &str) -> String {
   206|       |    const PATH_SET: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
   207|       |        .add(b' ')
   208|       |        .add(b'"')
@@ -2114,10 +2114,10 @@ _RNvNtNtCsOmTKQdZnin_4verd5proxy7headers11encode_path:
   215|       |        .add(b'}')
   216|       |        .add(b'%')
   217|       |        .add(b'^');
-  218|  1.01M|    percent_encoding::utf8_percent_encode(path, PATH_SET).to_string()
-  219|  1.01M|}
+  218|   686k|    percent_encoding::utf8_percent_encode(path, PATH_SET).to_string()
+  219|   686k|}
 _RNvNtNtCsOmTKQdZnin_4verd5proxy7headers13rfc7239_value:
-  100|   173k|fn rfc7239_value(host: &str) -> String {
+  100|   112k|fn rfc7239_value(host: &str) -> String {
   101|       |    fn token_char(c: char) -> bool {
   102|       |        c.is_ascii_alphanumeric()
   103|       |            || matches!(
@@ -2139,135 +2139,135 @@ _RNvNtNtCsOmTKQdZnin_4verd5proxy7headers13rfc7239_value:
   119|       |                    | ':'
   120|       |            )
   121|       |    }
-  122|   173k|    if host_clean(host) && host.chars().all(token_char) {
-  123|  2.59k|        host.to_string()
+  122|   112k|    if host_clean(host) && host.chars().all(token_char) {
+  123|    580|        host.to_string()
   124|       |    } else {
-  125|   170k|        let escaped: String = host
-  126|   170k|            .chars()
-  127|   170k|            .flat_map(|c| match c {
+  125|   111k|        let escaped: String = host
+  126|   111k|            .chars()
+  127|   111k|            .flat_map(|c| match c {
   128|       |                '"' | '\\' => vec!['\\', c],
   129|       |                c if c.is_ascii_graphic() || c == ' ' => vec![c],
   130|       |                _ => vec![],
   131|       |            })
-  132|   170k|            .collect();
-  133|   170k|        format!("\"{escaped}\"")
+  132|   111k|            .collect();
+  133|   111k|        format!("\"{escaped}\"")
   134|       |    }
-  135|   173k|}
+  135|   112k|}
 _RNvNtNtCsOmTKQdZnin_4verd5proxy7headers13set_forwarded:
-  140|   173k|pub fn set_forwarded(
-  141|   173k|    headers: &mut HeaderMap,
-  142|   173k|    peer_ip: IpAddr,
-  143|   173k|    peer_trusted: bool,
-  144|   173k|    client_ip: IpAddr,
-  145|   173k|    scheme: &str,
-  146|   173k|    host: &str,
-  147|   173k|) {
+  140|   112k|pub fn set_forwarded(
+  141|   112k|    headers: &mut HeaderMap,
+  142|   112k|    peer_ip: IpAddr,
+  143|   112k|    peer_trusted: bool,
+  144|   112k|    client_ip: IpAddr,
+  145|   112k|    scheme: &str,
+  146|   112k|    host: &str,
+  147|   112k|) {
   148|       |    // X-Forwarded-For: append the direct peer when the chain is trusted,
   149|       |    // replace entirely when it is not.
-  150|   173k|    let xff = if peer_trusted {
-  151|  86.7k|        joined(headers, &XFF)
-  152|  86.7k|            .map(|v| format!("{v}, {peer_ip}"))
-  153|  86.7k|            .unwrap_or_else(|| peer_ip.to_string())
+  150|   112k|    let xff = if peer_trusted {
+  151|  56.2k|        joined(headers, &XFF)
+  152|  56.2k|            .map(|v| format!("{v}, {peer_ip}"))
+  153|  56.2k|            .unwrap_or_else(|| peer_ip.to_string())
   154|       |    } else {
-  155|  86.7k|        peer_ip.to_string()
+  155|  56.2k|        peer_ip.to_string()
   156|       |    };
-  157|   173k|    if let Ok(v) = HeaderValue::from_str(&xff) {
-  158|   173k|        headers.insert(XFF, v);
-  159|   173k|    }
+  157|   112k|    if let Ok(v) = HeaderValue::from_str(&xff) {
+  158|   112k|        headers.insert(XFF, v);
+  159|   112k|    }
   160|       |    // trusted peers' X-Forwarded-Proto/-Host describe the client-facing
   161|       |    // side (e.g. a TLS terminator's `https`) — keep them; untrusted or
   162|       |    // absent values get our own observation
-  163|   173k|    if !(peer_trusted && headers.contains_key(&XFP))
-  164|   173k|        && let Ok(v) = HeaderValue::from_str(scheme)
-  165|   173k|    {
-  166|   173k|        headers.insert(XFP, v);
-  167|   173k|    }
+  163|   112k|    if !(peer_trusted && headers.contains_key(&XFP))
+  164|   112k|        && let Ok(v) = HeaderValue::from_str(scheme)
+  165|   112k|    {
+  166|   112k|        headers.insert(XFP, v);
+  167|   112k|    }
   168|       |    // XFH: trusted peers' value is preserved; otherwise we emit our own
   169|       |    // — and when our host isn't clean we must still REMOVE the client's
   170|       |    // spoofed inbound value rather than let it pass through verbatim
-  171|   173k|    if peer_trusted && headers.contains_key(&XFH) {
+  171|   112k|    if peer_trusted && headers.contains_key(&XFH) {
   172|      0|        // preserved
-  173|   173k|    } else if host_clean(host)
-  174|  3.13k|        && let Ok(v) = HeaderValue::from_str(host)
-  175|  3.13k|    {
-  176|  3.13k|        headers.insert(XFH, v);
-  177|   170k|    } else {
-  178|   170k|        headers.remove(&XFH);
-  179|   170k|    }
-  180|   173k|    if let Ok(v) = HeaderValue::from_str(&client_ip.to_string()) {
-  181|   173k|        headers.insert(XRI, v);
-  182|   173k|    }
+  173|   112k|    } else if host_clean(host)
+  174|    668|        && let Ok(v) = HeaderValue::from_str(host)
+  175|    668|    {
+  176|    668|        headers.insert(XFH, v);
+  177|   111k|    } else {
+  178|   111k|        headers.remove(&XFH);
+  179|   111k|    }
+  180|   112k|    if let Ok(v) = HeaderValue::from_str(&client_ip.to_string()) {
+  181|   112k|        headers.insert(XRI, v);
+  182|   112k|    }
   183|       |
   184|       |    // RFC 7239 Forwarded: for=peer;proto=scheme;host=host (IPv6 quoted,
   185|       |    // host quoted when it isn't a bare token).
-  186|   173k|    let for_part = match peer_ip {
-  187|   173k|        IpAddr::V4(ip) => ip.to_string(),
+  186|   112k|    let for_part = match peer_ip {
+  187|   112k|        IpAddr::V4(ip) => ip.to_string(),
   188|      0|        IpAddr::V6(ip) => format!("\"[{ip}]\""),
   189|       |    };
-  190|   173k|    let entry = format!("for={for_part};proto={scheme};host={}", rfc7239_value(host));
-  191|   173k|    let fwd = if peer_trusted {
-  192|  86.7k|        joined(headers, &FORWARDED)
-  193|  86.7k|            .map(|v| format!("{v}, {entry}"))
-  194|  86.7k|            .unwrap_or(entry)
+  190|   112k|    let entry = format!("for={for_part};proto={scheme};host={}", rfc7239_value(host));
+  191|   112k|    let fwd = if peer_trusted {
+  192|  56.2k|        joined(headers, &FORWARDED)
+  193|  56.2k|            .map(|v| format!("{v}, {entry}"))
+  194|  56.2k|            .unwrap_or(entry)
   195|       |    } else {
-  196|  86.7k|        entry
+  196|  56.2k|        entry
   197|       |    };
-  198|   173k|    if let Ok(v) = HeaderValue::from_str(&fwd) {
-  199|   173k|        headers.insert(FORWARDED, v);
-  200|   173k|    }
-  201|   173k|}
+  198|   112k|    if let Ok(v) = HeaderValue::from_str(&fwd) {
+  199|   112k|        headers.insert(FORWARDED, v);
+  200|   112k|    }
+  201|   112k|}
 _RNvNtNtCsOmTKQdZnin_4verd5proxy7headers13wants_upgrade:
-   20|  86.7k|pub fn wants_upgrade(headers: &HeaderMap) -> bool {
-   21|  86.7k|    headers.contains_key(UPGRADE) && connection_tokens(headers).any(|t| t == UPGRADE)
-   22|  86.7k|}
+   20|  56.2k|pub fn wants_upgrade(headers: &HeaderMap) -> bool {
+   21|  56.2k|    headers.contains_key(UPGRADE) && connection_tokens(headers).any(|t| t == UPGRADE)
+   22|  56.2k|}
 _RNvNtNtCsOmTKQdZnin_4verd5proxy7headers16strip_hop_by_hop:
-   38|  86.7k|pub fn strip_hop_by_hop(headers: &mut HeaderMap, upgrading: bool) {
-   39|  86.7k|    let tokens: Vec<HeaderName> = connection_tokens(headers).collect();
-   40|  86.7k|    for name in tokens {
+   38|  56.2k|pub fn strip_hop_by_hop(headers: &mut HeaderMap, upgrading: bool) {
+   39|  56.2k|    let tokens: Vec<HeaderName> = connection_tokens(headers).collect();
+   40|  56.2k|    for name in tokens {
    41|      0|        if upgrading && name == UPGRADE {
    42|      0|            continue;
    43|      0|        }
    44|      0|        headers.remove(&name);
    45|       |    }
-   46|   607k|    for name in [
-   47|  86.7k|        PROXY_AUTHENTICATE,
-   48|  86.7k|        PROXY_AUTHORIZATION,
-   49|  86.7k|        TE,
-   50|  86.7k|        TRAILER,
-   51|  86.7k|        TRANSFER_ENCODING,
+   46|   393k|    for name in [
+   47|  56.2k|        PROXY_AUTHENTICATE,
+   48|  56.2k|        PROXY_AUTHORIZATION,
+   49|  56.2k|        TE,
+   50|  56.2k|        TRAILER,
+   51|  56.2k|        TRANSFER_ENCODING,
    52|       |        // RFC 9110 fixed hop-by-hop names the `http` crate has no
    53|       |        // constants for
-   54|  86.7k|        HeaderName::from_static("keep-alive"),
+   54|  56.2k|        HeaderName::from_static("keep-alive"),
    55|       |        // non-standard but widely sent; hop-by-hop all the same
-   56|  86.7k|        HeaderName::from_static("proxy-connection"),
-   57|   607k|    ] {
-   58|   607k|        headers.remove(name);
-   59|   607k|    }
-   60|  86.7k|    if !upgrading {
-   61|  86.7k|        headers.remove(CONNECTION);
-   62|  86.7k|        headers.remove(UPGRADE);
-   63|  86.7k|    }
-   64|  86.7k|}
+   56|  56.2k|        HeaderName::from_static("proxy-connection"),
+   57|   393k|    ] {
+   58|   393k|        headers.remove(name);
+   59|   393k|    }
+   60|  56.2k|    if !upgrading {
+   61|  56.2k|        headers.remove(CONNECTION);
+   62|  56.2k|        headers.remove(UPGRADE);
+   63|  56.2k|    }
+   64|  56.2k|}
 _RNvNtNtCsOmTKQdZnin_4verd5proxy7headers17connection_tokens:
-   25|  86.7k|fn connection_tokens(headers: &HeaderMap) -> impl Iterator<Item = HeaderName> + '_ {
-   26|  86.7k|    headers
-   27|  86.7k|        .get_all(CONNECTION)
-   28|  86.7k|        .iter()
-   29|  86.7k|        .filter_map(|v| v.to_str().ok())
-   30|  86.7k|        .flat_map(|v| v.split(','))
-   31|  86.7k|        .filter_map(|t| HeaderName::from_bytes(t.trim().as_bytes()).ok())
-   32|  86.7k|}
+   25|  56.2k|fn connection_tokens(headers: &HeaderMap) -> impl Iterator<Item = HeaderName> + '_ {
+   26|  56.2k|    headers
+   27|  56.2k|        .get_all(CONNECTION)
+   28|  56.2k|        .iter()
+   29|  56.2k|        .filter_map(|v| v.to_str().ok())
+   30|  56.2k|        .flat_map(|v| v.split(','))
+   31|  56.2k|        .filter_map(|t| HeaderName::from_bytes(t.trim().as_bytes()).ok())
+   32|  56.2k|}
 _RNvNtNtCsOmTKQdZnin_4verd5proxy7headers6joined:
-   81|   173k|fn joined(headers: &HeaderMap, name: &HeaderName) -> Option<String> {
-   82|   173k|    let mut it = headers.get_all(name).iter().filter_map(|v| v.to_str().ok());
-   83|   173k|    let first = it.next()?;
+   81|   112k|fn joined(headers: &HeaderMap, name: &HeaderName) -> Option<String> {
+   82|   112k|    let mut it = headers.get_all(name).iter().filter_map(|v| v.to_str().ok());
+   83|   112k|    let first = it.next()?;
    84|      0|    Some(it.fold(first.to_string(), |a, v| format!("{a}, {v}")))
-   85|   173k|}
+   85|   112k|}
 _RNvNvNtNtCsOmTKQdZnin_4verd5proxy7headers13rfc7239_value10token_char:
-  101|   168k|    fn token_char(c: char) -> bool {
-  102|   168k|        c.is_ascii_alphanumeric()
-  103|    544|            || matches!(
-  104|   103k|                c,
+  101|  26.1k|    fn token_char(c: char) -> bool {
+  102|  26.1k|        c.is_ascii_alphanumeric()
+  103|     88|            || matches!(
+  104|  23.0k|                c,
   105|       |                '!' | '#'
   106|       |                    | '$'
   107|       |                    | '%'
@@ -2284,15 +2284,15 @@ _RNvNvNtNtCsOmTKQdZnin_4verd5proxy7headers13rfc7239_value10token_char:
   118|       |                    | '~'
   119|       |                    | ':'
   120|       |            )
-  121|   168k|    }
+  121|  26.1k|    }
 _RNCNvNtNtCsOmTKQdZnin_4verd5proxy7headers10host_clean0B7_:
-   93|  2.30M|            .all(|c| c.is_ascii_graphic() && !matches!(c, ',' | ';' | '"'))
+   93|   981k|            .all(|c| c.is_ascii_graphic() && !matches!(c, ',' | ';' | '"'))
 _RNCNvNtNtCsOmTKQdZnin_4verd5proxy7headers13rfc7239_value0B7_:
-  127|  19.3M|            .flat_map(|c| match c {
-  128|  58.0k|                '"' | '\\' => vec!['\\', c],
-  129|  19.3M|                c if c.is_ascii_graphic() || c == ' ' => vec![c],
-  130|  8.31M|                _ => vec![],
-  131|  19.4M|            })
+  127|  12.4M|            .flat_map(|c| match c {
+  128|  42.5k|                '"' | '\\' => vec!['\\', c],
+  129|  12.4M|                c if c.is_ascii_graphic() || c == ' ' => vec![c],
+  130|  5.46M|                _ => vec![],
+  131|  12.5M|            })
 _RNCNvNtNtCsOmTKQdZnin_4verd5proxy7headers13set_forwardeds_0B7_:
-  153|  86.7k|            .unwrap_or_else(|| peer_ip.to_string())
+  153|  56.2k|            .unwrap_or_else(|| peer_ip.to_string())
 
