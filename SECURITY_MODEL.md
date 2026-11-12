@@ -33,7 +33,7 @@ variable) silently weakens a security control.
 ## Components
 
 | Component | Code |
-|---|---|
+| --- | --- |
 | Server | `src/server/`, `src/router/`, `src/body.rs`: connections, HTTP parsing, timeouts, routing, path normalization |
 | Proxy | `src/proxy/`: forwarding, `headers.rs` (`Forwarded`/`X-Forwarded-*`, hop-by-hop), load balancing, health checks, upgrades |
 | Middleware | `src/middleware/` (auth, CORS, rate limiting, compression), `src/handler/` (static files, redirects, respond) |
