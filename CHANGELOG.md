@@ -17,7 +17,7 @@ workflow publishes the matching section as the GitHub release notes.
   validate` now rejects empty entries in `auth.api_key.keys` and
   `auth.bearer.tokens` (e.g. from an unset `${VAR:-}`), and the auth
   middleware treats an empty presented key or token (`?api_key=`, empty
-  header, `Bearer `) as missing instead of comparing it.
+  header, empty `Bearer` token) as missing instead of comparing it.
 
 ## [1.1.0] - 2026-10-29
 
