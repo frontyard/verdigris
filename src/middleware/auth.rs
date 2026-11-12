@@ -282,7 +282,8 @@ impl Bearer {
                 let (scheme, tok) = v.split_once(' ')?;
                 scheme.eq_ignore_ascii_case("bearer").then_some(tok)
             })
-            .map(|t| t.trim());
+            .map(|t| t.trim())
+            .filter(|t| !t.is_empty());
         let Some(token) = token else {
             return Outcome::Rejected(unauthorized("Bearer"));
         };
@@ -314,7 +315,10 @@ impl ApiKey {
                     .find(|(k, _)| k == &self.name)
                     .map(|(_, v)| v.into_owned())
             }),
-        };
+        }
+        // an empty value is never a credential: treat it as missing so a
+        // misconfigured empty key can't be matched by `?key=`
+        .filter(|s| !s.is_empty());
         let ok = self.keys.iter().fold(false, |acc, v| {
             acc | ct_eq(v, presented.as_deref().unwrap_or("").as_bytes())
         });
@@ -474,6 +478,56 @@ mod tests {
             .into_parts()
             .0;
         assert!(matches!(a.check(&bad), Outcome::Rejected(_)));
+    }
+
+    #[test]
+    fn empty_presented_credential_never_matches_empty_configured() {
+        let k = Auth::build(&cfg::AuthConfig {
+            api_key: Some(cfg::ApiKeyAuth {
+                location: cfg::ApiKeyLocation::Query,
+                name: "api_key".into(),
+                keys: vec!["".into()],
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+        let empty = http::Request::builder()
+            .uri("http://x/internal?api_key=")
+            .body(())
+            .unwrap()
+            .into_parts()
+            .0;
+        assert!(matches!(k.check(&empty), Outcome::Rejected(_)));
+
+        let h = Auth::build(&cfg::AuthConfig {
+            api_key: Some(cfg::ApiKeyAuth {
+                location: cfg::ApiKeyLocation::Header,
+                name: "x-api-key".into(),
+                keys: vec!["".into()],
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(matches!(
+            h.check(&req(Some(("x-api-key", "")))),
+            Outcome::Rejected(_)
+        ));
+
+        let b = Auth::build(&cfg::AuthConfig {
+            bearer: Some(cfg::BearerAuth {
+                tokens: vec!["".into()],
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(matches!(
+            b.check(&req(Some(("authorization", "Bearer ")))),
+            Outcome::Rejected(_)
+        ));
+        assert!(matches!(
+            b.check(&req(Some(("authorization", "Bearer    ")))),
+            Outcome::Rejected(_)
+        ));
     }
 
     #[test]
