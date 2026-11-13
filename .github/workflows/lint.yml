@@ -7,6 +7,7 @@ on:
     # labeled/unlabeled re-run so the no-changelog escape hatch applies
     # without needing a new push
     types: [opened, synchronize, reopened, labeled, unlabeled]
+  merge_group: # required checks must also run on queued merges
 
 permissions: {}
 

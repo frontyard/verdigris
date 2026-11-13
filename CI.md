@@ -160,5 +160,18 @@ detects the version bump → pushes `vX.Y.Z` + dispatches `release.yml`.
   (mmap); fuzzers already run under ASan/UBSan.
 - **`cargo vet`, `loom`, `minimal-versions`, Semgrep, hadolint, taplo**
   — real gains but high maintenance or marginal over existing coverage.
-- **Branch protection** — repo setting, not a workflow: mark the
-  gating jobs above as required checks so "blocks" means blocks.
+
+## Merge model
+
+Repo settings, not workflows:
+
+- **Required checks** — the "Sanity" ruleset marks the gating jobs
+  above as required so "blocks" means blocks.
+- **Merge queue (dormant)** — the four required-check workflows
+  (`ci.yml`, `lint.yml`, `codeql.yml`, `docker.yml`) declare
+  `merge_group` so they're ready if a queue is ever enabled: GitHub
+  only offers `Require merge queue` on org-owned repos / Enterprise
+  Cloud, not user-owned repos like this one. PR-diff-scoped jobs
+  (`dependency review`, `changelog updated`) skip inside merge groups —
+  they already ran on the PR itself. `docker.yml`'s diff gate treats
+  `merge_group` as always-build.

@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group: # required checks must also run on queued merges
   schedule:
     - cron: "15 4 * * 3" # weekly, Wednesday 04:15 UTC
 

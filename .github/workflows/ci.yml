@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group: # required checks must also run on queued merges
 
 env:
   CARGO_TERM_COLOR: always
