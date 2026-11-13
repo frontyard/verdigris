@@ -2,12 +2,12 @@ name: ClusterFuzzLite PR fuzzing
 
 on:
   pull_request:
+    # Cargo.* deliberately excluded — dep bumps get coverage from the
+    # daily batch instead of paying the ~14-min PR smoke every time
     paths:
       - "src/**"
       - "fuzz/**"
       - ".clusterfuzzlite/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
       - "rust-toolchain.toml"
       - ".github/workflows/cflite_pr.yml"
 

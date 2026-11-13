@@ -112,7 +112,9 @@ jobs:
 
   changelog:
     name: changelog updated
-    if: github.event_name == 'pull_request'
+    # dependabot dep bumps can't write changelog entries — the check
+    # exists for human-authored code changes
+    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {contents: read} # checkout + base fetch

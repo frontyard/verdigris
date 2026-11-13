@@ -25,6 +25,14 @@ Full [documentation](https://www.frontyard.co/verdigris/) is
 automatically generated on every release. Point AI agents to [llms-full.txt](llms-full.txt)
 for comprehensive context when setting up or troubleshooting.
 
+- [Book](https://frontyard.github.io/verdigris/) — guides and the
+  generated config reference (`docs/book/`, built with mdBook)
+- [llms.txt](llms.txt) — curated summary + recipes for LLM ingestion;
+  [llms-full.txt](llms-full.txt) is the whole book in one file
+- [MISSION.md](MISSION.md) — design goals and non-goals
+- [PERFORMANCE.md](PERFORMANCE.md) — benchmark findings vs nginx/caddy+fastcache/ferron
+- [RELEASING.md](RELEASING.md) — how releases and container images are produced
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Security issues:
@@ -96,16 +104,6 @@ docker compose up --build
 
 Static site on `:8080`, an `http-echo` upstream behind `/api`, admin API
 on `127.0.0.1:2019`.
-
-## Documentation
-
-- [Book](https://frontyard.github.io/verdigris/) — guides and the
-  generated config reference (`docs/book/`, built with mdBook)
-- `llms.txt` — curated summary + recipes for LLM ingestion;
-  `llms-full.txt` is the whole book in one file
-- `MISSION.md` — design goals and non-goals
-- `PERFORMANCE.md` — benchmark findings vs nginx/caddy+fastcache/ferron
-- `RELEASING.md` — how releases and container images are produced
 
 ## Development
 
