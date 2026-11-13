@@ -710,7 +710,7 @@ fn client_conditional(headers: &HeaderMap, meta: &Meta) -> bool {
             c == "*" || c.strip_prefix("W/").unwrap_or(c) == etag.strip_prefix("W/").unwrap_or(etag)
         });
     }
-    if headers
+    headers
         .get(http::header::IF_MODIFIED_SINCE)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| httpdate::parse_http_date(v).ok())
@@ -720,10 +720,6 @@ fn client_conditional(headers: &HeaderMap, meta: &Meta) -> bool {
                 .and_then(|v| httpdate::parse_http_date(v).ok()),
         )
         .is_some_and(|(since, lm)| lm <= since)
-    {
-        return true;
-    }
-    false
 }
 
 /// Compose a 304 from the stored meta's freshness/validator headers.
