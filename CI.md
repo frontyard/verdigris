@@ -117,18 +117,18 @@ every-push). Manual `/devin review` comments from a human also work.
 ## Release pipeline
 
 The release flow is: `bump.yml` → `dev → main` PR → merge → `tag.yml`
-detects the version bump → pushes `vX.Y.Z` + dispatches `release.yml`.
+detects the version bump → pushes `vX.Y.Z` with `RELEASE_PAT` → the
+tag push fires `release.yml`.
 
 - **`bump.yml`** — `workflow_dispatch`: bumps `Cargo.toml`, regenerates
   docs, pushes the release commit to `dev`, opens + auto-merges the
   `dev → main` PR. Serialized — concurrent dev-branch pushes conflict.
 - **`tag.yml`** — on push to `main`: diffs `Cargo.toml` version HEAD vs
   first parent; when it changed, requires a matching `CHANGELOG.md`
-  section, creates and pushes the annotated `vX.Y.Z` tag, then
-  dispatches `release.yml` (token pushes don't chain-trigger
-  workflows, hence the explicit dispatch with `actions: write`).
-- **`release.yml`** — on `v*` tag push or `workflow_dispatch` with a
-  tag:
+  section, then creates and pushes the annotated `vX.Y.Z` tag
+  authenticated with `RELEASE_PAT` — a `GITHUB_TOKEN` push would never
+  trigger `release.yml`.
+- **`release.yml`** — on `v*` tag push only (no manual dispatch):
   - `build`: static musl binaries (`x86_64` + `aarch64`) via `cross`,
     wrapped by `cargo-auditable` (`Cross.toml` installs a pinned,
     sha256-verified copy in the build containers) — binaries embed a

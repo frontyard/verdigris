@@ -16,17 +16,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: write # push the v* tag onto the merge commit
-      actions: write # dispatch release.yml (token pushes don't trigger it)
+      contents: read # checkout; the tag push authenticates with RELEASE_PAT
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # zizmor: ignore[artipacked] this job's purpose is pushing the tag
+          # PAT credentials, not GITHUB_TOKEN: a GITHUB_TOKEN push never
+          # fires workflow events, so the tag push must come from the PAT
+          # for it to trigger release.yml
+          token: ${{ secrets.RELEASE_PAT }}
           fetch-depth: 0 # compare Cargo.toml at HEAD vs first parent
       - name: tag version bump
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_PAT: ${{ secrets.RELEASE_PAT }}
         run: |
+          [ -n "$RELEASE_PAT" ] || { echo "::error::RELEASE_PAT secret is not set — see RELEASING.md" >&2; exit 1; }
           cur=$(git show 'HEAD^1:Cargo.toml' | grep -m1 '^version = ' | cut -d'"' -f2)
           new=$(git show 'HEAD:Cargo.toml'   | grep -m1 '^version = ' | cut -d'"' -f2)
           [ "$cur" = "$new" ] && { echo "no version change ($new)"; exit 0; }
@@ -38,4 +42,4 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "v$new" -m "verd v$new" HEAD
           git push origin "v$new"
-          gh workflow run release.yml -f "tag=v$new"
+          echo "pushed v$new — release.yml fires on the tag push"

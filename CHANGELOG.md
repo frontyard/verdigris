@@ -22,6 +22,11 @@ workflow publishes the matching section as the GitHub release notes.
   (`ci.yml`, `lint.yml`, `codeql.yml`, `docker.yml`) now also run on
   `merge_group`. Dormant for now: GitHub only offers merge queues on
   org-owned repos, but the plumbing is live if the repo ever moves.
+- **Release is tag-push only** — `release.yml`'s manual `tag` input is
+  gone (dispatching a not-yet-created tag died at checkout);
+  `tag.yml` now pushes `vX.Y.Z` authenticated with `RELEASE_PAT` so
+  the push itself triggers the release — a `GITHUB_TOKEN` push would
+  never fire it.
 
 ## [1.1.0] - 2026-10-29
 
