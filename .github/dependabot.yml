@@ -4,13 +4,25 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      # one PR for routine minor+patch bumps; majors still get their own
+      minor-patch:
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      # codeql-action steps must share one version — separate bumps fail
+      # with "loaded a configuration file for version X but running Y"
+      codeql-action:
+        patterns: ["github/codeql-action*"]
 
   - package-ecosystem: "cargo"
     directory: "/fuzz"
     schedule:
       interval: "weekly"
+    groups:
+      minor-patch:
+        update-types: ["minor", "patch"]
