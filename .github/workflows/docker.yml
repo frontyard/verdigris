@@ -12,6 +12,7 @@ on:
     # push, always the authoritative result. KEEP the gate regex in sync
     # with the paths list above — adding to paths without updating the
     # regex would report the check green while never building that change.
+  merge_group: # required check must also run on queued merges (always builds)
 
 permissions: {}
 

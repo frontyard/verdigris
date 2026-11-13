@@ -18,6 +18,10 @@ workflow publishes the matching section as the GitHub release notes.
   codeql-action steps bump together, fixing version-skew failures),
   and `Cargo.*` no longer triggers the PR fuzz smoke (dep coverage
   comes from the daily batch).
+- **Merge queue readiness** — the four required-check workflows
+  (`ci.yml`, `lint.yml`, `codeql.yml`, `docker.yml`) now also run on
+  `merge_group`. Dormant for now: GitHub only offers merge queues on
+  org-owned repos, but the plumbing is live if the repo ever moves.
 
 ## [1.1.0] - 2026-10-29
 
