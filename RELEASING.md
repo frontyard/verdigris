@@ -10,11 +10,12 @@ Three workflows chain together:
 2. **Tag** (`.github/workflows/tag.yml`, on push to `main`) — when a
    merge lands, compares `Cargo.toml` version at `HEAD` vs `HEAD^1`.
    A change means a release commit arrived: it tags the merge commit
-   `vX.Y.Z`, pushes it, and dispatches the Release workflow. Tags
-   therefore always anchor in `main`'s history.
+   `vX.Y.Z` and pushes it with `RELEASE_PAT`. Tags therefore always
+   anchor in `main`'s history.
 3. **Release** (`.github/workflows/release.yml`) — builds, signs,
-   attests, publishes. Triggered by a pushed `v*` tag *or* manually
-   with a `tag` input to (re)release an existing tag.
+   attests, publishes. Triggered only by a pushed `v*` tag — there is
+   no manual dispatch; the PAT-authenticated push in step 2 is what
+   fires it (a `GITHUB_TOKEN` push would never trigger a workflow).
 
 ## Cut a release
 
@@ -26,9 +27,11 @@ Requirements:
 
 - A **`RELEASE_PAT` secret**: fine-grained PAT scoped to this repo with
   *Contents: read/write* + *Pull requests: read/write*. It is required
-  because PRs created by `GITHUB_TOKEN` never trigger `pull_request`
-  checks — the required checks would never report and auto-merge could
-  not fire. (Settings → Secrets and variables → Actions.)
+  twice: PRs created by `GITHUB_TOKEN` never trigger `pull_request`
+  checks (required checks would never report and auto-merge could not
+  fire), and a `GITHUB_TOKEN` tag push never triggers `release.yml` —
+  both the dev→main PR step and the tag push authenticate with the
+  PAT. (Settings → Secrets and variables → Actions.)
 - **Auto-merge enabled** on the repo (Settings → General → Allow
   auto-merge); if it isn't, the Bump run leaves the PR open for a
   manual merge and the rest of the chain still fires.
