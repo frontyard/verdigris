@@ -11,6 +11,14 @@ workflow publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
+### Build & CI
+
+- **Bot PR noise reduced** — dependabot is exempt from the changelog
+  check, its cargo bumps arrive as one weekly minor+patch group (and
+  codeql-action steps bump together, fixing version-skew failures),
+  and `Cargo.*` no longer triggers the PR fuzz smoke (dep coverage
+  comes from the daily batch).
+
 ## [1.1.0] - 2026-10-29
 
 ### Added
