@@ -37,7 +37,7 @@ jobs:
           key: ${{ matrix.target }}
           lookup-only: true # release builds read caches but never write them
       - run: cargo install cross --locked
-      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-deb,cargo-generate-rpm
       # The step env below applies to the host `cross` process too, so
@@ -105,7 +105,7 @@ jobs:
         with:
           ref: ${{ github.ref }}
           persist-credentials: false
-      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-sbom
       - run: cargo sbom > verd-sbom.json
@@ -129,7 +129,7 @@ jobs:
     steps:
       # egress audit on the job holding OIDC + signing powers — logs
       # outbound traffic; flip to `block` + allowlist once baselined
-      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -203,7 +203,7 @@ jobs:
       RELEASE_TAG: ${{ github.ref_name }}
     steps:
       # egress audit on the job that authenticates to GHCR
-      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
