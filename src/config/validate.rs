@@ -1551,10 +1551,18 @@ fn check_auth(ctx: &mut Ctx, path: &str, auth: &AuthConfig) {
             }
         }
     }
-    if let Some(bearer) = &auth.bearer
-        && bearer.tokens.is_empty()
-    {
-        ctx.error(format!("{path}.auth.bearer"), "tokens list is empty");
+    if let Some(bearer) = &auth.bearer {
+        if bearer.tokens.is_empty() {
+            ctx.error(format!("{path}.auth.bearer"), "tokens list is empty");
+        }
+        for (i, t) in bearer.tokens.iter().enumerate() {
+            if t.trim().is_empty() {
+                ctx.error(
+                    format!("{path}.auth.bearer.tokens[{i}]"),
+                    "token must not be empty (unset `${VAR:-}` or empty secret file?)",
+                );
+            }
+        }
     }
     if let Some(key) = &auth.api_key {
         if key.name.is_empty() {
@@ -1562,6 +1570,14 @@ fn check_auth(ctx: &mut Ctx, path: &str, auth: &AuthConfig) {
         }
         if key.keys.is_empty() {
             ctx.error(format!("{path}.auth.api_key"), "keys list is empty");
+        }
+        for (i, k) in key.keys.iter().enumerate() {
+            if k.is_empty() {
+                ctx.error(
+                    format!("{path}.auth.api_key.keys[{i}]"),
+                    "key must not be empty (unset `${VAR:-}` or empty secret file?)",
+                );
+            }
         }
     }
 }
@@ -3400,6 +3416,34 @@ auth = { api_key = { location = "header", name = "", keys = [] } }
             &cfg,
             "site[\"x\"].route[1].auth.api_key",
             "keys list is empty"
+        ));
+    }
+
+    #[test]
+    fn auth_rejects_empty_credentials() {
+        let cfg = parse_test_config(
+            r#"
+[[site]]
+hosts = ["x"]
+[[site.route]]
+prefix = "/a"
+respond = { status = 200 }
+auth = { bearer = { tokens = ["ok", ""] } }
+[[site.route]]
+prefix = "/b"
+respond = { status = 200 }
+auth = { api_key = { location = "query", name = "api_key", keys = [""] } }
+"#,
+        );
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].route[0].auth.bearer.tokens[1]",
+            "token must not be empty"
+        ));
+        assert!(has_err(
+            &cfg,
+            "site[\"x\"].route[1].auth.api_key.keys[0]",
+            "key must not be empty"
         ));
     }
 

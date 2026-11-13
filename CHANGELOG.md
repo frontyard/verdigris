@@ -11,6 +11,14 @@ workflow publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
+### Security
+
+- **Empty API keys / bearer tokens no longer authenticate** — `verd
+  validate` now rejects empty entries in `auth.api_key.keys` and
+  `auth.bearer.tokens` (e.g. from an unset `${VAR:-}`), and the auth
+  middleware treats an empty presented key or token (`?api_key=`, empty
+  header, empty `Bearer` token) as missing instead of comparing it.
+
 ### Build & CI
 
 - **Bot PR noise reduced** — dependabot is exempt from the changelog
