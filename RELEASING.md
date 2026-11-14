@@ -91,8 +91,8 @@ from `Dockerfile.release`, which packages the *same* CI-built binaries
 that ship in the tarballs (not a second build). Pushed to GHCR:
 
 ```text
-ghcr.io/frontyard/verdigris:v0.3.0
-ghcr.io/frontyard/verdigris:latest
+ghcr.io/teamverd/verdigris:v0.3.0
+ghcr.io/teamverd/verdigris:latest
 ```
 
 GHCR auth uses `GITHUB_TOKEN` — no extra secrets needed. The workflow
@@ -105,10 +105,10 @@ keyless).
 sha256sum -c checksums.txt --ignore-missing
 cosign verify-blob verd-x86_64-unknown-linux-musl.tar.gz \
   --bundle verd-x86_64-unknown-linux-musl.tar.gz.cosign.bundle \
-  --certificate-identity-regexp 'github.com/frontyard/verdigris' \
+  --certificate-identity-regexp 'github.com/teamverd/verdigris' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 gh attestation verify verd-x86_64-unknown-linux-musl.tar.gz \
-  --repo frontyard/verdigris
+  --repo teamverd/verdigris
 ```
 
 ## Local image builds

@@ -1,8 +1,8 @@
 # Verdigris
 
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/frontyard/verdigris/badge)](https://scorecard.dev/viewer/?uri=github.com/frontyard/verdigris)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/teamverd/verdigris/badge)](https://scorecard.dev/viewer/?uri=github.com/teamverd/verdigris)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15915/badge)](https://www.bestpractices.dev/projects/15915)
-[![codecov](https://codecov.io/gh/frontyard/verdigris/graph/badge.svg)](https://codecov.io/gh/frontyard/verdigris)
+[![codecov](https://codecov.io/gh/teamverd/verdigris/graph/badge.svg)](https://codecov.io/gh/teamverd/verdigris)
 
 Verdigris is a self-hosting web server and reverse proxy in a single
 static binary: nginx-class performance with Caddy-like zero-configuration
@@ -21,11 +21,11 @@ TLS and a readable TOML configuration.
 See [REFERENCE.md](docs/book/src/reference.md) for the complete configuration schema
 and [QUICKSTART.md](docs/book/src/quickstart.md) for a hands-on tour.
 
-Full [documentation](https://www.frontyard.co/verdigris/) is
+Full [documentation](https://teamverd.github.io/verdigris/) is
 automatically generated on every release. Point AI agents to [llms-full.txt](llms-full.txt)
 for comprehensive context when setting up or troubleshooting.
 
-- [Book](https://frontyard.github.io/verdigris/) — guides and the
+- [Book](https://teamverd.github.io/verdigris/) — guides and the
   generated config reference (`docs/book/`, built with mdBook)
 - [llms.txt](llms.txt) — curated summary + recipes for LLM ingestion;
   [llms-full.txt](llms-full.txt) is the whole book in one file
@@ -41,10 +41,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Security issues:
 ## Install
 
 Prebuilt static musl binaries (x86_64, aarch64) are attached to every
-[release](https://github.com/frontyard/verdigris/releases):
+[release](https://github.com/teamverd/verdigris/releases):
 
 ```sh
-curl -LO https://github.com/frontyard/verdigris/releases/download/v0.1.0/verd-x86_64-unknown-linux-musl.tar.gz
+curl -LO https://github.com/teamverd/verdigris/releases/download/v0.1.0/verd-x86_64-unknown-linux-musl.tar.gz
 sha256sum -c checksums.txt --ignore-missing
 tar xzf verd-*.tar.gz
 sudo install -m755 verd /usr/local/bin/
@@ -57,7 +57,7 @@ docker run --read-only \
   -v $PWD/verd.toml:/etc/verd/verd.toml:ro \
   -v verd-data:/var/lib/verd \
   -p 8080:8080 -p 127.0.0.1:2019:2019 \
-  ghcr.io/frontyard/verdigris:latest
+  ghcr.io/teamverd/verdigris:latest
 ```
 
 ## Build from source

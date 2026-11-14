@@ -4,7 +4,7 @@
 
 Please do not open a public issue for security problems. Report
 vulnerabilities through [GitHub private vulnerability
-reporting](https://github.com/frontyard/verdigris/security/advisories/new)
+reporting](https://github.com/teamverd/verdigris/security/advisories/new)
 for this repository.
 
 Include enough detail to reproduce the issue: the affected version or

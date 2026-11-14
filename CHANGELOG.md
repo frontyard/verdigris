@@ -11,6 +11,7 @@ workflow publishes the matching section as the GitHub release notes.
 
 ## [Unreleased]
 
+<<<<<<< Updated upstream
 ### Security
 
 - **Empty API keys / bearer tokens no longer authenticate** — `verd
@@ -18,6 +19,14 @@ workflow publishes the matching section as the GitHub release notes.
   `auth.bearer.tokens` (e.g. from an unset `${VAR:-}`), and the auth
   middleware treats an empty presented key or token (`?api_key=`, empty
   header, empty `Bearer` token) as missing instead of comparing it.
+=======
+### Changed
+
+- **Moved to the `teamverd` org** — documentation now lives at
+  `https://teamverd.github.io/verdigris/`; every repo, release-asset,
+  and `ghcr.io` image reference updated from `frontyard/verdigris`
+  (the `frontyard/fastcache` benchmark dependency stays put).
+>>>>>>> Stashed changes
 
 ### Build & CI
 
@@ -28,8 +37,8 @@ workflow publishes the matching section as the GitHub release notes.
   comes from the daily batch).
 - **Merge queue readiness** — the four required-check workflows
   (`ci.yml`, `lint.yml`, `codeql.yml`, `docker.yml`) now also run on
-  `merge_group`. Dormant for now: GitHub only offers merge queues on
-  org-owned repos, but the plumbing is live if the repo ever moves.
+  `merge_group`. Merge queues require an org-owned repo — a condition
+  now satisfied under `teamverd`.
 - **Release is tag-push only** — `release.yml`'s manual `tag` input is
   gone (dispatching a not-yet-created tag died at checkout);
   `tag.yml` now pushes `vX.Y.Z` authenticated with `RELEASE_PAT` so
@@ -1002,18 +1011,18 @@ reverse proxy with load balancing and retries, response caching
 (RAM/disk/hybrid), compression, rate limiting, CORS, security headers,
 admin API with atomic reloads, Prometheus metrics.
 
-[Unreleased]: https://github.com/frontyard/verdigris/compare/v1.1.0...HEAD
-[1.1.0]: https://github.com/frontyard/verdigris/compare/v1.0.0...v1.1.0
-[1.0.0]: https://github.com/frontyard/verdigris/compare/v0.4.1...v1.0.0
-[0.4.1]: https://github.com/frontyard/verdigris/compare/v0.4.0...v0.4.1
-[0.4.0]: https://github.com/frontyard/verdigris/compare/v0.3.1...v0.4.0
-[0.3.1]: https://github.com/frontyard/verdigris/compare/v0.2.7...v0.3.1
-[0.2.7]: https://github.com/frontyard/verdigris/compare/v0.2.6...v0.2.7
-[0.2.6]: https://github.com/frontyard/verdigris/compare/v0.2.5...v0.2.6
-[0.2.5]: https://github.com/frontyard/verdigris/compare/v0.2.4...v0.2.5
-[0.2.4]: https://github.com/frontyard/verdigris/compare/v0.2.3...v0.2.4
-[0.2.3]: https://github.com/frontyard/verdigris/compare/v0.2.2...v0.2.3
-[0.2.2]: https://github.com/frontyard/verdigris/compare/v0.2.1...v0.2.2
-[0.2.1]: https://github.com/frontyard/verdigris/compare/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/frontyard/verdigris/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/frontyard/verdigris/releases/tag/v0.1.0
+[Unreleased]: https://github.com/teamverd/verdigris/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/teamverd/verdigris/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/teamverd/verdigris/compare/v0.4.1...v1.0.0
+[0.4.1]: https://github.com/teamverd/verdigris/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/teamverd/verdigris/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/teamverd/verdigris/compare/v0.2.7...v0.3.1
+[0.2.7]: https://github.com/teamverd/verdigris/compare/v0.2.6...v0.2.7
+[0.2.6]: https://github.com/teamverd/verdigris/compare/v0.2.5...v0.2.6
+[0.2.5]: https://github.com/teamverd/verdigris/compare/v0.2.4...v0.2.5
+[0.2.4]: https://github.com/teamverd/verdigris/compare/v0.2.3...v0.2.4
+[0.2.3]: https://github.com/teamverd/verdigris/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/teamverd/verdigris/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/teamverd/verdigris/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/teamverd/verdigris/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/teamverd/verdigris/releases/tag/v0.1.0

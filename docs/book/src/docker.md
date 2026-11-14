@@ -16,7 +16,7 @@ docker run --read-only \
   -v $PWD/verd.toml:/etc/verd/verd.toml:ro \
   -v verd-data:/var/lib/verd \
   -p 80:8080 -p 127.0.0.1:2019:2019 \
-  ghcr.io/frontyard/verdigris:latest
+  ghcr.io/teamverd/verdigris:latest
 ```
 
 ## Compose

@@ -1,6 +1,6 @@
 [Unit]
 Description=Verdigris web server and reverse proxy
-Documentation=https://github.com/frontyard/verdigris
+Documentation=https://github.com/teamverd/verdigris
 After=network-online.target
 Wants=network-online.target
 
