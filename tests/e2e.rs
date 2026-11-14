@@ -1798,6 +1798,15 @@ proxy = {{ upstream = "up" }}
     let client = reqwest::Client::new();
     let get = |p: &str| client.get(format!("{base}{p}"));
 
+    // cache clocks are whole-second (stored_at, Date, Age): an entry stored
+    // in a second's tail goes stale milliseconds later. Land just past a
+    // boundary so the max-age=1 entry stays fresh through the HIT below.
+    let frac = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .subsec_millis() as u64;
+    tokio::time::sleep(Duration::from_millis(1100 - frac)).await;
+
     // 1. MISS → upstream hit 1 → 200 body-v1 (max-age=1)
     let r = get("/r/a").send().await.unwrap();
     assert_eq!(r.headers()["x-cache"], "MISS");

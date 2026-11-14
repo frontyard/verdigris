@@ -92,10 +92,10 @@ s, n = re.subn(r'(?m)^## \[Unreleased\][ \t]*$',
                f'## [Unreleased]\n\n## [{v}] - {date}', s, count=1)
 assert n == 1, 'no standalone "## [Unreleased]" heading found'
 s = re.sub(r'^\[Unreleased\]: .*HEAD',
-           f'[Unreleased]: https://github.com/frontyard/verdigris/compare/v{v}...HEAD', s, flags=re.M)
-anchor = f'[Unreleased]: https://github.com/frontyard/verdigris/compare/v{v}...HEAD'
+           f'[Unreleased]: https://github.com/teamverd/verdigris/compare/v{v}...HEAD', s, flags=re.M)
+anchor = f'[Unreleased]: https://github.com/teamverd/verdigris/compare/v{v}...HEAD'
 s = s.replace(anchor,
-              anchor + f'\n[{v}]: https://github.com/frontyard/verdigris/compare/v{prev}...v{v}', 1)
+              anchor + f'\n[{v}]: https://github.com/teamverd/verdigris/compare/v{prev}...v{v}', 1)
 open('CHANGELOG.md', 'w').write(s)
 EOF
 fi

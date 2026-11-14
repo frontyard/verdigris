@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 description = "A simple, fast web server and reverse proxy: static files, TLS/ACME, caching, and load balancing in one static binary."
-repository = "https://github.com/frontyard/verdigris"
+repository = "https://github.com/teamverd/verdigris"
 keywords = ["web-server", "reverse-proxy", "http", "tls", "acme"]
 categories = ["network-programming"]
 

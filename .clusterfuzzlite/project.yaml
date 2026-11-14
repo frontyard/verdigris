@@ -3,8 +3,8 @@
 # resubmission (copies to projects/verdigris/project.yaml in
 # google/oss-fuzz — the original was declined for project maturity,
 # see google/oss-fuzz#16349).
-homepage: "https://github.com/frontyard/verdigris"
-main_repo: "https://github.com/frontyard/verdigris"
+homepage: "https://github.com/teamverd/verdigris"
+main_repo: "https://github.com/teamverd/verdigris"
 language: rust
 primary_contact: "intestellafella@gmail.com"
 fuzzing_engines:
